@@ -8,7 +8,7 @@ Private per-device authenticated APT source for Debian 13. English | [中文](RE
 - Debian 13 packages for amd64 and arm64: git-delta, rustfs-cli, sccache,
   starship, and zellij.
 - Signed repository published via GitHub Actions to private object storage.
-- Every six hours, `update.yml` publishes a new release when a newer stable
+- Every six hours, `publish.yml` publishes a new release when a newer stable
   upstream release of any of those packages appears; when nothing changed it
   does nothing.
 

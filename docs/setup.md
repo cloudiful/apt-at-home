@@ -79,35 +79,40 @@ synthetic credentials as a CI check; it never uploads.
 
 ## 4. GitHub environment `prod`
 
-`release.yml` is `workflow_dispatch` only and `update.yml` adds a six-hour
-schedule plus a `workflow_dispatch` whose `dry_run` input defaults to `true`.
-Both carry `environment: prod` on their publish job, so both wait for the same
-approvals — a scheduled run does not bypass a protected environment, it waits.
-Both serialize through the same `concurrency: apt-production-release` group with
+`publish.yml` is the single production entrypoint. Its six-hour schedule
+(`cron: "17 */6 * * *"`) publishes upstream updates automatically, and
+`workflow_dispatch` chooses `source` (`upstream` default, or `manifest`) and
+`dry_run` (`true` default, so a manual run plans unless it explicitly
+publishes). The publish job carries `environment: prod`, so a scheduled run
+waits for the same approvals as a manual release rather than bypassing them, and
+it serializes through `concurrency: apt-production-release` with
 `cancel-in-progress: false`, so an automatic update and a manual release can
-never move the release pointer at the same time. Both use least-privilege
+never move the release pointer at the same time. It uses least-privilege
 `contents: read`. Workflow inputs reach shell steps only through step `env`
-(never `${{ }}` interpolation), and `update.yml` publishes only from `main`, so
-a manual run on another ref cannot publish unreviewed code. Each keeps the
-imported key file in `$RUNNER_TEMP` with mode `600` until the final
-always-run cleanup and signs with `APT_SIGNING_KEY_ID` set to the full trusted
-fingerprint. Configure these protected secrets:
+(never `${{ }}` interpolation), a scheduled run ignores any dispatch input, and
+it publishes only from `main`, so a manual run on another ref cannot publish
+unreviewed code. The private key is imported only when the run will publish; it
+stays in `$RUNNER_TEMP` with mode `600` until the final always-run cleanup and is
+used with `APT_SIGNING_KEY_ID` set to the full trusted fingerprint. Configure
+these protected secrets:
 
 - `APT_S3_BUCKET`, `APT_S3_ENDPOINT`, `APT_S3_REGION`,
   `APT_S3_ACCESS_KEY_ID`, `APT_S3_SECRET_ACCESS_KEY`
-- `APT_RELEASE_SIGNING_KEY` (armored private key, used by both workflows)
+- `APT_RELEASE_SIGNING_KEY` (armored private key, imported only when a run
+  publishes)
 - `APT_SIGNING_FINGERPRINT` (full 40-hex primary fingerprint, enforced at
   verify and publish — not an echo)
 
-`update.yml` publishes only when upstream moved: a no-op builds, signs, and
-uploads nothing and still succeeds. A manual release is refused when the
-committed manifest is older than the published baseline, so publishing cannot
-downgrade clients. No automatic key rotation occurs.
+The upstream source publishes only when upstream moved: a no-op builds, signs,
+and uploads nothing and still succeeds. A manual manifest publish is refused when
+the committed manifest is older than the published baseline, so publishing cannot
+downgrade clients. No automatic key rotation occurs; `allow_key_rotation` is
+accepted only for an explicit manual manifest publish.
 
 Every published release binds the manifest it was built from into its signed
 `Release`, and the updater refuses a release whose binding is missing or does
-not match. Run one `release.yml` publish from `main` if the published baseline
-needs to be rebuilt.
+not match. Run one `publish.yml` manifest publish from `main` if the published
+baseline needs to be rebuilt.
 
 `ci.yml` runs the package build, verification, and native amd64/arm64 smoke on
 every push, and pins `UV_DEFAULT_INDEX` to public PyPI so the committed lock

@@ -1,0 +1,196 @@
+name: publish
+
+on:
+  schedule:
+    # Every six hours, off the hour so scheduled runs do not pile onto the
+    # top of the hour. The run is a no-op unless upstream moved.
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "upstream (periodic upstream update) or manifest (committed manifest)"
+        required: false
+        default: "upstream"
+        type: choice
+        options: ["upstream", "manifest"]
+      dry_run:
+        description: "Plan only. Set false to build, sign, and publish."
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+      release_id:
+        description: "Release id (default: UTC timestamp). Must be unique."
+        required: false
+        default: ""
+      allow_key_rotation:
+        description: "Confirm replacement of the remote key.asc trust anchor."
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: read
+
+# Automatic updates and manual releases must never move the release pointer at
+# the same time.
+concurrency:
+  group: apt-production-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build, verify, and publish (serialized)
+    # Production publication runs from the default branch only. A manual run on
+    # any other ref stops here rather than publishing from unreviewed code.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    container: debian:13
+    # A container job defaults to `sh`, but the routing steps use Bash arrays.
+    defaults:
+      run:
+        shell: bash
+    environment: prod
+    env:
+      APT_S3_BUCKET: ${{ secrets.APT_S3_BUCKET }}
+      APT_S3_ENDPOINT: ${{ secrets.APT_S3_ENDPOINT }}
+      APT_S3_REGION: ${{ secrets.APT_S3_REGION }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.APT_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.APT_S3_SECRET_ACCESS_KEY }}
+      APT_SIGNING_FINGERPRINT: ${{ secrets.APT_SIGNING_FINGERPRINT }}
+      UV_DEFAULT_INDEX: https://pypi.org/simple
+      # Read-only token for the public GitHub API discovery of upstream tags.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install system tools
+        run: apt-get update && apt-get install -y --no-install-recommends apt file reprepro xz-utils gnupg python3 curl ca-certificates && rm -rf /var/lib/apt/lists/*
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      - name: Verify portable public dependency lock
+        run: uv lock --check
+      - run: uv sync --frozen
+      - run: uv run python -m unittest discover -s tests
+      - name: Resolve the effective publication mode
+        run: |
+          set -euo pipefail
+          event="$GITHUB_EVENT_NAME"
+          if [ "$event" = "schedule" ]; then
+            # A scheduled run always publishes upstream and never rotates the
+            # key, regardless of any absent or forged dispatch input.
+            source=upstream
+            publish=true
+            rotation=false
+          elif [ "$event" = "workflow_dispatch" ]; then
+            case "$SOURCE_INPUT" in
+              upstream|manifest) source="$SOURCE_INPUT" ;;
+              *) echo "invalid source input: $SOURCE_INPUT" >&2; exit 1 ;;
+            esac
+            case "$DRY_RUN_INPUT" in
+              true) publish=false ;;
+              false) publish=true ;;
+              *) echo "invalid dry_run input: $DRY_RUN_INPUT" >&2; exit 1 ;;
+            esac
+            case "$ROTATION_INPUT" in
+              true|false) rotation="$ROTATION_INPUT" ;;
+              *) echo "invalid allow_key_rotation input: $ROTATION_INPUT" >&2; exit 1 ;;
+            esac
+          else
+            echo "unsupported event: $event" >&2
+            exit 1
+          fi
+          # Rotation is reachable only through an explicit manual manifest
+          # publish; a forged or defaulted value anywhere else fails closed.
+          if [ "$rotation" = "true" ]; then
+            if [ "$event" != "workflow_dispatch" ] || [ "$source" != "manifest" ] || [ "$publish" != "true" ]; then
+              echo "allow_key_rotation=true is only valid for a manual manifest publish" >&2
+              exit 1
+            fi
+          fi
+          {
+            echo "EFFECTIVE_SOURCE=$source"
+            echo "EFFECTIVE_PUBLISH=$publish"
+            echo "EFFECTIVE_ROTATION=$rotation"
+          } >>"$GITHUB_ENV"
+        env:
+          SOURCE_INPUT: ${{ inputs.source }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+          ROTATION_INPUT: ${{ inputs.allow_key_rotation }}
+      - name: Import signing key into an isolated homedir
+        if: env.EFFECTIVE_PUBLISH == 'true'
+        run: |
+          set -euo pipefail
+          if [ -z "${APT_RELEASE_SIGNING_KEY:-}" ]; then
+            echo "APT_RELEASE_SIGNING_KEY environment secret is required" >&2
+            exit 1
+          fi
+          if [ -z "${APT_SIGNING_FINGERPRINT:-}" ]; then
+            echo "APT_SIGNING_FINGERPRINT secret is required for production publish" >&2
+            exit 1
+          fi
+          GNUPGHOME="$(mktemp -d)"
+          export GNUPGHOME
+          chmod 700 "$GNUPGHOME"
+          printf '%s' "$APT_RELEASE_SIGNING_KEY" >"$RUNNER_TEMP/release-private.asc"
+          chmod 600 "$RUNNER_TEMP/release-private.asc"
+          gpg --batch --import "$RUNNER_TEMP/release-private.asc"
+          {
+            echo "APT_SIGNING_KEY_FILE=$RUNNER_TEMP/release-private.asc"
+            echo "APT_SIGNING_KEY_ID=$APT_SIGNING_FINGERPRINT"
+            echo "GNUPGHOME=$GNUPGHOME"
+          } >>"$GITHUB_ENV"
+        env:
+          APT_RELEASE_SIGNING_KEY: ${{ secrets.APT_RELEASE_SIGNING_KEY }}
+      - name: Update to the latest stable upstream releases
+        if: env.EFFECTIVE_SOURCE == 'upstream'
+        run: |
+          set -euo pipefail
+          args=(python -m scripts.update)
+          if [ "$EFFECTIVE_PUBLISH" = "true" ]; then
+            args+=(--publish)
+          else
+            args+=(--dry-run)
+          fi
+          if [ -n "$RELEASE_ID_INPUT" ]; then
+            args+=(--release-id "$RELEASE_ID_INPUT")
+          fi
+          uv run "${args[@]}"
+        env:
+          RELEASE_ID_INPUT: ${{ inputs.release_id }}
+      - name: Build an unsigned manifest preview
+        if: env.EFFECTIVE_SOURCE == 'manifest' && env.EFFECTIVE_PUBLISH != 'true'
+        run: |
+          set -euo pipefail
+          args=(python -m scripts.repo build --output dist/repo)
+          if [ -n "$RELEASE_ID_INPUT" ]; then
+            args+=(--release-id "$RELEASE_ID_INPUT")
+          fi
+          uv run "${args[@]}"
+          uv run python -m scripts.smoke --manifest packaging/manifest.json --pool dist/repo/pool
+        env:
+          RELEASE_ID_INPUT: ${{ inputs.release_id }}
+      - name: Build, verify, and publish the committed manifest
+        if: env.EFFECTIVE_SOURCE == 'manifest' && env.EFFECTIVE_PUBLISH == 'true'
+        run: |
+          set -euo pipefail
+          args=(python -m scripts.repo build --output dist/repo)
+          if [ -n "$RELEASE_ID_INPUT" ]; then
+            args+=(--release-id "$RELEASE_ID_INPUT")
+          fi
+          uv run "${args[@]}"
+          uv run python -m scripts.repo verify --output dist/repo
+          test "$(find dist/repo/pool -maxdepth 1 -name '*.deb' | wc -l)" \
+            = "$(uv run python -m scripts.smoke --manifest packaging/manifest.json --count)"
+          uv run python -m scripts.smoke --manifest packaging/manifest.json --pool dist/repo/pool
+          if [ "$EFFECTIVE_ROTATION" = "true" ]; then
+            uv run python -m scripts.repo publish --output dist/repo --allow-key-rotation
+          else
+            uv run python -m scripts.repo publish --output dist/repo
+          fi
+        env:
+          RELEASE_ID_INPUT: ${{ inputs.release_id }}
+      - name: Scrub isolated key material
+        if: always()
+        run: rm -rf "${GNUPGHOME:-/nonexistent}" "$RUNNER_TEMP/release-private.asc" || true

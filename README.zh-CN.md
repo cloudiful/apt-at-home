@@ -7,7 +7,7 @@
 - 私有鉴权源：经鉴权网关按设备令牌访问。
 - 面向 Debian 13 的 amd64 与 arm64 软件包：git-delta、rustfs-cli、sccache、starship 与 zellij。
 - 经 GitHub Actions 签名并发布到私有对象存储的仓库。
-- `update.yml` 每六小时检查一次：其中任一软件包出现更新的上游稳定版时发布新版本，否则不做任何操作。
+- `publish.yml` 每六小时检查一次：其中任一软件包出现更新的上游稳定版时发布新版本，否则不做任何操作。
 
 ## 用法
 

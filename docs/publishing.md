@@ -1,24 +1,46 @@
 # Publishing
 
-Two workflows publish, serialized against each other through
-`concurrency: apt-production-release` with `cancel-in-progress: false`, so a
-scheduled update and a manual release can never move the release pointer at the
-same time.
+One production workflow, `publish.yml`, owns every repository publication and
+serializes on `concurrency: apt-production-release` with
+`cancel-in-progress: false`, so an automatic update and a manual release can
+never move the release pointer at the same time. It has two sources:
 
-- `update.yml` polls every six hours (`cron: "17 */6 * * *"`) and publishes a
-  new release when upstream moves; when nothing changed it exits successfully
-  having built, signed, and uploaded nothing. It also accepts
-  `workflow_dispatch`, where `dry_run` defaults to `true` so a manual run only
-  plans. The job is `environment: prod`, so it waits for the same approvals as a
-  manual release, and it publishes only from `main`.
-- `release.yml` is `workflow_dispatch` only and publishes the committed
-  `packaging/manifest.json` as-is.
+- The six-hourly schedule (`cron: "17 */6 * * *"`) always runs the **upstream**
+  source: it restores the published release, compares it against the latest
+  stable upstream releases, and publishes only when upstream moved. An unchanged
+  run builds, signs, and uploads nothing and still succeeds.
+- `workflow_dispatch` chooses `source` (`upstream` default, or `manifest`) and
+  `dry_run` (`true` default). The upstream source plans with `--dry-run` unless
+  `dry_run` is `false`, then runs `update --publish`. The manifest source builds
+  the committed `packaging/manifest.json`: a preview builds it unsigned and
+  checks the pool without the signing key, and a publish builds with the key,
+  verifies, and publishes. `release_id` optionally names the release, and
+  `allow_key_rotation` is accepted only for a manual manifest publish with
+  `dry_run: false`.
 
-The signing key is never rotated automatically, and the private key material is
-written to `$RUNNER_TEMP` with mode `600`, imported into an isolated `GNUPGHOME`,
-and deleted by an always-run cleanup step. It is never an artifact and never
-logged. Both workflows reuse the same seven `prod` secrets; there are no
-Cloudflare secrets in the publication path.
+The job is `environment: prod`, so every run waits for the same approvals, and it
+publishes only from `main`. Inputs reach shell steps only through step `env`
+(never `${{ }}` interpolation); a scheduled run ignores any dispatch input, and
+an unsupported event or an out-of-range `source`/`dry_run`/`allow_key_rotation`
+value fails closed before anything is mutated.
+
+Manual runs (Actions → publish → Run workflow):
+
+- Plan the next upstream update: `source: upstream`, `dry_run: true`.
+- Publish the latest upstream releases: `source: upstream`, `dry_run: false`.
+- Preview the committed manifest without the signing key: `source: manifest`,
+  `dry_run: true`.
+- Publish the committed manifest: `source: manifest`, `dry_run: false` (add
+  `allow_key_rotation: true` only to rotate the trust anchor).
+
+The signing key is materialized only when a run will actually publish: a
+scheduled run, an upstream publish, or a manual manifest publish. The private key
+is written to `$RUNNER_TEMP` with mode `600`, imported into an isolated
+`GNUPGHOME`, and deleted by an always-run cleanup step; it is never an artifact
+and never logged. Previews still need the public `APT_SIGNING_FINGERPRINT` pin
+and the read-only storage credentials to restore and compare the published
+baseline, but never the private key. Every path reuses the same seven `prod`
+secrets; there are no Cloudflare secrets in the publication path.
 
 ## Local build
 
@@ -73,6 +95,14 @@ build works without a private mirror and without upgrading anything:
   approves the only two install scripts the lock needs through a
   version-pinned `allowScripts` map; never widen it to a name-only or
   wildcard approval.
+
+## Dependency graph
+
+GitHub's dependency graph is independent of this publication path: GitHub builds
+it automatically from the committed `uv.lock` and `package-lock.json`, so it
+needs no workflow, no CI job, and no repository file. `publish.yml` and CI never
+submit dependencies and never touch the graph; it stays a separate supply-chain
+view.
 
 ## Verify
 
@@ -154,7 +184,8 @@ uv run python -m scripts.repo publish --output dist/repo --bucket <name>
 - A manual release is checked against the current published baseline before any
   upload: if the committed manifest is older than what clients already have,
   the publish is refused with an actionable error. Publish a manifest at least
-  as new as the current release, or let `update.yml` publish the newer one.
+  as new as the current release, or let the upstream source of `publish.yml`
+  publish the newer one.
 - Never deletes: old `pool` files and `indices` entries are retained so
   previous by-hash URLs keep working after a pointer move.
 - Never overwrites immutable bytes with different content; a colliding
@@ -163,9 +194,9 @@ uv run python -m scripts.repo publish --output dist/repo --bucket <name>
   confirmation.
 - The S3 endpoint and credentials come from `APT_S3_*`/`AWS_*` environment
   variables, never from CLI secrets or URLs.
-- The GitHub `update.yml` and `release.yml` publish jobs run in the `prod`
-  environment with the R2 and signing secrets, and share one concurrency group
-  so they cannot overlap. Published artifacts are public
+- The GitHub `publish.yml` job runs in the `prod` environment with the R2 and
+  signing secrets, and its single concurrency group serializes every
+  publication. Published artifacts are public
   while the repository is in test mode: `worker/wrangler.jsonc` commits
   `AUTH_REQUIRED: "false"`, and that committed config is the source of truth on
   deploy. Restore the credential gate by setting it to `"true"` (or removing the
