@@ -15,7 +15,7 @@ from .publish import publish_tree
 from .publish_guard import guard_publish
 from .release_build import build_release
 from .release_manifest import MANIFEST_NAME, load_manifest_data
-from .restore import s3_source
+from .storage import s3_source
 from .verify import verify_tree
 
 

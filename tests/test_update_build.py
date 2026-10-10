@@ -17,12 +17,14 @@ from pathlib import Path
 from unittest import mock
 
 from scripts.manifest import deb_filename, load_manifest
-from scripts.restore import ARCHES, MAX_DEB_BYTES, ObjectNotFound, restore_metadata
+from scripts.metadata import ARCHES
+from scripts.release_verify import restore_metadata
 from scripts.restore_packages import restore_pool
+from scripts.storage import MAX_DEB_BYTES, ObjectNotFound
 from scripts.update_build import apply_update
 from scripts.update_plan import build_plan
 from tests.helpers import FakeS3, make_gpg_home_with_key
-from tests.test_restore import RELEASE_ID, build_release_objects
+from tests.release_fixtures import RELEASE_ID, build_release_objects
 from tests.test_update import candidate
 
 
@@ -107,7 +109,7 @@ class UpdateBuildTest(unittest.TestCase):
 
                 plan = build_plan(
                     baseline_release_id=restored.release_id,
-                    baseline_data=restored.manifest_data or {},
+                    baseline_data=restored.manifest_data,
                     candidates={
                         "starship": candidate("starship", "1.27.0"),
                         "zellij": candidate("zellij", "0.45.1"),
@@ -175,7 +177,7 @@ class UpdateBuildTest(unittest.TestCase):
                 restored = restore_metadata(store, fingerprint=key_id)
                 plan = build_plan(
                     baseline_release_id=restored.release_id,
-                    baseline_data=restored.manifest_data or {},
+                    baseline_data=restored.manifest_data,
                     candidates={
                         "starship": candidate("starship", "1.27.0"),
                         "zellij": candidate("zellij", "0.45.1"),
@@ -200,7 +202,7 @@ class UpdateBuildTest(unittest.TestCase):
             )
             second = build_plan(
                 baseline_release_id=follow_up.release_id,
-                baseline_data=follow_up.manifest_data or {},
+                baseline_data=follow_up.manifest_data,
                 candidates={
                     "starship": candidate("starship", "1.27.0"),
                     "zellij": candidate("zellij", "0.45.1"),

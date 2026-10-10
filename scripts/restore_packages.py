@@ -10,18 +10,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .manifest import Manifest, deb_filename
+from .common import sha256_bytes
+from .metadata import ARCHES
 from .package_index import check_arch_packages, parse_stanzas, pool_debs_for_arch
-from .restore import (
-    ARCHES,
-    DEB_NAME,
-    MAX_DEB_BYTES,
-    BaselineUnavailable,
-    ObjectNotFound,
-    Source,
-    TrustedRelease,
-    sha256_bytes,
-)
+from .release_verify import BaselineUnavailable, TrustedRelease
+from .storage import DEB_NAME, MAX_DEB_BYTES, ObjectNotFound, Source
 
 
 @dataclass(frozen=True)
@@ -63,40 +56,6 @@ def pool_entries(release: TrustedRelease) -> list[PoolEntry]:
     if len(entries) != len(ARCHES) * 2:
         raise ValueError(f"published pool must hold four .deb files, found {len(entries)}")
     return [entries[name] for name in sorted(entries)]
-
-
-def check_legacy_baseline(release: TrustedRelease, committed: Manifest) -> Manifest:
-    """Accept a pre-binding release only when it matches the committed manifest exactly.
-
-    Such a release carries no signed baseline, so it may start an update only
-    where a human can audit the equality: every indexed name, version, revision,
-    and architecture must equal `packaging/manifest.json`. Anything else stops
-    the run with an actionable republish instruction instead of silently
-    repairing an incomplete index.
-    """
-    if release.manifest is not None:
-        return release.manifest
-    indexed = {
-        arch: {
-            line.split("Filename: ", 1)[1].strip().removeprefix("pool/")
-            for line in text.splitlines() if line.startswith("Filename: ")
-        }
-        for arch, text in release.packages.items()
-    }
-    expected = {
-        arch: {deb_filename(pkg, arch, committed) for pkg in committed.packages}
-        for arch in ARCHES
-    }
-    if indexed != expected:
-        published = sorted(name for names in indexed.values() for name in names)
-        raise BaselineUnavailable(
-            "the published baseline predates manifest binding and does not match "
-            f"packaging/manifest.json (published: {', '.join(published)}); publish one "
-            "release from the current main with `python -m scripts.repo build && "
-            "python -m scripts.repo verify && python -m scripts.repo publish` before "
-            "automatic updates can run"
-        )
-    return committed
 
 
 def restore_pool(release: TrustedRelease, source: Source, output_root: Path) -> list[Path]:

@@ -17,15 +17,13 @@ from pathlib import Path
 from .fingerprint import primary_fingerprint_of_keyfile
 from .manifest import Manifest
 from .package_index import parse_stanzas
-from .restore import (
-    MAX_METADATA_BYTES,
+from .release_verify import (
     BaselineUnavailable,
     NoCurrentRelease,
-    ObjectNotFound,
-    Source,
     TrustedRelease,
     restore_metadata,
 )
+from .storage import MAX_METADATA_BYTES, ObjectNotFound, Source
 from .upstream_assets import version_key
 
 
@@ -46,9 +44,9 @@ def published_versions(release: TrustedRelease) -> dict[str, str]:
     """Return each indexed package's Debian version from the verified indices.
 
     `restore` has already proved these bytes are the ones `Release` signed, so
-    the stanzas are trustworthy even for a pre-binding release that carries no
-    manifest. Both architectures must agree, since the same package is indexed
-    twice and a disagreement means the baseline cannot be read.
+    the stanzas are trustworthy. Both architectures must agree, since the same
+    package is indexed twice and a disagreement means the baseline cannot be
+    read.
     """
     versions: dict[str, str] = {}
     for arch, text in sorted(release.packages.items()):

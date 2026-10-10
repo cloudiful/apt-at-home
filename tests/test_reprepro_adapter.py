@@ -103,18 +103,20 @@ class RepreproAdapterTest(unittest.TestCase):
                 for deb in pool.glob(f"*_{other}.deb"):
                     self.assertNotIn(f"pool/{deb.name}", listed)
 
-    def test_single_export_of_the_full_pool_matches_per_arch_calls(self) -> None:
+    def test_one_export_of_the_full_pool_matches_per_arch_calls(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             debs, pool = _fake_debs(root)
             whole = root / "whole"
             per_arch = root / "per-arch"
+            # The full pool (both architectures) exported once per index; the
+            # per-arch call consumes only its own debs. Both must agree.
             for arch in ARCHES:
+                generate_packages(pool, whole / "stable" / "main" / f"binary-{arch}", debs)
                 generate_packages(
-                    pool, whole / "stable" / "main" / f"binary-{arch}",
-                    sorted(pool.glob(f"*_{arch}.deb")),
+                    pool, per_arch / f"binary-{arch}",
+                    [deb for deb in debs if deb.name.endswith(f"_{arch}.deb")],
                 )
-                generate_packages(pool, per_arch / f"binary-{arch}", [deb for deb in debs if deb.name.endswith(f"_{arch}.deb")])
             for arch in ARCHES:
                 for name in ("Packages", "Packages.gz"):
                     self.assertEqual(

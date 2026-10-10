@@ -82,16 +82,19 @@ def parse_binding(release_text: str) -> tuple[str | None, str | None]:
     return digest, size
 
 
-def check_binding_bytes(*, release_text: str, payload: bytes | None) -> bool:
-    """Validate the Release binding against the artifact bytes directly.
+def check_binding_bytes(*, release_text: str, payload: bytes | None) -> None:
+    """Require the Release binding to match the artifact bytes exactly.
 
-    Returns True when a binding is present and matched, and False when the
-    Release carries neither field, which leaves a pre-binding release to the
-    caller's trust policy. A partial or mismatched binding always raises.
+    The binding is mandatory: a Release that carries neither field, or only one
+    of them, always raises, as does a payload that is missing or mismatched. The
+    check returns None on success so it reads as validation, not a boolean
+    decision a caller could branch around.
     """
     digest, size = parse_binding(release_text)
     if digest is None and size is None:
-        return False
+        raise ValueError(
+            f"Release must bind a baseline manifest with {SHA256_FIELD} and {SIZE_FIELD}"
+        )
     if digest is None or size is None:
         raise ValueError(f"Release must carry both {SHA256_FIELD} and {SIZE_FIELD}")
     if payload is None:
@@ -107,10 +110,10 @@ def check_binding_bytes(*, release_text: str, payload: bytes | None) -> bool:
             f"manifest digest mismatch for {MANIFEST_NAME}: "
             f"Release declares {digest}, artifact hashes {actual}"
         )
-    return True
+    return None
 
 
-def check_binding(*, release_text: str, manifest_path: Path | None) -> bool:
+def check_binding(*, release_text: str, manifest_path: Path | None) -> None:
     """Validate the Release manifest binding for a verifier that reads from disk."""
     payload = None
     if manifest_path is not None and manifest_path.is_file():

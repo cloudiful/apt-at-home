@@ -44,13 +44,11 @@ uv run python -m scripts.repo verify --output dist/repo
   `current.json` and `key.asc`.
 - `build` also writes `releases/<id>/manifest.json`, the canonical copy of the
   manifest it built from, and binds its SHA256 and size into the signed
-  `Release` as `X-Manifest-SHA256` and `X-Manifest-Size`. `verify` recomputes
-  both, so the stored copy can never stand in for the manifest that was
-  actually built. A `Release` carrying neither field predates the binding and
-  still verifies, which keeps older releases readable.
-- System prerequisites for `build`: `reprepro` generates the indices and
-  `dpkg-deb` (shipped by `dpkg`) assembles the packages. `apt-utils` supplies
-  `apt-ftparchive`, which the metadata helper and its tests exercise.
+  `Release` as `X-Manifest-SHA256` and `X-Manifest-Size`. `verify` requires both
+  fields and recomputes them, so the stored copy can never stand in for the
+  manifest that was actually built.
+- System prerequisites for `build`: `reprepro` generates the `Packages`
+  indices and `dpkg-deb` (shipped by `dpkg`) assembles the packages.
 - Credentials never appear in CLI arguments; the signing key comes from
   `APT_SIGNING_KEY_FILE` (path only) and S3 credentials from the environment.
 - Building and signing need full GnuPG (`gnupg`, which provides `gpg-agent`);
@@ -118,11 +116,10 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   is acceptable.
 - **Same version, different digest.** A republished tag is treated as a mutable
   release, not an unchanged one, and the run stops.
-- **The published index predates manifest binding.** A release with neither
-  `X-Manifest-*` field is usable only when every indexed name, version,
-  revision, and architecture equals `packaging/manifest.json`. Anything else
-  stops with an instruction to publish one release from the current `main`
-  first. This is intentional: an incomplete index is never silently repaired.
+- **The published release does not bind a valid manifest.** A release whose
+  `Release` omits `X-Manifest-*`, or whose bound manifest is missing or does not
+  match the signed digest and size, stops the run before any package is read.
+  Publish one release from the current `main` to repair the baseline.
 - **Storage unreachable or denied.** Only a confirmed missing `current.json`
   means "no release yet"; a permission or network error stops the run instead of
   looking like empty storage.

@@ -1,41 +1,30 @@
-"""Restore a published release from object storage under a full trust chain.
+"""Establish the trust chain of a published release before any package is read.
 
 Nothing is trusted because it is reachable: the pointer is validated, the
 release is verified against the pinned public key, the clearsigned payload must
 be the same bytes as the detached-signed `Release`, the signed hashes protect
-every `Packages` file, and a baseline manifest must match the digest the
-`Release` signed for. Package bytes are fetched only after all of that holds.
+every `Packages` file, and the baseline manifest must match the digest the
+`Release` signed for.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
 
+from .common import sha256_bytes
 from .fingerprint import check_key_matches_pin
 from .manifest import Manifest, parse_manifest
-from .publish import _s3_client as build_s3_client
+from .metadata import ARCHES, COMPONENT, SUITE
+from .release_hashes import parse_release_hashes
 from .release_manifest import MANIFEST_NAME, check_binding_bytes
 from .sign import IsolatedHomedir, import_key, verify_clearsign, verify_detached
+from .storage import MAX_MANIFEST_BYTES, MAX_METADATA_BYTES, ObjectNotFound, Source
 
 RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-ARCHES = ("amd64", "arm64")
-SUITE = "stable"
-COMPONENT = "main"
-
-MAX_METADATA_BYTES = 8 * 1024 * 1024
-MAX_MANIFEST_BYTES = 64 * 1024
-MAX_DEB_BYTES = 128 * 1024 * 1024
-DEB_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+._-]*\.deb$")
-
-
-class ObjectNotFound(Exception):
-    """Storage confirmed the object does not exist."""
 
 
 class NoCurrentRelease(Exception):
@@ -46,56 +35,6 @@ class BaselineUnavailable(Exception):
     """The remote baseline cannot be trusted; a human must republish first."""
 
 
-class Source(Protocol):
-    """Bounded object reads; every failure mode is an exception, never empty bytes."""
-
-    def get(self, key: str, *, max_bytes: int) -> bytes: ...
-
-
-class S3Source:
-    """Read published objects with a hard byte ceiling and explicit not-found errors.
-
-    The ceiling is enforced on the bytes actually read, not on a declared length,
-    and only a confirmed missing object raises `ObjectNotFound`; every other
-    failure propagates so a permission or network problem stops the run instead
-    of looking like an empty repository.
-    """
-
-    def __init__(self, client: Any, bucket: str) -> None:
-        self._client = client
-        self._bucket = bucket
-
-    def get(self, key: str, *, max_bytes: int) -> bytes:
-        try:
-            response = self._client.get_object(Bucket=self._bucket, Key=key)
-        except Exception as exc:
-            if _is_not_found(exc):
-                raise ObjectNotFound(key) from exc
-            raise
-        body = response["Body"]
-        chunks: list[bytes] = []
-        total = 0
-        while True:
-            chunk = body.read(1024 * 1024)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > max_bytes:
-                raise ValueError(f"object {key} exceeded the {max_bytes} byte limit")
-            chunks.append(chunk)
-        return b"".join(chunks)
-
-
-def s3_source(bucket: str, *, endpoint: str | None = None) -> S3Source:
-    """Build the storage source from the same R2 environment the publisher uses."""
-    return S3Source(build_s3_client(endpoint), bucket)
-
-
-def _is_not_found(exc: Exception) -> bool:
-    message = str(exc).lower()
-    return "404" in message or "not found" in message or "nosuchkey" in message
-
-
 @dataclass(frozen=True)
 class TrustedRelease:
     """A remote release proven authentic up to (but not including) pool bytes."""
@@ -103,34 +42,8 @@ class TrustedRelease:
     release_id: str
     key_bytes: bytes
     packages: dict[str, str]
-    manifest_data: dict[str, object] | None
-    manifest: Manifest | None
-
-
-def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def parse_release_hashes(release_text: str) -> dict[str, dict[str, tuple[str, int]]]:
-    """Return the SHA256 and SHA512 entries of a Release, keyed by section."""
-    return {section: _hash_section(release_text, section) for section in ("SHA256", "SHA512")}
-
-
-def _hash_section(release_text: str, section: str) -> dict[str, tuple[str, int]]:
-    out: dict[str, tuple[str, int]] = {}
-    in_section = False
-    for line in release_text.splitlines():
-        if line.strip() == f"{section}:":
-            in_section = True
-            continue
-        if in_section:
-            if line and not line.startswith(" "):
-                break
-            match = re.match(r"^\s+([0-9a-f]+)\s+(\d+)\s+(\S+)\s*$", line)
-            if match:
-                digest, size, name = match.groups()
-                out[name] = (digest.lower(), int(size))
-    return out
+    manifest_data: dict[str, object]
+    manifest: Manifest
 
 
 def clearsigned_payload(inrelease: bytes) -> bytes:
@@ -168,7 +81,9 @@ def verify_release_signatures(
     """Verify both signatures and require the clearsigned payload to be the same bytes."""
     with tempfile.TemporaryDirectory(prefix="apt-restore-verify-") as scratch:
         root = Path(scratch)
-        release_file, inrelease_file, detached_file = root / "Release", root / "InRelease", root / "Release.gpg"
+        release_file = root / "Release"
+        inrelease_file = root / "InRelease"
+        detached_file = root / "Release.gpg"
         release_file.write_bytes(release)
         inrelease_file.write_bytes(inrelease)
         detached_file.write_bytes(detached)
@@ -243,23 +158,23 @@ def restore_metadata(source: Source, *, fingerprint: str) -> TrustedRelease:
     except UnicodeDecodeError as exc:
         raise BaselineUnavailable(f"Release is not valid UTF-8: {exc}") from exc
 
-    manifest_data: dict[str, object] | None = None
-    manifest: Manifest | None = None
     try:
         manifest_bytes: bytes | None = source.get(
             f"releases/{release_id}/{MANIFEST_NAME}", max_bytes=MAX_MANIFEST_BYTES
         )
     except ObjectNotFound:
         manifest_bytes = None
-    if check_binding_bytes(release_text=release_text, payload=manifest_bytes):
-        try:
-            parsed = json.loads((manifest_bytes or b"").decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise BaselineUnavailable(f"bound manifest for {release_id} is invalid: {exc}") from exc
-        if not isinstance(parsed, dict):
-            raise BaselineUnavailable(f"bound manifest for {release_id} is not an object")
-        manifest_data = parsed
-        manifest = parse_manifest(parsed)
+    # The binding is mandatory: absent, partial, missing, or tampered all raise.
+    check_binding_bytes(release_text=release_text, payload=manifest_bytes)
+    if manifest_bytes is None:  # unreachable: the binding check refuses a missing artifact
+        raise ValueError(f"Release binds a manifest artifact that is missing: {MANIFEST_NAME}")
+    try:
+        parsed = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BaselineUnavailable(f"bound manifest for {release_id} is invalid: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise BaselineUnavailable(f"bound manifest for {release_id} is not an object")
+    manifest = parse_manifest(parsed)
 
     packages: dict[str, str] = {}
     for arch in ARCHES:
@@ -273,5 +188,5 @@ def restore_metadata(source: Source, *, fingerprint: str) -> TrustedRelease:
 
     return TrustedRelease(
         release_id=release_id, key_bytes=key_bytes, packages=packages,
-        manifest_data=manifest_data, manifest=manifest,
+        manifest_data=parsed, manifest=manifest,
     )

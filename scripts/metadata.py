@@ -1,15 +1,13 @@
-"""Generate static APT metadata with apt-ftparchive and deterministic gzip."""
+"""Generate static APT metadata: a bound Release and content-addressed indices."""
 
 from __future__ import annotations
 
 import gzip
 import shutil
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .common import require_tool, run, sha256_file, sha512_file
-from .manifest import Manifest, deb_filename
+from .common import sha256_file, sha512_file
 
 SUITE = "stable"
 COMPONENT = "main"
@@ -21,43 +19,6 @@ def write_gzip_deterministic(source: Path, dest: Path) -> None:
     with dest.open("wb") as raw:
         with gzip.GzipFile(filename="", mode="wb", compresslevel=9, mtime=0, fileobj=raw) as gz:
             gz.write(data)
-
-
-def generate_packages(pool_dir: Path, dists_arch_dir: Path, debs: list[Path]) -> tuple[Path, Path]:
-    """Run apt-ftparchive for one architecture; returns (Packages, Packages.gz)."""
-    require_tool("apt-ftparchive")
-    dists_arch_dir.mkdir(parents=True, exist_ok=True)
-    packages_path = dists_arch_dir / "Packages"
-    # apt-ftparchive resolves filenames relative to its working directory, so
-    # invoke it from the pool directory with bare file names for stable output.
-    # One call per deb: extra positionals are parsed as override files, which
-    # silently drops every deb after the first one.
-    rel_names = [Path(d).name for d in sorted(debs, key=lambda p: p.name)]
-    stanzas: list[str] = []
-    for name in rel_names:
-        proc = run(
-            ["apt-ftparchive", "packages", name],
-            cwd=pool_dir,
-        )
-        if proc.returncode != 0:
-            raise RuntimeError(f"apt-ftparchive packages failed for {name}: {proc.stderr.strip()}")
-        stanza = proc.stdout.strip()
-        if not stanza:
-            raise RuntimeError(f"apt-ftparchive produced no stanza for {name}")
-        stanzas.append(stanza)
-    # Normalize: apt-ftparchive emits Filename relative to the archive root.
-    lines: list[str] = []
-    for stanza in stanzas:
-        for line in stanza.splitlines():
-            if line.startswith("Filename: "):
-                lines.append(f"Filename: pool/{line[len('Filename: '):].strip()}")
-            else:
-                lines.append(line)
-        lines.append("")
-    packages_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-    gz_path = dists_arch_dir / "Packages.gz"
-    write_gzip_deterministic(packages_path, gz_path)
-    return packages_path, gz_path
 
 
 def _hash_entry(path: Path, prefix: str) -> tuple[str, str, int, str, str]:

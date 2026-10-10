@@ -9,16 +9,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.manifest import parse_manifest
+from scripts.manifest import load_manifest, parse_manifest
 from scripts.publish_guard import (
     check_not_older,
     guard_publish,
     published_versions,
     upstream_version,
 )
-from scripts.restore import ARCHES, BaselineUnavailable, ObjectNotFound, restore_metadata
+from scripts.release_verify import BaselineUnavailable, TrustedRelease, restore_metadata
+from scripts.storage import ObjectNotFound
 from tests.helpers import make_gpg_home_with_key
-from tests.test_restore import build_release_objects
+from tests.release_fixtures import build_release_objects
 
 
 class Store:
@@ -66,10 +67,9 @@ class UpstreamVersionTest(unittest.TestCase):
 
 class PublishedVersionTest(unittest.TestCase):
     def _release(self, amd64: str, arm64: str):  # type: ignore[no-untyped-def]
-        from scripts.restore import TrustedRelease
-
         return TrustedRelease(
-            release_id="r", key_bytes=b"", manifest_data=None, manifest=None,
+            release_id="r", key_bytes=b"",
+            manifest_data={}, manifest=load_manifest(),
             packages={"amd64": amd64, "arm64": arm64},
         )
 

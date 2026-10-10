@@ -50,17 +50,6 @@ def _s3_client(endpoint: str | None = None):  # type: ignore[no-untyped-def]
     return boto3.client("s3", **kwargs)
 
 
-def _object_exists(client, bucket: str, key: str) -> bool:  # type: ignore[no-untyped-def]
-    try:
-        client.head_object(Bucket=bucket, Key=key)
-        return True
-    except Exception as exc:
-        message = str(exc).lower()
-        if "404" in message or "not found" in message or "nosuchkey" in message:
-            return False
-        raise
-
-
 def _remote_sha256(client, bucket: str, key: str) -> str | None:  # type: ignore[no-untyped-def]
     try:
         response = client.get_object(Bucket=bucket, Key=key)

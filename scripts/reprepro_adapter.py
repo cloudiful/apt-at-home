@@ -1,4 +1,4 @@
-"""Generate APT `Packages` indices with reprepro instead of apt-ftparchive.
+"""Generate APT `Packages` indices with reprepro.
 
 reprepro reads a real package database, so stanza fields come from the ``.deb``
 control data rather than from a hand-rolled header writer. The database is a
@@ -104,8 +104,8 @@ def _export(debs: list[Path], *, arches: tuple[str, ...], pool_dir: Path) -> dic
 def generate_packages(pool_dir: Path, dists_arch_dir: Path, debs: list[Path]) -> tuple[Path, Path]:
     """Write `Packages`/`Packages.gz` for one architecture via reprepro.
 
-    Signature-compatible with the apt-ftparchive helper it replaces, so callers
-    keep passing a pool directory and the per-architecture dists directory.
+    Takes the pool directory and the per-architecture dists directory, and
+    returns the two written paths.
     """
     arch = dists_arch_dir.name.removeprefix("binary-")
     if arch not in ARCHES:

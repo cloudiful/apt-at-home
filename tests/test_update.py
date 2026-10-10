@@ -15,9 +15,8 @@ from pathlib import Path
 from unittest import mock
 
 from scripts.manifest import default_manifest_path
+from scripts.metadata import ARCHES
 from scripts.release_manifest import load_manifest_data, validated_document
-from scripts.restore import BaselineUnavailable, TrustedRelease
-from scripts.restore_packages import check_legacy_baseline
 from scripts.update_plan import build_plan
 from scripts.upstream import Candidate
 from scripts.upstream_assets import (
@@ -27,8 +26,6 @@ from scripts.upstream_assets import (
     license_url,
     release_download_url,
 )
-
-ARCHES = ("amd64", "arm64")
 
 
 def committed_sha(package_name: str, arch: str) -> str:
@@ -181,51 +178,6 @@ class PlanTest(unittest.TestCase):
         self.assertIn("license", str(ctx.exception))
 
 
-class LegacyBaselineTest(unittest.TestCase):
-    def _legacy(self, names: dict[str, set[str]]) -> TrustedRelease:
-        return TrustedRelease(
-            release_id="legacy", key_bytes=b"", manifest_data=None, manifest=None,
-            packages={
-                arch: "\n".join(f"Filename: pool/{name}" for name in sorted(names[arch]))
-                for arch in ARCHES
-            },
-        )
-
-    def test_matching_committed_manifest_is_accepted(self) -> None:
-        _, committed = validated_document(default_manifest_path())
-        names = {
-            arch: {f"{pkg.name}_{pkg.version}-1_{arch}.deb" for pkg in committed.packages}
-            for arch in ARCHES
-        }
-        self.assertIs(check_legacy_baseline(self._legacy(names), committed), committed)
-
-    def test_missing_package_or_version_mismatch_stops_with_repair_instructions(self) -> None:
-        _, committed = validated_document(default_manifest_path())
-        complete = {
-            arch: {f"{pkg.name}_{pkg.version}-1_{arch}.deb" for pkg in committed.packages}
-            for arch in ARCHES
-        }
-        cases = {
-            "missing_package": {
-                arch: {n for n in names if not n.startswith("zellij")} for arch, names in complete.items()
-            },
-            "version_mismatch": {
-                arch: {
-                    (n.replace("0.45.1", "0.44.0") if arch == "amd64" and "zellij" in n else n)
-                    for n in names
-                }
-                for arch, names in complete.items()
-            },
-        }
-        for label, names in cases.items():
-            with self.subTest(case=label):
-                with self.assertRaises(BaselineUnavailable) as ctx:
-                    check_legacy_baseline(self._legacy(names), committed)
-                message = str(ctx.exception)
-                self.assertIn("scripts.repo publish", message)
-                self.assertIn("predates manifest binding", message)
-
-
 class CliTest(unittest.TestCase):
     def _run(self, argv: list[str], *, storage, candidates, fingerprint: str = "A" * 40) -> tuple[int, str]:
         from scripts import update as update_module
@@ -241,12 +193,12 @@ class CliTest(unittest.TestCase):
             return update_module.main(argv), out.getvalue()
 
     def _storage(self, objects: dict[str, bytes]):
-        from tests.test_restore import FakeStorage
+        from tests.release_fixtures import FakeStorage
 
         return FakeStorage(objects)
 
     def test_dry_run_is_the_default_and_publishes_nothing(self) -> None:
-        from tests.test_restore import build_release_objects
+        from tests.release_fixtures import build_release_objects
         from tests.helpers import make_gpg_home_with_key
 
         tmpdir, home, key_id = make_gpg_home_with_key()
@@ -268,13 +220,20 @@ class CliTest(unittest.TestCase):
         finally:
             tmpdir.cleanup()
 
+    def test_fresh_storage_bootstraps_from_the_committed_manifest(self) -> None:
+        _, committed = validated_document(default_manifest_path())
+        current = {pkg.name: candidate(pkg.name, pkg.version) for pkg in committed.packages}
+        code, output = self._run([], storage=self._storage({}), candidates=current)
+        self.assertEqual(code, 0, msg=output)
+        self.assertIn("committed manifest (fresh storage)", output)
+
     def test_publish_without_bucket_is_refused(self) -> None:
         code, output = self._run(["--publish"], storage=self._storage({}), candidates={})
         self.assertEqual(code, 1)
         self.assertIn("requires --bucket", output)
 
     def test_untrusted_baseline_is_refused(self) -> None:
-        from tests.test_restore import DeniedStorage
+        from tests.release_fixtures import DeniedStorage
 
         code, output = self._run([], storage=DeniedStorage({}), candidates={})
         self.assertEqual(code, 1)
@@ -282,7 +241,7 @@ class CliTest(unittest.TestCase):
 
     def test_missing_fingerprint_is_refused(self) -> None:
         from scripts import update as update_module
-        from tests.test_restore import FakeStorage
+        from tests.release_fixtures import FakeStorage
 
         with mock.patch.dict(os.environ, {"APT_SIGNING_FINGERPRINT": ""}, clear=False):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):

@@ -13,10 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from .manifest import deb_filename
+from .metadata import ARCHES
 from .publish import publish_tree
 from .release_build import build_release
-from .restore import ARCHES, Source, TrustedRelease
+from .release_verify import TrustedRelease
 from .restore_packages import restore_pool
+from .storage import Source
 from .update_plan import UpdatePlan
 from .verify import verify_tree
 

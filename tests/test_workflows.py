@@ -204,8 +204,9 @@ class WorkflowStructureTest(unittest.TestCase):
     def test_required_system_tools_installed(self) -> None:
         for name in WORKFLOW_NAMES:
             text = read_workflow(name)
-            for tool in ("apt-utils", "file", "xz-utils"):
+            for tool in ("file", "xz-utils"):
                 self.assertIn(tool, text, msg=f"{name} missing {tool}")
+            self.assertNotIn("apt-utils", text, msg=f"{name} installs the removed apt-utils")
 
     def test_build_jobs_install_reprepro(self) -> None:
         # Production `Packages` indices come from reprepro, so every job that

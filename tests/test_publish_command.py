@@ -25,10 +25,10 @@ from scripts.manifest import default_manifest_path, parse_manifest
 from scripts.release_build import build_release
 from scripts.release_manifest import load_manifest_data
 from scripts.repo import main
-from scripts.restore import ObjectNotFound
 from scripts.sign import export_public_key, sign_release
+from scripts.storage import ObjectNotFound
 from tests.helpers import FakeS3, make_gpg_home_with_key
-from tests.test_restore import build_release_objects
+from tests.release_fixtures import build_release_objects
 
 BUCKET = "test-bucket"
 PUBLISHED_ID = "20260102-030405"

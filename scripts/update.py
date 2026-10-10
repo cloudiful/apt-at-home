@@ -14,11 +14,16 @@ import sys
 from pathlib import Path
 
 from .fingerprint import expected_fingerprint_from_env
-from .manifest import default_manifest_path, load_manifest
+from .manifest import default_manifest_path
 from .release_manifest import validated_document
+from .release_verify import (
+    BaselineUnavailable,
+    NoCurrentRelease,
+    TrustedRelease,
+    restore_metadata,
+)
 from .repo import _release_id as new_release_id
-from .restore import BaselineUnavailable, NoCurrentRelease, Source, TrustedRelease, restore_metadata, s3_source
-from .restore_packages import check_legacy_baseline
+from .storage import Source, s3_source
 from .update_build import apply_update
 from .update_plan import UpdatePlan, build_plan
 from .upstream import Candidate, client_from_env, discover
@@ -42,21 +47,16 @@ def _fingerprint() -> str:
 def _load_baseline(source: Source, *, fingerprint: str) -> tuple[TrustedRelease | None, dict[str, object]]:
     """Return the trusted baseline release and the manifest document to compare against.
 
-    Only a confirmed missing pointer bootstraps from the committed manifest. A
-    published release that predates manifest binding is usable solely when it
-    equals the committed manifest exactly, which `check_legacy_baseline`
-    enforces before its document is reused.
+    Only a confirmed missing pointer bootstraps from the committed manifest. Any
+    published release must carry the baseline manifest its signed Release binds,
+    and a missing or mismatched binding is refused by the trust chain.
     """
     try:
         restored = restore_metadata(source, fingerprint=fingerprint)
     except NoCurrentRelease:
         data, _ = validated_document(default_manifest_path())
         return None, data
-    check_legacy_baseline(restored, load_manifest(default_manifest_path()))
-    if restored.manifest_data is not None:
-        return restored, restored.manifest_data
-    data, _ = validated_document(default_manifest_path())
-    return restored, data
+    return restored, restored.manifest_data
 
 
 def _discover(client) -> dict[str, Candidate]:  # type: ignore[no-untyped-def]

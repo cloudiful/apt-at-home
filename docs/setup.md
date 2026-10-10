@@ -104,10 +104,10 @@ uploads nothing and still succeeds. A manual release is refused when the
 committed manifest is older than the published baseline, so publishing cannot
 downgrade clients. No automatic key rotation occurs.
 
-The first publication from an updated `main` may need to be manual: if the
-current remote release predates manifest binding and its index is incomplete,
-the updater stops with an explicit republish instruction instead of silently
-bootstrapping. Run one `release.yml` publish from `main` to repair the index.
+Every published release binds the manifest it was built from into its signed
+`Release`, and the updater refuses a release whose binding is missing or does
+not match. Run one `release.yml` publish from `main` if the published baseline
+needs to be rebuilt.
 
 `ci.yml` runs the package build, verification, and native amd64/arm64 smoke on
 every push, and pins `UV_DEFAULT_INDEX` to public PyPI so the committed lock

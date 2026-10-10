@@ -1,12 +1,12 @@
-import gzip
 import tempfile
 import unittest
 from pathlib import Path
 
 from scripts.common import sha256_file
 from scripts.deb import build_deb, stage_package
-from scripts.manifest import load_manifest
-from scripts.metadata import generate_packages, generate_release, write_indices
+from scripts.manifest import deb_filename, load_manifest
+from scripts.metadata import generate_release, write_indices
+from scripts.reprepro_adapter import generate_packages
 
 
 def _fields(stanza: str) -> dict[str, str]:
@@ -31,8 +31,6 @@ def _fake_debs(tmpdir: Path) -> tuple[list[Path], Path]:
     pool = tmpdir / "pool"
     pool.mkdir(parents=True, exist_ok=True)
     outputs: list[Path] = []
-    from scripts.manifest import deb_filename
-
     for pkg in manifest.packages:
         for arch in ("amd64", "arm64"):
             binary = tmpdir / f"src-{pkg.name}-{arch}" / pkg.targets[arch].binary
@@ -50,7 +48,7 @@ def _fake_debs(tmpdir: Path) -> tuple[list[Path], Path]:
 
 
 class MetadataTest(unittest.TestCase):
-    def test_packages_release_and_indices(self) -> None:
+    def test_release_and_indices_from_reprepro_packages(self) -> None:
         manifest = load_manifest()
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -87,37 +85,6 @@ class MetadataTest(unittest.TestCase):
                 served = output / "releases" / release_id / "dists" / "stable" / "main" / f"binary-{arch}" / "Packages"
                 digest = sha256_file(served)
                 self.assertTrue((output / "indices" / arch / "SHA256" / digest).exists())
-
-    def test_input_order_does_not_change_output(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            tmpdir = Path(tmp)
-            _, pool = _fake_debs(tmpdir)
-            arch_debs = sorted(pool.glob("*_amd64.deb"))
-            self.assertEqual(len(arch_debs), 2)
-            forward, _ = generate_packages(pool, tmpdir / "fwd", arch_debs)
-            backward, _ = generate_packages(pool, tmpdir / "rev", list(reversed(arch_debs)))
-            self.assertEqual(forward.read_bytes(), backward.read_bytes())
-            stanzas = forward.read_text().strip().split("\n\n")
-            self.assertEqual(len(stanzas), 2)
-            names = [_fields(s)["Package"] for s in stanzas]
-            self.assertEqual(names, sorted(names))
-            for deb in arch_debs:
-                self.assertTrue(any(deb.name in s for s in stanzas))
-
-    def test_gzip_is_deterministic(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            tmpdir = Path(tmp)
-            _, pool = _fake_debs(tmpdir)
-            first = tmpdir / "a" / "binary-amd64"
-            second = tmpdir / "b" / "binary-amd64"
-            arch_debs = sorted(pool.glob("*_amd64.deb"))
-            first_packages, first_gz = generate_packages(pool, first, arch_debs)
-            second_packages, second_gz = generate_packages(pool, second, arch_debs)
-            self.assertEqual(first_gz.read_bytes(), second_gz.read_bytes())
-            self.assertEqual(first_packages.read_bytes(), second_packages.read_bytes())
-            self.assertEqual(
-                gzip.decompress(first_gz.read_bytes()), first_packages.read_bytes()
-            )
 
 
 if __name__ == "__main__":

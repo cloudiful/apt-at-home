@@ -9,9 +9,9 @@ from pathlib import Path
 from scripts.common import sha256_file
 from scripts.deb import build_deb, stage_package
 from scripts.manifest import deb_filename, default_manifest_path, load_manifest
-from scripts.metadata import generate_packages, generate_release, write_indices
+from scripts.metadata import generate_release, write_indices
 from scripts.release_manifest import MANIFEST_NAME, manifest_binding_fields, write_manifest_artifact
-from scripts.reprepro_adapter import generate_packages as reprepro_generate_packages
+from scripts.reprepro_adapter import generate_packages
 from scripts.sign import export_public_key, import_key, sign_release
 from scripts.verify import verify_tree
 from tests.helpers import make_gpg_home_with_key
@@ -20,8 +20,9 @@ from tests.helpers import make_gpg_home_with_key
 def resign_tree(root: Path, release_id: str, *, key_home: Path, key_id: str) -> None:
     """Rebuild gzip, Release, by-hash indices and signatures after editing Packages.
 
-    Keeps every hash and signature self-consistent so a targeted defect surfaces
-    through verify_tree as an integrity failure rather than a hash mismatch.
+    Keeps every hash, the bound manifest, and every signature self-consistent so a
+    targeted defect surfaces through verify_tree as an integrity failure rather
+    than a hash mismatch.
     """
     dists = root / "releases" / release_id / "dists" / "stable"
     release_inputs: list[tuple[Path, str]] = []
@@ -36,7 +37,11 @@ def resign_tree(root: Path, release_id: str, *, key_home: Path, key_id: str) -> 
         packages_files[arch] = [packages, packages_gz]
         release_inputs.append((packages, f"main/binary-{arch}/Packages"))
         release_inputs.append((packages_gz, f"main/binary-{arch}/Packages.gz"))
-    release_file = generate_release(output_root=root, release_id=release_id, files=release_inputs)
+    artifact = root / "releases" / release_id / MANIFEST_NAME
+    release_file = generate_release(
+        output_root=root, release_id=release_id, files=release_inputs,
+        extra_fields=manifest_binding_fields(artifact),
+    )
     write_indices(output_root=root, release_id=release_id, packages_files=packages_files)
     old = os.environ.get("GNUPGHOME")
     os.environ["GNUPGHOME"] = str(key_home)
@@ -57,12 +62,11 @@ def build_complete_tree(
     key_home: Path,
     key_id: str,
     packages_generator: Callable[..., tuple[Path, Path]] = generate_packages,
-    bind_manifest: bool = False,
 ) -> Path:
-    """Build and sign a complete tree, optionally through reprepro with a manifest binding.
+    """Build and sign a complete tree through the production reprepro path.
 
-    `bind_manifest` switches to the shipped production path: real reprepro
-    indices plus a Release that binds the canonical manifest artifact.
+    Every tree binds its canonical manifest artifact into the signed Release, so
+    a caller sees exactly the format production publishes.
     """
     manifest = load_manifest()
     pool = root / "pool"
@@ -87,15 +91,13 @@ def build_complete_tree(
         packages_files[arch] = [packages, packages_gz]
         release_inputs.append((packages, f"main/binary-{arch}/Packages"))
         release_inputs.append((packages_gz, f"main/binary-{arch}/Packages.gz"))
-    extra_fields: list[tuple[str, str]] = []
-    if bind_manifest:
-        artifact = write_manifest_artifact(
-            source=default_manifest_path(),
-            destination=root / "releases" / release_id / MANIFEST_NAME,
-        )
-        extra_fields = manifest_binding_fields(artifact)
+    artifact = write_manifest_artifact(
+        source=default_manifest_path(),
+        destination=root / "releases" / release_id / MANIFEST_NAME,
+    )
     release_file = generate_release(
-        output_root=root, release_id=release_id, files=release_inputs, extra_fields=extra_fields
+        output_root=root, release_id=release_id, files=release_inputs,
+        extra_fields=manifest_binding_fields(artifact),
     )
     write_indices(output_root=root, release_id=release_id, packages_files=packages_files)
     old = os.environ.get("GNUPGHOME")
@@ -228,10 +230,7 @@ class VerifyTest(unittest.TestCase):
 
 class ManifestBindingVerifyTest(unittest.TestCase):
     def _tree(self, root: Path, key_home: Path, key_id: str) -> Path:
-        return build_complete_tree(
-            root, "20260102-030405", key_home=key_home, key_id=key_id,
-            packages_generator=reprepro_generate_packages, bind_manifest=True,
-        )
+        return build_complete_tree(root, "20260102-030405", key_home=key_home, key_id=key_id)
 
     def test_bound_release_verifies(self) -> None:
         tmpdir, home, key_id = make_gpg_home_with_key()
@@ -289,18 +288,22 @@ class ManifestBindingVerifyTest(unittest.TestCase):
         finally:
             tmpdir.cleanup()
 
-    def test_legacy_release_without_binding_still_verifies(self) -> None:
+    def test_unbound_release_is_rejected(self) -> None:
         tmpdir, home, key_id = make_gpg_home_with_key()
         try:
             with tempfile.TemporaryDirectory() as work:
-                root = build_complete_tree(Path(work) / "repo", "20260102-030405",
-                                           key_home=home, key_id=key_id)
+                root = self._tree(Path(work) / "repo", home, key_id)
                 release = root / "releases" / "20260102-030405" / "dists" / "stable" / "Release"
-                self.assertNotIn("X-Manifest", release.read_text())
-                self.assertFalse((root / "releases" / "20260102-030405" / MANIFEST_NAME).exists())
-                findings = verify_tree(root)
-                self.assertFalse(any("baseline manifest" in f for f in findings))
-                self.assertTrue(any("signatures valid" in f for f in findings))
+                kept = [
+                    line for line in release.read_text().splitlines()
+                    if not line.startswith("X-Manifest-")
+                ]
+                release.write_text("\n".join(kept) + "\n", encoding="utf-8")
+                (root / "releases" / "20260102-030405" / MANIFEST_NAME).unlink()
+                _sign_only(root, "20260102-030405", key_home=home, key_id=key_id)
+                with self.assertRaises(ValueError) as ctx:
+                    verify_tree(root)
+                self.assertIn("must bind", str(ctx.exception))
         finally:
             tmpdir.cleanup()
 

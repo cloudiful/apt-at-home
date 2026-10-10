@@ -54,7 +54,7 @@ class BindingTest(unittest.TestCase):
             self.assertEqual(fields[SHA256_FIELD], sha256_bytes(artifact.read_bytes()))
             self.assertEqual(fields[SIZE_FIELD], str(artifact.stat().st_size))
 
-    def test_matching_binding_verifies_and_absent_binding_is_legacy(self) -> None:
+    def test_matching_binding_verifies_and_absent_binding_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             artifact = self._artifact(root)
@@ -64,8 +64,10 @@ class BindingTest(unittest.TestCase):
             digest, size = parse_binding(release)
             self.assertEqual(digest, sha256_bytes(artifact.read_bytes()))
             self.assertEqual(size, str(artifact.stat().st_size))
-            self.assertTrue(check_binding(release_text=release, manifest_path=artifact))
-            self.assertFalse(check_binding(release_text="Origin: apt-at-home\n", manifest_path=artifact))
+            self.assertIsNone(check_binding(release_text=release, manifest_path=artifact))
+            with self.assertRaises(ValueError) as ctx:
+                check_binding(release_text="Origin: apt-at-home\n", manifest_path=artifact)
+            self.assertIn("must bind", str(ctx.exception))
 
     def test_partial_binding_always_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -118,11 +120,11 @@ class RemoteBindingTest(unittest.TestCase):
     def test_bytes_and_path_agree(self) -> None:
         payload = canonical_bytes(load_manifest_data(SOURCE))
         release = self._release(payload)
-        self.assertTrue(check_binding_bytes(release_text=release, payload=payload))
+        self.assertIsNone(check_binding_bytes(release_text=release, payload=payload))
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / MANIFEST_NAME
             path.write_bytes(payload)
-            self.assertTrue(check_binding(release_text=release, manifest_path=path))
+            self.assertIsNone(check_binding(release_text=release, manifest_path=path))
             with self.assertRaises(ValueError):
                 check_binding(release_text=release, manifest_path=Path(tmp) / "absent.json")
 
@@ -133,6 +135,12 @@ class RemoteBindingTest(unittest.TestCase):
             check_binding_bytes(release_text=release, payload=payload + b"\n")
         with self.assertRaises(ValueError):
             check_binding_bytes(release_text=release, payload=None)
+
+    def test_unbound_release_bytes_are_refused(self) -> None:
+        payload = canonical_bytes(load_manifest_data(SOURCE))
+        with self.assertRaises(ValueError) as ctx:
+            check_binding_bytes(release_text="Origin: apt-at-home\n", payload=payload)
+        self.assertIn("must bind", str(ctx.exception))
 
     def test_validated_document_round_trips_the_committed_manifest(self) -> None:
         data, manifest = validated_document(SOURCE)

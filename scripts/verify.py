@@ -8,28 +8,11 @@ from pathlib import Path
 
 from .common import sha256_file, sha512_file
 from .fingerprint import check_key_matches_pin
+from .metadata import ARCHES, COMPONENT, SUITE
 from .package_index import check_arch_packages, pool_debs_for_arch
+from .release_hashes import parse_release_hashes
 from .release_manifest import MANIFEST_NAME, check_binding
 from .sign import IsolatedHomedir, import_key, verify_clearsign, verify_detached
-
-ARCHES = ("amd64", "arm64")
-
-
-def _parse_release_hashes(release_text: str, section: str) -> dict[str, tuple[str, str, int]]:
-    out: dict[str, tuple[str, str, int]] = {}
-    in_section = False
-    for line in release_text.splitlines():
-        if line.strip() == f"{section}:":
-            in_section = True
-            continue
-        if in_section:
-            if line and not line.startswith(" "):
-                break
-            match = re.match(r"^\s+([0-9a-f]+)\s+(\d+)\s+(\S+)\s*$", line)
-            if match:
-                digest, size, name = match.groups()
-                out[name] = (digest, section, int(size))
-    return out
 
 
 def verify_tree(
@@ -50,7 +33,7 @@ def verify_tree(
     if not isinstance(release_id, str) or not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", release_id):
         raise ValueError(f"invalid release id in current.json: {release_id!r}")
 
-    dists = output_root / "releases" / release_id / "dists" / "stable"
+    dists = output_root / "releases" / release_id / "dists" / SUITE
     release_file = dists / "Release"
     inrelease = dists / "InRelease"
     detached = dists / "Release.gpg"
@@ -60,45 +43,46 @@ def verify_tree(
     findings.append(f"release {release_id} metadata present")
 
     release_text = release_file.read_text(encoding="utf-8")
-    for token in ("Origin:", "Suite: stable", "Codename: stable", "Architectures: amd64 arm64",
-                  "Components: main", "Acquire-By-Hash: yes"):
+    for token in ("Origin:", f"Suite: {SUITE}", f"Codename: {SUITE}",
+                  f"Architectures: {' '.join(ARCHES)}", f"Components: {COMPONENT}",
+                  "Acquire-By-Hash: yes"):
         if token not in release_text:
             raise ValueError(f"Release missing required field: {token}")
     if "Valid-Until" in release_text:
         raise ValueError("Release must not carry Valid-Until (deliberate personal-repo tradeoff)")
     findings.append("Release header fields valid")
 
-    # A release that binds its baseline manifest must ship the exact bytes it
-    # signed for; an older release that binds neither is left to the reader.
-    if check_binding(
+    # Every release must bind the exact baseline manifest it was built from;
+    # an absent, partial, missing, or tampered binding fails here.
+    check_binding(
         release_text=release_text,
         manifest_path=output_root / "releases" / release_id / MANIFEST_NAME,
-    ):
-        findings.append("Release binds a matching baseline manifest")
+    )
+    findings.append("Release binds a matching baseline manifest")
 
-    sha256_entries = _parse_release_hashes(release_text, "SHA256")
-    sha512_entries = _parse_release_hashes(release_text, "SHA512")
+    sections = parse_release_hashes(release_text)
+    sha256_entries = sections["SHA256"]
+    sha512_entries = sections["SHA512"]
     if not sha256_entries or not sha512_entries:
         raise ValueError("Release must carry SHA256 and SHA512 sections")
 
     # Every entry must reference a local Packages file and match its bytes.
-    for rel, (digest, _, size) in sorted(sha256_entries.items()):
+    for rel, (digest, size) in sorted(sha256_entries.items()):
         if "Packages" not in rel:
             raise ValueError(f"Release SHA256 entry must reference Packages files, got: {rel}")
-        candidate = dists / rel if not rel.startswith("dists/") else output_root / "releases" / release_id / rel
-        # Entries are stored relative to dists/stable (e.g. main/binary-amd64/Packages).
         alt = dists / rel
+        candidate = output_root / "releases" / release_id / rel
         target = alt if alt.exists() else candidate
         if not target.exists():
             raise ValueError(f"Release references missing file: {rel}")
         if target.stat().st_size != size:
             raise ValueError(f"size mismatch for {rel}")
-        if sha256_file(target) != digest.lower():
+        if sha256_file(target) != digest:
             raise ValueError(f"SHA256 mismatch for {rel}")
         other = sha512_entries.get(rel)
         if other is None:
             raise ValueError(f"SHA512 entry missing for {rel}")
-        if sha512_file(target) != other[0].lower():
+        if sha512_file(target) != other[0]:
             raise ValueError(f"SHA512 mismatch for {rel}")
     findings.append(f"verified {len(sha256_entries)} hashed metadata files")
 
@@ -107,7 +91,7 @@ def verify_tree(
     if len(pool_files) != 4:
         raise ValueError(f"pool must hold exactly four .deb files, found {len(pool_files)}")
     for arch in ARCHES:
-        packages_path = dists / "main" / f"binary-{arch}" / "Packages"
+        packages_path = dists / COMPONENT / f"binary-{arch}" / "Packages"
         if not packages_path.exists():
             raise ValueError(f"missing Packages for {arch}")
         count = check_arch_packages(
@@ -121,7 +105,7 @@ def verify_tree(
     # By-hash indices must match the served Packages bytes.
     for arch in ARCHES:
         for name in ("Packages", "Packages.gz"):
-            served = dists / "main" / f"binary-{arch}" / name
+            served = dists / COMPONENT / f"binary-{arch}" / name
             digest = sha256_file(served)
             indexed = output_root / "indices" / arch / "SHA256" / digest
             if not indexed.exists():
