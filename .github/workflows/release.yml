@@ -34,6 +34,7 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.APT_S3_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.APT_S3_SECRET_ACCESS_KEY }}
       APT_SIGNING_FINGERPRINT: ${{ secrets.APT_SIGNING_FINGERPRINT }}
+      UV_DEFAULT_INDEX: https://pypi.org/simple
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -41,6 +42,8 @@ jobs:
       - name: Install system tools
         run: apt-get update && apt-get install -y --no-install-recommends apt apt-utils file xz-utils gpg python3 curl ca-certificates && rm -rf /var/lib/apt/lists/*
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      - name: Verify portable public dependency lock
+        run: uv lock --check
       - run: uv sync --frozen
       - run: uv run python -m unittest discover -s tests
       - name: Import release signing key into an isolated homedir

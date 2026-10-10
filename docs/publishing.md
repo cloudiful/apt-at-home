@@ -29,6 +29,21 @@ uv run python -m scripts.repo verify --output dist/repo
 - Credentials never appear in CLI arguments; the signing key comes from
   `APT_SIGNING_KEY_FILE` (path only) and S3 credentials from the environment.
 
+## Dependency locks
+
+Both locks stay reproducible against public sources, so any CI or Cloudflare
+build works without a private mirror and without upgrading anything:
+
+- `uv.lock` pins the exact resolved versions and artifact hashes.
+  `uv lock --check --default-index https://pypi.org/simple` fails if the lock
+  drifts from `pyproject.toml` or stops resolving from public PyPI. Regenerate
+  in place with `uv lock --default-index https://pypi.org/simple`; never
+  upgrade or delete entries in the same change.
+- `package-lock.json` stays reproducible under `npm ci`. `package.json`
+  approves the only two install scripts the lock needs through a
+  version-pinned `allowScripts` map; never widen it to a name-only or
+  wildcard approval.
+
 ## Verify
 
 `verify` checks the pointer, the `Release` headers and `SHA256`/`SHA512`

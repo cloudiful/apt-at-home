@@ -13,6 +13,10 @@
     "check:all": "bun run typecheck && bun run test && uv run python -m unittest discover -s tests",
     "worker:dry-run": "wrangler deploy --config worker/wrangler.jsonc --dry-run --outdir dist/worker"
   },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "workerd@1.20261006.1": true
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261010.1",
     "typescript": "5.9.3",

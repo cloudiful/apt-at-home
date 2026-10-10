@@ -13,16 +13,13 @@ or bucket mutation is performed here.
   in `worker/wrangler.jsonc`; keep `workers_dev: false` and
   `preview_urls: false`. Keep the bucket private: no public `r2.dev` access
   and no bucket custom domain.
-- The base config carries no `routes` and is deployed as-is with
-  `bunx wrangler deploy --config worker/wrangler.jsonc --domains "$APT_WORKER_DOMAIN"`.
-  The domain comes from the validated `APT_WORKER_DOMAIN` repository
-  variable; until the operator supplies that variable, deployment stays
-  explicitly blocked. No generated config is used, so the deployed
-  entrypoint always resolves.
+- The base config carries no `routes`. The Worker custom domain is bound by the
+  deploy command (section 3) rather than committed to the config, so the
+  deployed entrypoint always resolves.
 - Point the private hostname at the Worker. The Worker is the only public
   ingress. Disable any direct bucket endpoint.
 
-## 2. Worker credentials secret
+## 2. Worker runtime credentials
 
 - The Worker reads a `CREDENTIALS` secret: JSON mapping device names to
   SHA256 hex digests of per-device random tokens.
@@ -30,38 +27,57 @@ or bucket mutation is performed here.
   `openssl rand -hex 32`.
 - Compute digests locally and upload only the digest map:
   `python3 -c "import hashlib; print(hashlib.sha256(b'<token>').hexdigest())"`.
+- Store `CREDENTIALS` as a **runtime** secret in the Cloudflare dashboard
+  (Worker → Settings → Variables and Secrets). The gateway reads it while
+  serving requests; the build never does.
 - Check credentials before any storage or cache access (the gateway already
-  does this). Invalid configuration fails closed with `503`.
-- Production deploy requires the `CREDENTIALS` secret plus
-  `CLOUDFLARE_API_TOKEN`; the workflow validates the domain, both secrets,
-  and the `CREDENTIALS` JSON schema (non-empty object mapping device names
-  to 64-hex digests) before any deploy, then provisions the secret
-  atomically with `--secrets-file` in the same deployment version. The
-  generated secrets file is `chmod 600` and scrubbed afterwards, and the
-  bucket is never exposed publicly.
+  does this). Invalid configuration fails closed with `503`, and the bucket is
+  never exposed publicly.
 
-## 3. GitHub environment `apt-production`
+## 3. Cloudflare Worker Builds (deploy owner)
 
-`release.yml` and `worker-deploy.yml` are `workflow_dispatch` only, carry
-`environment: apt-production` on their jobs, serialize through a single
-concurrency group, and use least-privilege `contents: read`. Workflow inputs
-reach shell steps only through step `env` (never `${{ }}` interpolation).
-The release keeps the imported key file until the final always-cleanup and
-signs with `APT_SIGNING_KEY_ID` set to the full trusted fingerprint.
-Configure these protected secrets:
+Cloudflare builds and deploys the gateway straight from this GitHub
+repository, so no GitHub workflow deploys the Worker.
+
+- In the Cloudflare dashboard, create the Worker and connect its Git
+  integration to this repository. Use the repository root as the build root.
+- Set the build variable `SKIP_DEPENDENCY_INSTALL=1`. This supported switch
+  stops the automatic Python/uv dependency install, so the build stays
+  JavaScript-only and never resolves a Python index.
+- Build command: `npm ci && npm run typecheck && npm test`.
+- Deploy command:
+  `npx wrangler deploy --config worker/wrangler.jsonc --domains apt.example.com`
+  (replace the example hostname with the operator's own domain).
+- Disable preview URLs so only the production hostname is served.
+
+`package.json` keeps a pinned `allowScripts` map for the only two install
+scripts the lock needs (`esbuild` and `workerd`). Nothing is approved by name
+or wildcard. `ci.yml` still bundles the Worker with a Wrangler `--dry-run` and
+synthetic credentials as a CI check; it never uploads.
+
+## 4. GitHub environment `apt-production`
+
+`release.yml` is `workflow_dispatch` only, carries `environment: apt-production`
+on its publish job, serializes through `concurrency: apt-release`, and uses
+least-privilege `contents: read`. Workflow inputs reach shell steps only
+through step `env` (never `${{ }}` interpolation). The release keeps the
+imported key file until the final always-cleanup and signs with
+`APT_SIGNING_KEY_ID` set to the full trusted fingerprint. Configure these
+protected secrets:
 
 - `APT_S3_BUCKET`, `APT_S3_ENDPOINT`, `APT_S3_REGION`,
   `APT_S3_ACCESS_KEY_ID`, `APT_S3_SECRET_ACCESS_KEY`
 - `APT_RELEASE_SIGNING_KEY` (armored private key, manual releases only)
 - `APT_SIGNING_FINGERPRINT` (full 40-hex primary fingerprint, enforced at
   verify and publish — not an echo)
-- `CLOUDFLARE_API_TOKEN`, `CREDENTIALS` (Worker deploy only),
-  `APT_WORKER_DOMAIN` variable (bare hostname, validated)
-- Never expose PR secrets to releases; `ci.yml` uses an ephemeral CI key and
-  never touches production credentials. No Worker deploy is mixed into the
-  package-upload release.
 
-## 4. Local credential and key bootstrap
+`ci.yml` runs the package build, verification, and native amd64/arm64 smoke on
+every push, and pins `UV_DEFAULT_INDEX` to public PyPI so the committed lock
+stays portable. It needs no cloud secrets: the CI signing key is ephemeral and
+the Wrangler step is a dry run. Package publication and Worker deploys have
+separate owners, so the GitHub environment holds only the R2 and GPG material.
+
+## 5. Local credential and key bootstrap
 
 - Copy `client/personal.sources.example` to
   `/etc/apt/sources.list.d/apt-at-home.sources`, replacing the hostname and
@@ -85,7 +101,7 @@ Configure these protected secrets:
   `.tar.gz.sha256` files cover the tarball. See `checksum_provenance` in the
   manifest.
 
-## 5. WAF, limits, and alerts (limitations)
+## 6. WAF, limits, and alerts (limitations)
 
 - A Worker-side WAF, rate limit, or alert cannot guarantee blocking of
   malicious invocations on the free tier; treat them as defense in depth.
@@ -95,7 +111,7 @@ Configure these protected secrets:
   metadata. This is a personal-repo freshness tradeoff documented in the
   manifest tooling.
 
-## 6. Token rotation
+## 7. Token rotation
 
 1. Generate a new token for the device and add its digest to `CREDENTIALS`.
 2. Update that device's `auth.conf` entry (`chmod 600`).

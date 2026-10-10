@@ -1,9 +1,9 @@
 """Structural regressions for production workflows and builder defaults.
 
-These tests pin the P4 repair properties without live cloud access: job-level
-environments, env-indirected workflow inputs, retained signing-key material,
-base-config deploys with atomic secret provisioning, required system tools,
-and explicit xz compression.
+These tests pin the deployment-owner and release-safety properties without live
+cloud access: job-level environments, env-indirected workflow inputs, retained
+signing-key material, dry-run-only Worker bundling, required system tools, and
+explicit xz compression.
 """
 
 import re
@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github" / "workflows"
+WORKFLOW_NAMES = ("ci.yml", "release.yml")
 
 RUN_RE = re.compile(r"run: \|\n(?P<body>(?: {10,}[^\n]*\n)+)")
 
@@ -33,21 +34,59 @@ def job_block(text: str, job: str) -> str:
 
 
 class WorkflowStructureTest(unittest.TestCase):
+    def test_only_validation_and_release_workflows_exist(self) -> None:
+        names = sorted(path.name for path in WORKFLOWS.glob("*.yml"))
+        self.assertEqual(names, list(WORKFLOW_NAMES))
+
     def test_no_top_level_environment(self) -> None:
-        for name in ("ci.yml", "release.yml", "worker-deploy.yml"):
-            text = read_workflow(name)
-            head = text.split("jobs:")[0]
+        for name in WORKFLOW_NAMES:
+            head = read_workflow(name).split("jobs:")[0]
             self.assertNotIn("\nenvironment:", head, msg=name)
 
-    def test_protected_jobs_carry_environment(self) -> None:
-        for name in ("release.yml", "worker-deploy.yml"):
-            text = read_workflow(name)
-            self.assertIn("    environment: apt-production", read_workflow(name), msg=name)
+    def test_release_job_is_the_only_protected_job(self) -> None:
+        self.assertIn("    environment: apt-production", read_workflow("release.yml"))
+        self.assertNotIn("environment:", read_workflow("ci.yml"))
 
     def test_no_template_interpolation_inside_shell(self) -> None:
-        for name in ("ci.yml", "release.yml", "worker-deploy.yml"):
+        for name in WORKFLOW_NAMES:
             for body in run_bodies(read_workflow(name)):
                 self.assertNotIn("${{", body, msg=f"{name}: {body[:60]}")
+
+    def test_workflows_validate_the_portable_public_lock(self) -> None:
+        for name in WORKFLOW_NAMES:
+            text = read_workflow(name)
+            self.assertIn("UV_DEFAULT_INDEX: https://pypi.org/simple", text, msg=name)
+            self.assertIn("uv lock --check", text, msg=name)
+            self.assertIn("uv sync --frozen", text, msg=name)
+
+    def test_github_never_deploys_the_worker(self) -> None:
+        # Cloudflare Worker Builds owns the deploy; every wrangler invocation
+        # that remains in GitHub stays a dry-run bundling check.
+        deploy_lines = [
+            (name, line.strip())
+            for name in WORKFLOW_NAMES
+            for line in read_workflow(name).splitlines()
+            if "wrangler deploy" in line
+        ]
+        self.assertTrue(deploy_lines, msg="expected at least one CI dry-run")
+        for name, line in deploy_lines:
+            self.assertIn("--dry-run", line, msg=f"{name}: {line}")
+
+    def test_ci_dry_runs_production_equivalent_command(self) -> None:
+        text = read_workflow("ci.yml")
+        self.assertIn("--config worker/wrangler.jsonc", text)
+        self.assertIn("--domains apt-ci.example.com", text)
+        self.assertIn("--dry-run", text)
+        self.assertIn("--secrets-file", text)
+        self.assertNotIn("wrangler.deploy.jsonc", text)
+        self.assertNotIn("routes:", text)
+
+    def test_dry_run_provisions_synthetic_secret_atomically(self) -> None:
+        text = read_workflow("ci.yml")
+        deploy = text.split("Dry-run production-equivalent")[1]
+        self.assertIn("--secrets-file", deploy)
+        self.assertIn("ci-secrets.json", deploy)
+        self.assertIn('chmod 600 "$RUNNER_TEMP/ci-secrets.json"', deploy)
 
     def test_release_inputs_pass_through_env(self) -> None:
         text = read_workflow("release.yml")
@@ -56,6 +95,12 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertIn('if [ -n "$RELEASE_ID_INPUT" ]', text)
         self.assertIn('"$RELEASE_ID_INPUT"', text)
         self.assertIn('[ "$ALLOW_KEY_ROTATION_INPUT" = "true" ]', text)
+
+    def test_release_serialized_and_manual(self) -> None:
+        text = read_workflow("release.yml")
+        self.assertIn("workflow_dispatch:", text)
+        self.assertIn("group: apt-release", text)
+        self.assertIn("cancel-in-progress: false", text)
 
     def test_release_signing_key_retained_until_cleanup(self) -> None:
         text = read_workflow("release.yml")
@@ -67,7 +112,7 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertIn("$RUNNER_TEMP/release-private.asc", cleanup)
 
     def test_required_system_tools_installed(self) -> None:
-        for name in ("ci.yml", "release.yml"):
+        for name in WORKFLOW_NAMES:
             text = read_workflow(name)
             for tool in ("apt-utils", "file", "xz-utils"):
                 self.assertIn(tool, text, msg=f"{name} missing {tool}")
@@ -81,44 +126,6 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertIn("file", install_lines[0])
         first_file_use = job.find("file /tmp/")
         self.assertGreater(first_file_use, job.find("apt-get install"))
-
-    def test_deploy_uses_base_config_with_domains(self) -> None:
-        text = read_workflow("worker-deploy.yml")
-        self.assertIn("--config worker/wrangler.jsonc", text)
-        self.assertIn('--domains "$APT_WORKER_DOMAIN"', text)
-        self.assertNotIn("wrangler.deploy.jsonc", text)
-        self.assertNotIn("routes:", text)
-
-    def test_deploy_provisions_secret_atomically(self) -> None:
-        text = read_workflow("worker-deploy.yml")
-        self.assertIn("--secrets-file", text)
-        self.assertIn("worker-secrets.json", text)
-        validate = text.split("Validate production domain and credentials")[1].split("- name:")[0]
-        self.assertIn("JSON.parse", validate)
-        self.assertIn("CREDENTIALS", validate)
-        for line in validate.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("echo ") and "WORKER_CREDENTIALS" in stripped:
-                self.fail("secret value must never appear in an echo line")
-        cleanup = text.split("Scrub generated secret material")[1]
-        self.assertIn("if: always()", cleanup.split("run:")[0])
-        self.assertIn("worker-secrets.json", cleanup)
-
-    def test_secret_files_explicitly_chmodded(self) -> None:
-        # Node's writeFileSync mode only applies on creation, so both
-        # generated secrets files need an explicit chmod for pre-existing paths.
-        ci_validate = read_workflow("ci.yml").split("Dry-run production-equivalent")[1].split("- name:")[0]
-        self.assertIn('chmod 600 "$RUNNER_TEMP/ci-secrets.json"', ci_validate)
-        deploy_validate = read_workflow("worker-deploy.yml").split(
-            "Validate production domain and credentials")[1].split("- name:")[0]
-        self.assertIn('chmod 600 "$RUNNER_TEMP/worker-secrets.json"', deploy_validate)
-
-    def test_ci_dry_runs_production_equivalent_command(self) -> None:
-        text = read_workflow("ci.yml")
-        self.assertIn("--config worker/wrangler.jsonc", text)
-        self.assertIn("--domains apt-ci.example.com", text)
-        self.assertIn("--dry-run", text)
-        self.assertIn("--secrets-file", text)
 
     def test_builder_uses_explicit_xz(self) -> None:
         deb = (ROOT / "scripts" / "deb.py").read_text(encoding="utf-8")
