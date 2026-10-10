@@ -7,6 +7,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .catalog import check_depends, check_known_names
+from .download import canonical_member
+
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _ARCHES = ("amd64", "arm64")
 _VERSION = re.compile(r"^[0-9][A-Za-z0-9.+~:-]*$")
@@ -19,6 +22,7 @@ class ArchTarget:
     sha256: str
     archive_member: str
     binary: str
+    depends: str = ""
 
 
 @dataclass(frozen=True)
@@ -85,11 +89,7 @@ def parse_manifest(raw: object) -> Manifest:
                 raise ValueError(f"duplicate package target: {pkg.name} {arch}")
             seen.add(key)
         packages.append(pkg)
-    if len(packages) != 2:
-        raise ValueError("manifest must pin exactly two packages")
-    names = sorted(p.name for p in packages)
-    if names != ["starship", "zellij"]:
-        raise ValueError(f"manifest must pin starship and zellij, got: {names}")
+    check_known_names([pkg.name for pkg in packages])
     return Manifest(
         maintainer=maintainer,
         section=section,
@@ -121,17 +121,21 @@ def parse_package(raw: object) -> Package:
             raise ValueError(f"target must be an object for {name} {arch}")
         url = str(target_raw.get("url", ""))
         sha256 = str(target_raw.get("sha256", "")).lower()
-        member = str(target_raw.get("archive_member", ""))
         binary = str(target_raw.get("binary", ""))
+        try:
+            member = canonical_member(str(target_raw.get("archive_member", "")))
+        except ValueError as exc:
+            raise ValueError(f"invalid archive_member for {name} {arch}: {exc}") from None
+        depends = check_depends(name, arch, str(target_raw.get("depends", "") or ""))
         if not _URL.match(url):
             raise ValueError(f"invalid pinned URL for {name} {arch}: {url}")
         if not _SHA256.match(sha256):
             raise ValueError(f"invalid sha256 for {name} {arch}")
-        if not member or member.startswith("/") or ".." in member:
-            raise ValueError(f"invalid archive_member for {name} {arch}")
         if not binary or "/" in binary or binary.startswith("."):
             raise ValueError(f"invalid binary name for {name} {arch}")
-        targets[arch] = ArchTarget(url=url, sha256=sha256, archive_member=member, binary=binary)
+        targets[arch] = ArchTarget(
+            url=url, sha256=sha256, archive_member=member, binary=binary, depends=depends
+        )
     return Package(
         name=name,
         version=version,
@@ -150,3 +154,19 @@ def debian_version(pkg: Package, manifest: Manifest) -> str:
 
 def deb_filename(pkg: Package, arch: str, manifest: Manifest) -> str:
     return f"{pkg.name}_{debian_version(pkg, manifest)}_{arch}.deb"
+
+
+def expected_debs(manifest: Manifest) -> set[str]:
+    """Every pool filename a release of this manifest must carry."""
+    return {
+        deb_filename(pkg, arch, manifest)
+        for pkg in manifest.packages
+        for arch in _ARCHES
+    }
+
+
+def expected_debs_for_arch(manifest: Manifest, arch: str) -> set[str]:
+    """The pool filenames one architecture's index must list exactly."""
+    if arch not in _ARCHES:
+        raise ValueError(f"unsupported architecture: {arch!r}")
+    return {deb_filename(pkg, arch, manifest) for pkg in manifest.packages}

@@ -145,7 +145,10 @@ class RemoteBindingTest(unittest.TestCase):
     def test_validated_document_round_trips_the_committed_manifest(self) -> None:
         data, manifest = validated_document(SOURCE)
         self.assertEqual(data, json.loads(SOURCE.read_text(encoding="utf-8")))
-        self.assertEqual(sorted(p.name for p in manifest.packages), ["starship", "zellij"])
+        self.assertEqual(
+            sorted(p.name for p in manifest.packages),
+            ["git-delta", "rustfs-cli", "sccache", "starship", "zellij"],
+        )
         self.assertEqual(canonical_bytes(data), canonical_bytes(load_manifest_data(SOURCE)))
 
     def test_document_writer_matches_the_artifact_writer(self) -> None:

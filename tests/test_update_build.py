@@ -2,13 +2,16 @@
 
 The published release, the reprepro indices, the GPG signature, and the pointer
 ordering are all real; only the upstream archive download is stubbed, so the
-test proves the update mechanics rather than GitHub's availability.
+test proves the update mechanics rather than GitHub's availability. The
+headline case is the one production will run first: a published two-package
+release meeting the full catalog, which must add three packages, build exactly
+six .deb files, keep the four published ones byte-identical, and publish a
+complete ten-file release.
 """
 
 import io
 import json
 import os
-import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -16,6 +19,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from scripts.catalog import archive_member
 from scripts.manifest import deb_filename, load_manifest
 from scripts.metadata import ARCHES
 from scripts.release_verify import restore_metadata
@@ -24,8 +28,13 @@ from scripts.storage import MAX_DEB_BYTES, ObjectNotFound
 from scripts.update_build import apply_update
 from scripts.update_plan import build_plan
 from tests.helpers import FakeS3, make_gpg_home_with_key
-from tests.release_fixtures import RELEASE_ID, build_release_objects
-from tests.test_update import candidate
+from tests.release_fixtures import (
+    RELEASE_ID,
+    build_release_objects,
+    published_manifest,
+    published_manifest_data,
+)
+from tests.test_update import _catalog_candidates, candidate, catalog_document
 
 
 class Store:
@@ -51,21 +60,26 @@ class Store:
         return payload
 
 
-def _fake_archive(path: Path, member: str = "starship") -> Path:
-    payload = b"#!/bin/sh\necho starship\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(path, "w:gz") as archive:
-        info = tarfile.TarInfo(member)
-        info.size = len(payload)
-        info.mode = 0o755
-        archive.addfile(info, io.BytesIO(payload))
-    return path
+def _stub_archive():
+    """Serve any requested archive with the exact member its manifest pins."""
 
-
-def _stub_download(archive: Path):
     def fetch(url: str, expected_sha256: str, dest: Path) -> Path:
+        stem = dest.name[: -len(".tar.gz")]
+        manifest = load_manifest()
+        name = next(
+            pkg.name
+            for pkg in sorted(manifest.packages, key=lambda p: len(p.name), reverse=True)
+            if stem.startswith(f"{pkg.name}-")
+        )
+        pkg = next(p for p in manifest.packages if p.name == name)
+        arch = stem.rsplit("-", 1)[1]
+        payload = f"fake-{name}-{arch}".encode()
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(archive, dest)
+        with tarfile.open(dest, "w:gz") as archive:
+            info = tarfile.TarInfo(archive_member(name, pkg.version, arch))
+            info.size = len(payload)
+            info.mode = 0o755
+            archive.addfile(info, io.BytesIO(payload))
         return dest
 
     return mock.patch("scripts.build.fetch_verified", fetch)
@@ -92,7 +106,7 @@ class UpdateBuildTest(unittest.TestCase):
         store.seed(build_release_objects(work / "published", key_home=key_home, key_id=key_id))
         return store
 
-    def test_one_changed_package_rebuilds_two_debs_and_keeps_the_rest(self) -> None:
+    def test_the_catalog_addition_builds_six_debs_and_keeps_the_four_published(self) -> None:
         tmpdir, home, key_id = make_gpg_home_with_key()
         try:
             with tempfile.TemporaryDirectory() as tmp:
@@ -101,7 +115,133 @@ class UpdateBuildTest(unittest.TestCase):
                 output = root / "out"
                 restored = restore_metadata(store, fingerprint=key_id)
                 self.assertEqual(restored.release_id, RELEASE_ID)
+                self.assertEqual(
+                    sorted(p.name for p in restored.manifest.packages), ["starship", "zellij"]
+                )
+                published_pool = {
+                    path.name: store.get(f"pool/{path.name}", max_bytes=MAX_DEB_BYTES)
+                    for path in (root / "published" / "pool").glob("*.deb")
+                }
+                self.assertEqual(len(published_pool), 4)
 
+                plan = build_plan(
+                    baseline_release_id=restored.release_id,
+                    baseline_data=restored.manifest_data,
+                    catalog_data=catalog_document(),
+                    candidates=_catalog_candidates(),
+                )
+                self.assertEqual(plan.changed, ("git-delta", "rustfs-cli", "sccache"))
+
+                key_file = _export_private_key(home, root / "test-private.asc")
+                with _stub_archive():
+                    result = apply_update(
+                        plan=plan,
+                        release=restored,
+                        source=store,
+                        output_root=output,
+                        cache_dir=output.parent / "cache" / "upstream",
+                        release_id="catalog-release",
+                        bucket=Store.bucket,
+                        fingerprint=key_id,
+                        signing_key_file=key_file,
+                        key_id=key_id,
+                        client=store.client,
+                    )
+                self.assertEqual(result.release_id, "catalog-release")
+
+                pool = {p.name: p.read_bytes() for p in (output / "pool").glob("*.deb")}
+                self.assertEqual(len(pool), 10)
+                # Exactly the three added packages were built.
+                self.assertEqual(
+                    sorted(path.name for path in result.debs),
+                    [
+                        "git-delta_0.20.1-1_amd64.deb",
+                        "git-delta_0.20.1-1_arm64.deb",
+                        "rustfs-cli_0.1.36-1_amd64.deb",
+                        "rustfs-cli_0.1.36-1_arm64.deb",
+                        "sccache_0.18.0-1_amd64.deb",
+                        "sccache_0.18.0-1_arm64.deb",
+                    ],
+                )
+                # Every published package stays byte-identical.
+                for name, payload in published_pool.items():
+                    self.assertEqual(pool[name], payload, msg=name)
+
+                for arch in ARCHES:
+                    text = (
+                        output / "releases" / "catalog-release" / "dists" / "stable"
+                        / "main" / f"binary-{arch}" / "Packages"
+                    ).read_text()
+                    self.assertEqual(len(text.strip().split("\n\n")), 5)
+                    self.assertIn("Version: 0.20.1-1", text)
+                    # The Debian name and the installed command differ for rc.
+                    self.assertIn(f"Package: rustfs-cli\n", text)
+                    self.assertIn(f"Filename: pool/rustfs-cli_0.1.36-1_{arch}.deb", text)
+                    # Only the glibc-linked delta arm64 build declares a dependency.
+                    self.assertEqual("Depends:" in text, arch == "arm64", msg=arch)
+
+                # The new release binds the five-package manifest.
+                bound = json.loads(
+                    (output / "releases" / "catalog-release" / "manifest.json").read_text()
+                )
+                self.assertEqual(len(bound["packages"]), 5)
+                self.assertIn("releases/catalog-release/manifest.json", store.client.puts)
+                # The pointer is the last object written.
+                self.assertEqual(store.client.puts[-1], "current.json")
+                self.assertEqual(
+                    json.loads(store.client.objects[(Store.bucket, "current.json")])["release"],
+                    "catalog-release",
+                )
+        finally:
+            tmpdir.cleanup()
+
+    def test_second_run_after_the_addition_finds_nothing(self) -> None:
+        tmpdir, home, key_id = make_gpg_home_with_key()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                store = self._seeded_store(root, home, key_id)
+                output = root / "out"
+                restored = restore_metadata(store, fingerprint=key_id)
+                plan = build_plan(
+                    baseline_release_id=restored.release_id,
+                    baseline_data=restored.manifest_data,
+                    catalog_data=catalog_document(),
+                    candidates=_catalog_candidates(),
+                )
+                key_file = _export_private_key(home, root / "test-private.asc")
+                with _stub_archive():
+                    apply_update(
+                        plan=plan, release=restored, source=store, output_root=output,
+                        cache_dir=output.parent / "cache" / "upstream",
+                        release_id="catalog-release", bucket=Store.bucket,
+                        fingerprint=key_id, signing_key_file=key_file, key_id=key_id,
+                        client=store.client,
+                    )
+
+                uploaded_before = list(store.client.puts)
+                follow_up = restore_metadata(store, fingerprint=key_id)
+                self.assertEqual(follow_up.release_id, "catalog-release")
+                self.assertEqual(len(follow_up.manifest.packages), 5)
+                second = build_plan(
+                    baseline_release_id=follow_up.release_id,
+                    baseline_data=follow_up.manifest_data,
+                    catalog_data=catalog_document(),
+                    candidates=_catalog_candidates(),
+                )
+                self.assertTrue(second.is_noop)
+                self.assertEqual(store.client.puts, uploaded_before)
+        finally:
+            tmpdir.cleanup()
+
+    def test_one_changed_package_rebuilds_two_debs_and_keeps_the_rest(self) -> None:
+        tmpdir, home, key_id = make_gpg_home_with_key()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                store = self._seeded_store(root, home, key_id)
+                output = root / "out"
+                restored = restore_metadata(store, fingerprint=key_id)
                 published_pool = {
                     path.name: store.get(f"pool/{path.name}", max_bytes=MAX_DEB_BYTES)
                     for path in (root / "published" / "pool").glob("*.deb")
@@ -110,6 +250,9 @@ class UpdateBuildTest(unittest.TestCase):
                 plan = build_plan(
                     baseline_release_id=restored.release_id,
                     baseline_data=restored.manifest_data,
+                    # The catalog already matches the published release, so the
+                    # only work is the single upgraded package.
+                    catalog_data=published_manifest_data(),
                     candidates={
                         "starship": candidate("starship", "1.27.0"),
                         "zellij": candidate("zellij", "0.45.1"),
@@ -117,9 +260,8 @@ class UpdateBuildTest(unittest.TestCase):
                 )
                 self.assertEqual(plan.changed, ("starship",))
 
-                archive = _fake_archive(root / "cache" / "starship.tar.gz")
                 key_file = _export_private_key(home, root / "test-private.asc")
-                with _stub_download(archive):
+                with _stub_archive():
                     result = apply_update(
                         plan=plan,
                         release=restored,
@@ -141,7 +283,6 @@ class UpdateBuildTest(unittest.TestCase):
                     sorted(path.name for path in result.debs),
                     ["starship_1.27.0-1_amd64.deb", "starship_1.27.0-1_arm64.deb"],
                 )
-                # Only the changed package moved; the other two are byte-identical.
                 for name, payload in published_pool.items():
                     if name.startswith("zellij"):
                         self.assertEqual(pool[name], payload, msg=name)
@@ -153,63 +294,9 @@ class UpdateBuildTest(unittest.TestCase):
                         / "main" / f"binary-{arch}" / "Packages"
                     ).read_text()
                     self.assertEqual(len(text.strip().split("\n\n")), 2)
-                    self.assertIn(f"Version: 1.27.0-1", text)
+                    self.assertIn("Version: 1.27.0-1", text)
 
-                # The pointer is the last object written.
                 self.assertEqual(store.client.puts[-1], "current.json")
-                self.assertEqual(
-                    json.loads(store.client.objects[(Store.bucket, "current.json")])["release"],
-                    "p2-release",
-                )
-                self.assertIn(
-                    f"releases/p2-release/manifest.json", store.client.puts
-                )
-        finally:
-            tmpdir.cleanup()
-
-    def test_second_run_follows_the_new_pointer_and_finds_nothing(self) -> None:
-        tmpdir, home, key_id = make_gpg_home_with_key()
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
-                store = self._seeded_store(root, home, key_id)
-                output = root / "out"
-                restored = restore_metadata(store, fingerprint=key_id)
-                plan = build_plan(
-                    baseline_release_id=restored.release_id,
-                    baseline_data=restored.manifest_data,
-                    candidates={
-                        "starship": candidate("starship", "1.27.0"),
-                        "zellij": candidate("zellij", "0.45.1"),
-                    },
-                )
-                archive = _fake_archive(root / "cache" / "starship.tar.gz")
-                key_file = _export_private_key(home, root / "test-private.asc")
-                with _stub_download(archive):
-                    apply_update(
-                        plan=plan, release=restored, source=store, output_root=output,
-                        cache_dir=output.parent / "cache" / "upstream",
-                        release_id="p2-release", bucket=Store.bucket, fingerprint=key_id,
-                        signing_key_file=key_file, key_id=key_id, client=store.client,
-                    )
-
-            uploaded_before = list(store.client.puts)
-            follow_up = restore_metadata(store, fingerprint=key_id)
-            self.assertEqual(follow_up.release_id, "p2-release")
-            self.assertEqual(
-                {pkg.name: pkg.version for pkg in follow_up.manifest.packages},
-                {"starship": "1.27.0", "zellij": "0.45.1"},
-            )
-            second = build_plan(
-                baseline_release_id=follow_up.release_id,
-                baseline_data=follow_up.manifest_data,
-                candidates={
-                    "starship": candidate("starship", "1.27.0"),
-                    "zellij": candidate("zellij", "0.45.1"),
-                },
-            )
-            self.assertTrue(second.is_noop)
-            self.assertEqual(store.client.puts, uploaded_before)
         finally:
             tmpdir.cleanup()
 
@@ -220,8 +307,7 @@ class UpdateBuildTest(unittest.TestCase):
                 root = Path(tmp)
                 store = self._seeded_store(root, home, key_id)
                 restored = restore_metadata(store, fingerprint=key_id)
-                committed = load_manifest()
-                target = deb_filename(committed.packages[0], "amd64", committed)
+                target = deb_filename(published_manifest().packages[0], "amd64", published_manifest())
                 key = (Store.bucket, f"pool/{target}")
                 store.client.objects[key] = store.client.objects[key] + b"tampered"
                 with self.assertRaises(ValueError):

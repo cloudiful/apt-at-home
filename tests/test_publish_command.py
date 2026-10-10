@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts.manifest import default_manifest_path, parse_manifest
+from scripts.manifest import default_manifest_path, load_manifest, parse_manifest
 from scripts.release_build import build_release
 from scripts.release_manifest import load_manifest_data
 from scripts.repo import main
@@ -54,17 +54,26 @@ class Store:
 def _fake_fetch(url: str, expected_sha256: str, dest: Path) -> Path:
     """Stand in for the pinned upstream download with a local stub archive.
 
-    The archive member content matches the `fake-<name>-<arch>` binaries the
-    published release is built from, so a candidate release carries byte-identical
-    pool files and the immutable-overwrite guard stays satisfied.
+    The archive carries the exact member the manifest pins, including the
+    versioned directory prefix some upstreams use, so the production extraction
+    path is exercised rather than bypassed. The member content matches the
+    `fake-<name>-<arch>` binaries the published release is built from, so a
+    candidate release carries byte-identical pool files and the
+    immutable-overwrite guard stays satisfied.
     """
-    dest.parent.mkdir(parents=True, exist_ok=True)
     stem = dest.name[: -len(".tar.gz")]
-    parts = stem.split("-")
-    name, arch = parts[0], parts[-1]
+    manifest = load_manifest()
+    name = next(
+        pkg.name
+        for pkg in sorted(manifest.packages, key=lambda p: len(p.name), reverse=True)
+        if stem.startswith(f"{pkg.name}-")
+    )
+    pkg = next(p for p in manifest.packages if p.name == name)
+    arch = stem.rsplit("-", 1)[1]
     payload = f"fake-{name}-{arch}".encode()
+    dest.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(dest, "w:gz") as archive:
-        info = tarfile.TarInfo(name)
+        info = tarfile.TarInfo(pkg.targets[arch].archive_member)
         info.size = len(payload)
         info.mode = 0o755
         archive.addfile(info, io.BytesIO(payload))

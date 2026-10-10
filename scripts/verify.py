@@ -8,10 +8,11 @@ from pathlib import Path
 
 from .common import sha256_file, sha512_file
 from .fingerprint import check_key_matches_pin
+from .manifest import expected_debs, expected_debs_for_arch
 from .metadata import ARCHES, COMPONENT, SUITE
-from .package_index import check_arch_packages, pool_debs_for_arch
+from .package_index import check_arch_packages
 from .release_hashes import parse_release_hashes
-from .release_manifest import MANIFEST_NAME, check_binding
+from .release_manifest import MANIFEST_NAME, check_binding, validated_document
 from .sign import IsolatedHomedir, import_key, verify_clearsign, verify_detached
 
 
@@ -53,12 +54,12 @@ def verify_tree(
     findings.append("Release header fields valid")
 
     # Every release must bind the exact baseline manifest it was built from;
-    # an absent, partial, missing, or tampered binding fails here.
-    check_binding(
-        release_text=release_text,
-        manifest_path=output_root / "releases" / release_id / MANIFEST_NAME,
-    )
+    # an absent, partial, missing, or tampered binding fails here. That bound
+    # manifest, not the pool on disk, is what decides what the release contains.
+    artifact = output_root / "releases" / release_id / MANIFEST_NAME
+    check_binding(release_text=release_text, manifest_path=artifact)
     findings.append("Release binds a matching baseline manifest")
+    _, bound = validated_document(artifact)
 
     sections = parse_release_hashes(release_text)
     sha256_entries = sections["SHA256"]
@@ -86,10 +87,22 @@ def verify_tree(
             raise ValueError(f"SHA512 mismatch for {rel}")
     findings.append(f"verified {len(sha256_entries)} hashed metadata files")
 
-    # Each Packages file must list exactly the pool .debs of its own architecture.
-    pool_files = {p.name: p for p in (output_root / "pool").glob("*.deb")}
-    if len(pool_files) != 4:
-        raise ValueError(f"pool must hold exactly four .deb files, found {len(pool_files)}")
+    # The flat pool must be exactly what the bound manifest declares, so neither
+    # a missing nor an extra .deb can ride along in a release.
+    expected_pool = expected_debs(bound)
+    pool_files = {p.name for p in (output_root / "pool").glob("*.deb")}
+    if pool_files != expected_pool:
+        missing = sorted(expected_pool - pool_files)
+        extra = sorted(pool_files - expected_pool)
+        detail = ", ".join(
+            part
+            for part in (
+                f"missing {', '.join(missing)}" if missing else "",
+                f"unexpected {', '.join(extra)}" if extra else "",
+            )
+            if part
+        )
+        raise ValueError(f"pool does not match the bound manifest: {detail}")
     for arch in ARCHES:
         packages_path = dists / COMPONENT / f"binary-{arch}" / "Packages"
         if not packages_path.exists():
@@ -98,7 +111,7 @@ def verify_tree(
             packages_path.read_text(encoding="utf-8"),
             arch=arch,
             output_root=output_root,
-            expected_filenames=pool_debs_for_arch(output_root, arch),
+            expected_filenames=expected_debs_for_arch(bound, arch),
         )
         findings.append(f"Packages for {arch} lists all {count} pool packages")
 

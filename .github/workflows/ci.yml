@@ -90,22 +90,31 @@ jobs:
     needs: [python]
     container: debian:13
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: apt-repo-amd64
           path: dist/repo
-      - name: Inspect packages and run amd64 binaries
+      - name: Install python3 and the generated amd64 packages with apt
         run: |
           set -euo pipefail
-          ls -lh dist/repo/pool
-          test "$(find dist/repo/pool -maxdepth 1 -name '*.deb' | wc -l)" = "4"
-          dpkg-deb -f dist/repo/pool/zellij_0.45.1-1_amd64.deb Package Version Architecture
-          dpkg-deb -f dist/repo/pool/starship_1.26.0-1_amd64.deb Package Version Architecture
-          rm -rf /tmp/smoke-amd64 && mkdir -p /tmp/smoke-amd64
-          dpkg-deb -x dist/repo/pool/zellij_0.45.1-1_amd64.deb /tmp/smoke-amd64/z
-          dpkg-deb -x dist/repo/pool/starship_1.26.0-1_amd64.deb /tmp/smoke-amd64/s
-          /tmp/smoke-amd64/z/usr/bin/zellij --version
-          /tmp/smoke-amd64/s/usr/bin/starship --version
+          apt-get update
+          # This container is fresh, so the interpreter the smoke helper needs
+          # and the packages under test are installed here, not inherited from
+          # the build job.
+          apt-get install -y --no-install-recommends python3
+          apt-get install -y --no-install-recommends ./dist/repo/pool/*_amd64.deb
+          rm -rf /var/lib/apt/lists/*
+      - name: Check every package against the manifest and run it
+        run: |
+          set -euo pipefail
+          # The manifest is the inventory: adding a package needs no edit here.
+          test "$(find dist/repo/pool -maxdepth 1 -name '*.deb' | wc -l)" \
+            = "$(python3 -m scripts.smoke --manifest packaging/manifest.json --count)"
+          python3 -m scripts.smoke --manifest packaging/manifest.json --pool dist/repo/pool
+          python3 -m scripts.smoke --manifest packaging/manifest.json --installed --arch amd64
 
   smoke-arm64:
     name: Debian 13 binary smoke (arm64, native runner)
@@ -113,20 +122,27 @@ jobs:
     needs: [python]
     container: debian:13
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: apt-repo-amd64
           path: dist/repo
-      - name: Install smoke tools
-        run: apt-get update && apt-get install -y --no-install-recommends file && rm -rf /var/lib/apt/lists/*
-      - name: Inspect packages and run arm64 binaries
+      - name: Install python3 and the generated arm64 packages with apt
         run: |
           set -euo pipefail
-          ls -lh dist/repo/pool
-          rm -rf /tmp/smoke-arm64 && mkdir -p /tmp/smoke-arm64
-          dpkg-deb -x dist/repo/pool/zellij_0.45.1-1_arm64.deb /tmp/smoke-arm64/z
-          dpkg-deb -x dist/repo/pool/starship_1.26.0-1_arm64.deb /tmp/smoke-arm64/s
-          file /tmp/smoke-arm64/z/usr/bin/zellij
-          file /tmp/smoke-arm64/s/usr/bin/starship
-          /tmp/smoke-arm64/z/usr/bin/zellij --version
-          /tmp/smoke-arm64/s/usr/bin/starship --version
+          apt-get update
+          # This container is fresh, so the interpreter the smoke helper needs
+          # and the packages under test are installed here, not inherited from
+          # the build job.
+          apt-get install -y --no-install-recommends python3
+          apt-get install -y --no-install-recommends ./dist/repo/pool/*_arm64.deb
+          rm -rf /var/lib/apt/lists/*
+      - name: Check every package against the manifest and run it
+        run: |
+          set -euo pipefail
+          test "$(find dist/repo/pool -maxdepth 1 -name '*.deb' | wc -l)" \
+            = "$(python3 -m scripts.smoke --manifest packaging/manifest.json --count)"
+          python3 -m scripts.smoke --manifest packaging/manifest.json --pool dist/repo/pool
+          python3 -m scripts.smoke --manifest packaging/manifest.json --installed --arch arm64

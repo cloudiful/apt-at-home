@@ -1,9 +1,11 @@
-"""Discover the latest stable upstream release for the two pinned packages.
+"""Discover the latest stable upstream release for a reviewed package.
 
 The GitHub API is the only discovery source and it must supply the asset
-digests: an archive is never accepted on a guessed checksum. License bytes are
-compared against the vendored copy, so a licensing change stops the run instead
-of being assumed equivalent.
+digests: an archive is never accepted on a guessed checksum. Asset names, archive
+members, binaries, and dependencies come from the reviewed recipe rather than
+from the release payload, and the license bytes are compared against the
+vendored copy, so a licensing change stops the run instead of being assumed
+equivalent.
 """
 
 from __future__ import annotations
@@ -15,17 +17,17 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Protocol
 
+from .catalog import repo_of
 from .upstream_assets import (
-    API_BASE,
     ARCHES,
-    EXPECTED_LICENSES,
-    LICENSE_PATHS,
     asset_name,
     check_official_asset_url,
+    license_path,
     license_url,
     parse_asset_digest,
     parse_stable_tag,
-    repo_for,
+    releases_api_url,
+    tag_for,
 )
 
 USER_AGENT = "apt-at-home/1.0"
@@ -109,14 +111,18 @@ class ReleaseAsset:
 
 def latest_stable(client: HttpClient, package_name: str) -> tuple[str, str, dict[str, ReleaseAsset]]:
     """Return (repo, tag, per-arch assets) for the latest stable release."""
-    repo = repo_for(package_name)
-    payload = client.get_json(f"{API_BASE}/repos/{repo}/releases/latest")
+    repo = repo_of(package_name)
+    payload = client.get_json(releases_api_url(repo))
     if not isinstance(payload, dict):
         raise ValueError(f"GitHub release payload for {package_name} is not an object")
     if payload.get("draft") or payload.get("prerelease"):
         raise ValueError(f"GitHub returned a draft or prerelease for {package_name}")
     tag = payload.get("tag_name")
-    parse_stable_tag(tag)  # exact stable v?N.N.N or fail closed
+    # The tag must carry this project's own prefix and be an exact stable
+    # version before any asset name is derived from it.
+    version = parse_stable_tag(package_name, tag)
+    if tag != tag_for(package_name, version):
+        raise ValueError(f"{package_name} release tag {tag!r} is not canonical")
     raw_assets = payload.get("assets")
     if not isinstance(raw_assets, list):
         raise ValueError(f"GitHub release for {package_name} carries no asset list")
@@ -124,7 +130,7 @@ def latest_stable(client: HttpClient, package_name: str) -> tuple[str, str, dict
     by_name = {a.get("name"): a for a in raw_assets if isinstance(a, dict)}
     assets: dict[str, ReleaseAsset] = {}
     for arch in ARCHES:
-        name = asset_name(package_name, arch)
+        name = asset_name(package_name, version, arch)
         asset = by_name.get(name)
         if asset is None:
             raise ValueError(f"{package_name} {arch} is missing asset {name} from {tag}")
@@ -140,7 +146,7 @@ def latest_stable(client: HttpClient, package_name: str) -> tuple[str, str, dict
 
 def check_license(client: HttpClient, *, package_name: str, repo: str, tag: str, vendored: bytes) -> str:
     """Compare the tagged license bytes with the vendored copy; return its URL."""
-    url = license_url(repo, tag, LICENSE_PATHS[package_name])
+    url = license_url(repo, tag, license_path(package_name))
     remote = client.get_bytes(url, max_bytes=MAX_LICENSE_BYTES)
     if remote != vendored:
         raise ValueError(
@@ -152,11 +158,8 @@ def check_license(client: HttpClient, *, package_name: str, repo: str, tag: str,
 
 def discover(client: HttpClient, package_name: str, *, vendored_license: bytes) -> Candidate:
     """Discover and fully validate the latest stable release of one package."""
-    expected_license = EXPECTED_LICENSES.get(package_name)
-    if expected_license is None:
-        raise ValueError(f"no expected license for {package_name!r}")
     repo, tag, assets = latest_stable(client, package_name)
-    version = parse_stable_tag(tag)
+    version = parse_stable_tag(package_name, tag)
     url = check_license(client, package_name=package_name, repo=repo, tag=tag, vendored=vendored_license)
     targets = {
         arch: {"url": assets[arch].url, "sha256": assets[arch].sha256}

@@ -1,17 +1,60 @@
 """Upstream discovery policy: exact stable tags, official assets, digests, licenses.
 
 Every case runs against an injected HTTP double, so the network is never
-touched and each rejection is asserted on the response that would cause it.
+touched and each rejection is asserted on the response that would cause it. The
+fixtures cover all five reviewed repositories, including the ones whose release
+tags carry no `v` prefix and those whose assets embed the version in their name
+or nest the binary under a versioned directory.
 """
 
 import unittest
 from pathlib import Path
 
+from scripts.catalog import RECIPES, archive_member, asset_name
 from scripts.upstream import HttpError, UrllibClient, discover, latest_stable
+from scripts.upstream_assets import license_url, releases_api_url
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ZELLIJ = "zellij-org/zellij"
-STARSHIP = "starship/starship"
+
+# name -> (repo, tag, license path, {arch: asset name})
+UPSTREAMS = {
+    "zellij": (
+        ZELLIJ, "v0.45.1", "LICENSE.md",
+        {
+            "amd64": "zellij-x86_64-unknown-linux-musl.tar.gz",
+            "arm64": "zellij-aarch64-unknown-linux-musl.tar.gz",
+        },
+    ),
+    "starship": (
+        "starship/starship", "v1.26.0", "LICENSE",
+        {
+            "amd64": "starship-x86_64-unknown-linux-musl.tar.gz",
+            "arm64": "starship-aarch64-unknown-linux-musl.tar.gz",
+        },
+    ),
+    "git-delta": (
+        "dandavison/delta", "0.20.1", "LICENSE",
+        {
+            "amd64": "delta-0.20.1-x86_64-unknown-linux-musl.tar.gz",
+            "arm64": "delta-0.20.1-aarch64-unknown-linux-gnu.tar.gz",
+        },
+    ),
+    "rustfs-cli": (
+        "rustfs/cli", "v0.1.36", "LICENSE-MIT",
+        {
+            "amd64": "rustfs-cli-linux-amd64-v0.1.36.tar.gz",
+            "arm64": "rustfs-cli-linux-arm64-v0.1.36.tar.gz",
+        },
+    ),
+    "sccache": (
+        "mozilla/sccache", "v0.18.0", "LICENSE",
+        {
+            "amd64": "sccache-v0.18.0-x86_64-unknown-linux-musl.tar.gz",
+            "arm64": "sccache-v0.18.0-aarch64-unknown-linux-musl.tar.gz",
+        },
+    ),
+}
 
 
 def vendored(name: str) -> bytes:
@@ -19,13 +62,10 @@ def vendored(name: str) -> bytes:
 
 
 def release_payload(
-    repo: str = ZELLIJ,
+    repo: str,
     *,
-    tag: str = "v0.45.1",
-    names: tuple[str, ...] = (
-        "zellij-x86_64-unknown-linux-musl.tar.gz",
-        "zellij-aarch64-unknown-linux-musl.tar.gz",
-    ),
+    tag: str,
+    names: tuple[str, ...],
     digest: str | None = "sha256:" + "ab" * 32,
     url_for_tag: str | None = None,
     draft: bool = False,
@@ -44,6 +84,30 @@ def release_payload(
             }
             for name in names
         ],
+    }
+
+
+def fixture_payloads(
+    package: str, *, tag: str | None = None, digest: str | None = "sha256:" + "ab" * 32,
+    license_bytes: bytes | None = None, payload: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Serve the latest-release API and the tagged license for one package."""
+    repo, default_tag, path, names = UPSTREAMS[package]
+    used_tag = tag or default_tag
+    version = used_tag.removeprefix(RECIPES[package].tag_prefix)
+    body = payload if payload is not None else release_payload(
+        repo,
+        tag=used_tag,
+        names=tuple(
+            asset_name(package, version, arch) for arch in ("amd64", "arm64")
+        ),
+        digest=digest,
+    )
+    return {
+        releases_api_url(repo): body,
+        license_url(repo, used_tag, path): (
+            license_bytes if license_bytes is not None else vendored(package)
+        ),
     }
 
 
@@ -67,111 +131,171 @@ class FakeHttp:
         if isinstance(payload, Exception):
             raise payload
         assert isinstance(payload, bytes)
-        if len(payload) > max_bytes:
+        if len(payload) > MAX_LICENSE_BYTES:
             raise HttpError(f"response exceeded {max_bytes} bytes: {url}")
         return payload
 
 
-def latest_url(repo: str = ZELLIJ) -> str:
-    return f"https://api.github.com/repos/{repo}/releases/latest"
-
-
-def license_for(name: str, repo: str, tag: str) -> str:
-    path = "LICENSE.md" if name == "zellij" else "LICENSE"
-    return f"https://raw.githubusercontent.com/{repo}/{tag}/{path}"
+MAX_LICENSE_BYTES = 1024 * 1024
 
 
 class LatestStableTest(unittest.TestCase):
-    def test_returns_every_architecture_with_its_api_digest(self) -> None:
-        client = FakeHttp({latest_url(): release_payload()})
-        repo, tag, assets = latest_stable(client, "zellij")
-        self.assertEqual((repo, tag), (ZELLIJ, "v0.45.1"))
-        self.assertEqual(sorted(assets), ["amd64", "arm64"])
-        self.assertEqual(assets["amd64"].sha256, "ab" * 32)
-        self.assertEqual(
-            assets["arm64"].url,
-            f"https://github.com/{ZELLIJ}/releases/download/v0.45.1/zellij-aarch64-unknown-linux-musl.tar.gz",
-        )
+    def test_every_reviewed_repository_resolves_both_architectures(self) -> None:
+        for package, (repo, tag, _path, names) in UPSTREAMS.items():
+            with self.subTest(package=package):
+                client = FakeHttp(fixture_payloads(package))
+                got_repo, got_tag, assets = latest_stable(client, package)
+                self.assertEqual((got_repo, got_tag), (repo, tag))
+                self.assertEqual(sorted(assets), ["amd64", "arm64"])
+                for arch in ("amd64", "arm64"):
+                    self.assertEqual(assets[arch].name, names[arch])
+                    self.assertEqual(assets[arch].sha256, "ab" * 32)
+                    self.assertEqual(
+                        assets[arch].url,
+                        f"https://github.com/{repo}/releases/download/{tag}/{names[arch]}",
+                    )
+
+    def test_a_bare_tag_is_accepted_only_for_its_own_project(self) -> None:
+        client = FakeHttp(fixture_payloads("git-delta"))
+        self.assertEqual(latest_stable(client, "git-delta")[1], "0.20.1")
+        # delta tags carry no prefix, so a v-prefixed tag is not its own.
+        with self.assertRaises(ValueError):
+            latest_stable(FakeHttp(fixture_payloads("git-delta", tag="v0.20.1")), "git-delta")
 
     def test_rejects_drafts_prereleases_and_non_exact_tags(self) -> None:
         cases = {
-            "draft": release_payload(draft=True),
-            "prerelease": release_payload(prerelease=True),
-            "prerelease_tag": release_payload(tag="v0.46.0-rc1"),
-            "four_part_tag": release_payload(tag="v0.46.0.1"),
-            "missing_tag": {**release_payload(), "tag_name": None},
+            "draft": {"draft": True},
+            "prerelease": {"prerelease": True},
+            "prerelease_tag": {"tag": "v0.46.0-rc1"},
+            "four_part_tag": {"tag": "v0.46.0.1"},
+            "missing_tag": {"tag": None},
         }
-        for label, payload in cases.items():
+        for label, override in cases.items():
             with self.subTest(case=label):
+                payload = release_payload(
+                    ZELLIJ,
+                    tag=override.get("tag", "v0.45.1"),
+                    names=tuple(UPSTREAMS["zellij"][3].values()),
+                    draft=override.get("draft", False),
+                    prerelease=override.get("prerelease", False),
+                )
+                if label == "missing_tag":
+                    payload["tag_name"] = None
                 with self.assertRaises(ValueError):
-                    latest_stable(FakeHttp({latest_url(): payload}), "zellij")
+                    latest_stable(
+                        FakeHttp(fixture_payloads("zellij", payload=payload)), "zellij"
+                    )
 
     def test_requires_both_architectures_and_an_api_digest(self) -> None:
+        both = tuple(UPSTREAMS["zellij"][3].values())
         cases = {
-            "one_arch": release_payload(
-                names=("zellij-x86_64-unknown-linux-musl.tar.gz",)
-            ),
-            "wrong_asset_name": release_payload(
-                names=(
-                    "zellij-x86_64-unknown-linux-gnu.tar.gz",
-                    "zellij-aarch64-unknown-linux-musl.tar.gz",
-                )
-            ),
-            "no_digest": release_payload(digest=None),
-            "malformed_digest": release_payload(digest="sha256:zz"),
-            "md5_only": release_payload(digest="md5:" + "ab" * 16),
+            "one_arch": {"names": (both[0],)},
+            "wrong_asset_name": {"names": (
+                "zellij-x86_64-unknown-linux-gnu.tar.gz", both[1],
+            )},
+            "no_digest": {"digest": None},
+            "malformed_digest": {"digest": "sha256:zz"},
+            "md5_only": {"digest": "md5:" + "ab" * 16},
         }
-        for label, payload in cases.items():
+        for label, override in cases.items():
             with self.subTest(case=label):
+                payload = release_payload(
+                    ZELLIJ, tag="v0.45.1", **{"names": both, **override}
+                )
                 with self.assertRaises(ValueError):
-                    latest_stable(FakeHttp({latest_url(): payload}), "zellij")
+                    latest_stable(
+                        FakeHttp(fixture_payloads("zellij", payload=payload)), "zellij"
+                    )
 
     def test_rejects_an_asset_served_from_a_foreign_origin(self) -> None:
-        payload = release_payload()
+        payload = release_payload(
+            ZELLIJ, tag="v0.45.1", names=tuple(UPSTREAMS["zellij"][3].values())
+        )
         payload["assets"][0]["browser_download_url"] = (  # type: ignore[index]
             "https://github.com/attacker/zellij/releases/download/v0.45.1/"
             "zellij-x86_64-unknown-linux-musl.tar.gz"
         )
         with self.assertRaises(ValueError):
-            latest_stable(FakeHttp({latest_url(): payload}), "zellij")
+            latest_stable(
+                FakeHttp(fixture_payloads("zellij", payload=payload)), "zellij"
+            )
 
     def test_surfaces_transport_failures(self) -> None:
-        client = FakeHttp({latest_url(): HttpError("request failed for api: timed out")})
+        client = FakeHttp({
+            releases_api_url(ZELLIJ): HttpError("request failed for api: timed out")
+        })
         with self.assertRaises(HttpError):
             latest_stable(client, "zellij")
 
 
-class DiscoverTest(unittest.TestCase):
-    def _payloads(self, *, license_bytes: bytes | None = None) -> dict[str, object]:
-        return {
-            latest_url(STARSHIP): release_payload(
-                STARSHIP,
-                tag="v1.26.0",
-                names=(
-                    "starship-x86_64-unknown-linux-musl.tar.gz",
-                    "starship-aarch64-unknown-linux-musl.tar.gz",
-                ),
-            ),
-            license_for("starship", STARSHIP, "v1.26.0"): (
-                license_bytes if license_bytes is not None else vendored("starship")
-            ),
-        }
-
-    def test_builds_a_complete_candidate_from_the_tag(self) -> None:
-        client = FakeHttp(self._payloads())
-        candidate = discover(client, "starship", vendored_license=vendored("starship"))
-        self.assertEqual(candidate.version, "1.26.0")
-        self.assertEqual(candidate.tag, "v1.26.0")
-        self.assertEqual(sorted(candidate.targets), ["amd64", "arm64"])
+class RecipeNamingTest(unittest.TestCase):
+    def test_a_version_bump_moves_the_nested_member(self) -> None:
         self.assertEqual(
-            candidate.license_url, license_for("starship", STARSHIP, "v1.26.0")
+            archive_member("sccache", "0.18.0", "amd64"),
+            "sccache-v0.18.0-x86_64-unknown-linux-musl/sccache",
+        )
+        self.assertEqual(
+            archive_member("sccache", "0.19.0", "amd64"),
+            "sccache-v0.19.0-x86_64-unknown-linux-musl/sccache",
+        )
+        # delta embeds a different toolchain per architecture, so both prefixes
+        # move with the version.
+        self.assertEqual(
+            archive_member("git-delta", "0.21.0", "amd64"),
+            "delta-0.21.0-x86_64-unknown-linux-musl/delta",
+        )
+        self.assertEqual(
+            archive_member("git-delta", "0.21.0", "arm64"),
+            "delta-0.21.0-aarch64-unknown-linux-gnu/delta",
+        )
+        # A flat archive keeps the same member across versions.
+        self.assertEqual(archive_member("zellij", "0.46.0", "amd64"), "zellij")
+        self.assertEqual(archive_member("rustfs-cli", "0.2.0", "amd64"), "rc")
+
+    def test_asset_names_embed_the_version_only_where_upstream_does(self) -> None:
+        self.assertEqual(
+            asset_name("zellij", "0.46.0", "amd64"),
+            "zellij-x86_64-unknown-linux-musl.tar.gz",
+        )
+        self.assertEqual(
+            asset_name("sccache", "0.19.0", "arm64"),
+            "sccache-v0.19.0-aarch64-unknown-linux-musl.tar.gz",
+        )
+        self.assertEqual(
+            asset_name("rustfs-cli", "0.2.0", "arm64"),
+            "rustfs-cli-linux-arm64-v0.2.0.tar.gz",
         )
 
+
+class DiscoverTest(unittest.TestCase):
+    def test_builds_a_complete_candidate_for_every_package(self) -> None:
+        for package, (repo, tag, path, _names) in UPSTREAMS.items():
+            with self.subTest(package=package):
+                client = FakeHttp(fixture_payloads(package))
+                candidate = discover(client, package, vendored_license=vendored(package))
+                self.assertEqual(candidate.repo, repo)
+                self.assertEqual(candidate.tag, tag)
+                self.assertEqual(
+                    candidate.version, tag.removeprefix(RECIPES[package].tag_prefix)
+                )
+                self.assertEqual(sorted(candidate.targets), ["amd64", "arm64"])
+                self.assertEqual(candidate.license_url, license_url(repo, tag, path))
+
     def test_changed_license_bytes_stop_the_run(self) -> None:
-        client = FakeHttp(self._payloads(license_bytes=b"GENERIC MIT LICENSE\n"))
+        for package in UPSTREAMS:
+            with self.subTest(package=package):
+                client = FakeHttp(
+                    fixture_payloads(package, license_bytes=b"GENERIC MIT LICENSE\n")
+                )
+                with self.assertRaises(ValueError) as ctx:
+                    discover(client, package, vendored_license=vendored(package))
+                self.assertIn("license bytes changed", str(ctx.exception))
+
+    def test_a_missing_digest_stops_before_a_candidate_is_built(self) -> None:
+        client = FakeHttp(fixture_payloads("sccache", digest=None))
         with self.assertRaises(ValueError) as ctx:
-            discover(client, "starship", vendored_license=vendored("starship"))
-        self.assertIn("license bytes changed", str(ctx.exception))
+            discover(client, "sccache", vendored_license=vendored("sccache"))
+        self.assertIn("digest", str(ctx.exception))
 
     def test_unknown_package_is_refused(self) -> None:
         with self.assertRaises(ValueError):

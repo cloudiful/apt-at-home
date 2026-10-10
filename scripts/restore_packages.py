@@ -11,8 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .common import sha256_bytes
+from .manifest import deb_filename, debian_version, expected_debs_for_arch
 from .metadata import ARCHES
-from .package_index import check_arch_packages, parse_stanzas, pool_debs_for_arch
+from .package_index import check_arch_packages, parse_stanzas
 from .release_verify import BaselineUnavailable, TrustedRelease
 from .storage import DEB_NAME, MAX_DEB_BYTES, ObjectNotFound, Source
 
@@ -27,8 +28,25 @@ class PoolEntry:
     sha256: str
 
 
+def _declared_identities(release: TrustedRelease) -> dict[str, tuple[str, str, str]]:
+    """Map each pool filename the bound manifest declares to its identity."""
+    return {
+        deb_filename(pkg, arch, release.manifest): (
+            pkg.name, debian_version(pkg, release.manifest), arch,
+        )
+        for pkg in release.manifest.packages
+        for arch in ARCHES
+    }
+
+
 def pool_entries(release: TrustedRelease) -> list[PoolEntry]:
-    """Return the deduplicated pool entries declared by the signed indices."""
+    """Return the pool entries the signed indices must list for this manifest.
+
+    The bound manifest, not a file count, decides the inventory: a stanza that
+    the manifest does not declare, that declares a different identity, or an
+    index that omits a declared package is refused before a byte is fetched.
+    """
+    declared = _declared_identities(release)
     entries: dict[str, PoolEntry] = {}
     for arch, text in release.packages.items():
         for stanza in parse_stanzas(text):
@@ -43,18 +61,30 @@ def pool_entries(release: TrustedRelease) -> list[PoolEntry]:
                     f"Packages for {arch} lists {stanza.fields.get('Package')} "
                     f"as {stanza.fields.get('Architecture')}"
                 )
-            entry = PoolEntry(
-                arch=arch, name=name,
-                size=int(stanza.fields.get("Size", "0") or 0),
-                sha256=stanza.fields.get("SHA256", "").lower(),
-            )
+            identity = (stanza.fields.get("Package", ""), stanza.fields.get("Version", ""), arch)
+            expected_identity = declared.get(name)
+            if expected_identity is None:
+                raise ValueError(
+                    f"Packages for {arch} lists {name}, which the bound manifest does not declare"
+                )
+            if identity != expected_identity:
+                raise ValueError(
+                    f"Packages for {arch} lists {name} as {' '.join(identity)}, "
+                    f"but the bound manifest declares {' '.join(expected_identity)}"
+                )
+            entry = PoolEntry(arch=arch, name=name,
+                              size=int(stanza.fields.get("Size", "0") or 0),
+                              sha256=stanza.fields.get("SHA256", "").lower())
             if not entry.sha256 or entry.size <= 0:
                 raise ValueError(f"Packages for {arch} omits size or digest for {name}")
             if name in entries:
                 raise ValueError(f"duplicate pool entry across indices: {name}")
             entries[name] = entry
-    if len(entries) != len(ARCHES) * 2:
-        raise ValueError(f"published pool must hold four .deb files, found {len(entries)}")
+    missing = sorted(set(declared) - set(entries))
+    if missing:
+        raise ValueError(
+            f"published indices omit manifest package(s): {', '.join(missing)}"
+        )
     return [entries[name] for name in sorted(entries)]
 
 
@@ -86,6 +116,6 @@ def restore_pool(release: TrustedRelease, source: Source, output_root: Path) -> 
             release.packages[arch],
             arch=arch,
             output_root=output_root,
-            expected_filenames=pool_debs_for_arch(output_root, arch),
+            expected_filenames=expected_debs_for_arch(release.manifest, arch),
         )
     return restored

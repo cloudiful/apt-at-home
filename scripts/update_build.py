@@ -1,9 +1,10 @@
 """Apply an update plan: restore the published pool, rebuild only what changed.
 
-The unchanged packages are restored byte-for-byte and never rebuilt, so a run
-that touches one package produces exactly two new .deb files while the other two
-pool entries stay identical. The result is verified as a complete four-entry
-index before anything is uploaded, and the pointer still moves last.
+Unchanged packages are restored byte-for-byte and never rebuilt, so a run that
+adds three catalog packages builds exactly six new .deb files while the four
+already published stay identical, and a later run that touches one package
+produces two. The result is verified as a complete manifest-derived index
+before anything is uploaded, and the pointer still moves last.
 """
 
 from __future__ import annotations
@@ -71,9 +72,11 @@ def apply_update(
 ) -> UpdateResult:
     """Restore, rebuild the changed packages, verify, then publish pointer last.
 
-    A published baseline keeps its pool: the four current packages are restored
-    and only the superseded ones are dropped, so the unchanged entries stay
-    byte-identical. Fresh storage has no pool to keep and builds every package.
+    A published baseline keeps its pool: the existing packages are restored and
+    only the superseded ones are dropped, so unchanged entries stay
+    byte-identical. A package the plan adds has no published predecessor, so
+    nothing is removed for it. Fresh storage has no pool to keep and builds
+    every package.
     """
     if plan.is_bootstrap:
         if release is not None:

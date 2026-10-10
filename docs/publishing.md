@@ -31,17 +31,22 @@ APT_SIGNING_KEY_FILE=/path/to/private.asc APT_SIGNING_KEY_ID=<fingerprint> \
 uv run python -m scripts.repo verify --output dist/repo
 ```
 
-- `build` downloads the pinned musl archives in `packaging/manifest.json`,
-  verifies SHA256 before extraction, extracts without executing upstream
-  binaries, assembles four `.deb` files (`-1` revision, explicit `xz`
-  compression, no maintainer scripts, `root/root` ownership, deterministic
-  `SOURCE_DATE_EPOCH`), generates `Packages` from a throwaway `reprepro`
+- `build` downloads the pinned archives in `packaging/manifest.json`,
+  verifies SHA256 before extraction, extracts one declared archive member
+  without executing upstream binaries, assembles one `.deb` per package and
+  architecture (`-1` revision, explicit `xz` compression, no maintainer
+  scripts, `root/root` ownership, deterministic `SOURCE_DATE_EPOCH`),
+  generates `Packages` from a throwaway `reprepro`
   database with flat `pool/` filenames, deterministic `Packages.gz`
   (`gzip -n`), a `Release` with `Suite/Codename stable`,
   `Architectures amd64 arm64`, `Acquire-By-Hash yes`, and no `Valid-Until`,
   plus shared `indices/<arch>/SHA256/<digest>` copies, then signs
   `InRelease`/`Release.gpg` in an isolated `GNUPGHOME` and writes
   `current.json` and `key.asc`.
+- The manifest is the inventory: `python -m scripts.smoke --manifest
+  packaging/manifest.json --count` prints how many `.deb` files a release of it
+  contains, and `--pool DIR` checks a built pool against it. Never hard-code a
+  package count in a workflow.
 - `build` also writes `releases/<id>/manifest.json`, the canonical copy of the
   manifest it built from, and binds its SHA256 and size into the signed
   `Release` as `X-Manifest-SHA256` and `X-Manifest-Size`. `verify` requires both
@@ -99,11 +104,22 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   (pointer, pinned key, both signatures, clearsigned payload equality, signed
   `Packages` hashes, and the manifest bound by `X-Manifest-SHA256` /
   `X-Manifest-Size`) before it reads a single package byte, then compares that
-  signed baseline against the latest stable upstream release of `zellij` and
-  `starship`.
-- Only the changed package is rebuilt — one package is two architectures, so a
-  single update produces exactly two new `.deb` files while the other two pool
-  entries stay byte-identical. The final indices still list all four packages.
+  signed baseline against the latest stable upstream release of every package
+  in the catalog: git-delta, rustfs-cli, sccache, starship, and zellij.
+- Each package has one reviewed recipe: the official repository, the release
+  tag prefix, the asset name, the archive member, the installed command, the
+  declared dependencies, and the SPDX license. A version bump recomputes the
+  member path from the new version, so an archive that nests its binary under a
+  versioned directory never reuses a stale prefix.
+- A package the published release does not carry yet is added from the catalog
+  rather than replacing anything. Adding three packages to a two-package
+  release builds six new `.deb` files and keeps the four published ones
+  byte-identical; the final indices list every package the new bound manifest
+  declares. The published version is authoritative, so a catalog that pins an
+  older version never overwrites a newer published one.
+- Only changed packages are rebuilt — one package is two architectures, so a
+  later single-package update produces exactly two new `.deb` files while the
+  rest of the pool stays byte-identical.
 - A no-op is a success: nothing is built, signed, uploaded, or pointed at, and
   a second run against the new baseline finds nothing left to do.
 - Versions only move forward. A downgrade, a missing architecture asset, a

@@ -10,8 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.manifest import default_manifest_path, load_manifest
-from scripts.release_manifest import MANIFEST_NAME, load_manifest_data
+from scripts.release_manifest import MANIFEST_NAME
 from scripts.release_verify import (
     BaselineUnavailable,
     NoCurrentRelease,
@@ -224,20 +223,22 @@ class PoolEntryTest(unittest.TestCase):
     """The signed index is the only pool inventory, so every entry is checked."""
 
     def _release(self, amd64: list[str], arm64: list[str]) -> TrustedRelease:
+        from tests.release_fixtures import published_manifest, published_manifest_data
+
         return TrustedRelease(
             release_id="r",
             key_bytes=b"",
-            manifest_data=load_manifest_data(default_manifest_path()),
-            manifest=load_manifest(),
+            manifest_data=published_manifest_data(),
+            manifest=published_manifest(),
             packages={"amd64": "\n\n".join(amd64), "arm64": "\n\n".join(arm64)},
         )
 
-    def _stanza(self, name: str, arch: str, filename: str | None = None, *, digest: bool = True) -> str:
+    def _stanza(self, name: str, arch: str, filename: str | None = None, *, digest: bool = True, version: str | None = None) -> str:
         fields = [
             f"Filename: {filename or f'pool/{name}'}",
             f"Package: {name.split('_')[0]}",
             f"Architecture: {arch}",
-            "Version: 1",
+            f"Version: {version or (name.split('_')[1] if '_' in name else '1')}",
             "Size: 10",
         ]
         if digest:
@@ -287,7 +288,16 @@ class PoolEntryTest(unittest.TestCase):
             ),
             "missing_entry": (
                 [self._amd64[0]],
-                "must hold four",
+                "omit manifest package",
+            ),
+            "undeclared_package": (
+                [self._stanza("sccache_0.18.0-1_amd64.deb", "amd64"), self._amd64[1]],
+                "does not declare",
+            ),
+            "swapped_identity": (
+                [self._stanza("zellij_0.45.1-1_amd64.deb", "amd64", version="9.9.9-1"),
+                 self._amd64[1]],
+                "but the bound manifest declares",
             ),
             "foreign_architecture": (
                 [self._stanza("zellij_0.45.1-1_amd64.deb", "arm64"), self._amd64[1]],

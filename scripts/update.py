@@ -13,6 +13,7 @@ import os
 import sys
 from pathlib import Path
 
+from .catalog import RECIPES
 from .fingerprint import expected_fingerprint_from_env
 from .manifest import default_manifest_path
 from .release_manifest import validated_document
@@ -27,7 +28,6 @@ from .storage import Source, s3_source
 from .update_build import apply_update
 from .update_plan import UpdatePlan, build_plan
 from .upstream import Candidate, client_from_env, discover
-from .upstream_assets import TRUSTED_REPOS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -44,6 +44,12 @@ def _fingerprint() -> str:
         raise SystemExit(2) from exc
 
 
+def _catalog() -> dict[str, object]:
+    """Return the validated committed catalog this repository may publish."""
+    data, _ = validated_document(default_manifest_path())
+    return data
+
+
 def _load_baseline(source: Source, *, fingerprint: str) -> tuple[TrustedRelease | None, dict[str, object]]:
     """Return the trusted baseline release and the manifest document to compare against.
 
@@ -54,14 +60,14 @@ def _load_baseline(source: Source, *, fingerprint: str) -> tuple[TrustedRelease 
     try:
         restored = restore_metadata(source, fingerprint=fingerprint)
     except NoCurrentRelease:
-        data, _ = validated_document(default_manifest_path())
-        return None, data
+        return None, _catalog()
     return restored, restored.manifest_data
 
 
 def _discover(client) -> dict[str, Candidate]:  # type: ignore[no-untyped-def]
+    """Discover the latest stable release of every reviewed package."""
     candidates: dict[str, Candidate] = {}
-    for name in sorted(TRUSTED_REPOS):
+    for name in sorted(RECIPES):
         vendored = (REPO_ROOT / "packaging" / "licenses" / name / "LICENSE.txt").read_bytes()
         candidates[name] = discover(client, name, vendored_license=vendored)
     return candidates
@@ -72,6 +78,8 @@ def _report(plan: UpdatePlan) -> None:
     print(f"baseline: {where}")
     for name, version in sorted(plan.versions.items()):
         print(f"  {name} {version}")
+    if plan.added:
+        print(f"adding to the catalog: {', '.join(plan.added)}")
     if plan.is_noop:
         print("no updates: every package is already at its latest stable release")
     else:
@@ -108,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
         plan = build_plan(
             baseline_release_id=baseline.release_id if baseline else None,
             baseline_data=baseline_data,
+            catalog_data=_catalog(),
             candidates=_discover(client_from_env()),
         )
     except (BaselineUnavailable, RuntimeError, ValueError, OSError) as exc:

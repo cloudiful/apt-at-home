@@ -186,6 +186,7 @@ class VerifyTest(unittest.TestCase):
 
     def test_packages_missing_stanza_fails_full_verify(self) -> None:
         """A dropped package must fail even with consistent Release and signatures."""
+        manifest = load_manifest()
         tmpdir, home, key_id = make_gpg_home_with_key()
         try:
             with tempfile.TemporaryDirectory() as work:
@@ -194,8 +195,14 @@ class VerifyTest(unittest.TestCase):
                 self.assertTrue(verify_tree(root))
                 target = root / "releases" / "20260102-030405" / "dists" / "stable" / "main" / "binary-amd64" / "Packages"
                 stanzas = target.read_text().strip().split("\n\n")
-                self.assertEqual(len(stanzas), 2)
-                target.write_text(stanzas[0] + "\n", encoding="utf-8")
+                self.assertEqual(len(stanzas), len(manifest.packages))
+                # The pool still holds every .deb the manifest declares, so only
+                # the index omission can reveal the defect.
+                self.assertEqual(
+                    len(list((root / "pool").glob("*.deb"))),
+                    len(manifest.packages) * 2,
+                )
+                target.write_text("\n\n".join(stanzas[:-1]) + "\n", encoding="utf-8")
                 resign_tree(root, "20260102-030405", key_home=home, key_id=key_id)
                 with self.assertRaises(ValueError) as ctx:
                     verify_tree(root)
@@ -203,7 +210,24 @@ class VerifyTest(unittest.TestCase):
         finally:
             tmpdir.cleanup()
 
+    def test_pool_that_disagrees_with_the_bound_manifest_fails(self) -> None:
+        """A pool entry the manifest does not declare is refused even if indexed."""
+        tmpdir, home, key_id = make_gpg_home_with_key()
+        try:
+            with tempfile.TemporaryDirectory() as work:
+                root = build_complete_tree(Path(work) / "repo", "20260102-030405",
+                                           key_home=home, key_id=key_id)
+                stray = root / "pool" / "nvim_0.11.0-1_amd64.deb"
+                stray.write_bytes((root / "pool").glob("zellij*amd64.deb").__next__().read_bytes())
+                with self.assertRaises(ValueError) as ctx:
+                    verify_tree(root)
+                self.assertIn("does not match the bound manifest", str(ctx.exception))
+                self.assertIn("nvim", str(ctx.exception))
+        finally:
+            tmpdir.cleanup()
+
     def test_packages_defects_fail_full_verify(self) -> None:
+        manifest = load_manifest()
         cases = {
             "duplicate_filename": lambda s: [s[0], s[0]],
             "wrong_architecture": lambda s: [
@@ -219,7 +243,7 @@ class VerifyTest(unittest.TestCase):
                                                    key_home=home, key_id=key_id)
                         target = root / "releases" / "20260102-030405" / "dists" / "stable" / "main" / "binary-arm64" / "Packages"
                         stanzas = target.read_text().strip().split("\n\n")
-                        self.assertEqual(len(stanzas), 2)
+                        self.assertEqual(len(stanzas), len(manifest.packages))
                         target.write_text("\n\n".join(mutate(stanzas)) + "\n", encoding="utf-8")
                         resign_tree(root, "20260102-030405", key_home=home, key_id=key_id)
                         with self.assertRaises(ValueError):

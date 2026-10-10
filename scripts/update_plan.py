@@ -1,9 +1,11 @@
 """Decide what an update run should build from the trusted baseline and discovery.
 
-The plan never rebuilds everything and never trusts a version comparison it has
-not validated: every candidate version must strictly advance the signed baseline,
-every overlay is re-validated through the existing manifest parser, and an
-unchanged plan stays empty so a second run has nothing left to do.
+The published baseline is authoritative for what exists: it is never edited by a
+newer working catalog, and a catalog package that the baseline does not carry is
+merged in as an addition rather than a replacement. Every candidate version must
+strictly advance the entry it applies to, every overlay is re-validated through
+the manifest parser, and an unchanged plan stays empty so a second run has
+nothing left to do.
 """
 
 from __future__ import annotations
@@ -11,9 +13,10 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 
+from .catalog import archive_member, binary_name, depends_for, expected_license_for
 from .manifest import Manifest, parse_manifest
 from .upstream import Candidate
-from .upstream_assets import ARCHES, EXPECTED_LICENSES, version_key
+from .upstream_assets import ARCHES, version_key
 
 
 @dataclass(frozen=True)
@@ -36,39 +39,75 @@ class UpdatePlan:
         """Fresh storage has no pool to keep, so every package is built."""
         return self.baseline_release_id is None
 
+    @property
+    def added(self) -> tuple[str, ...]:
+        """Catalog packages this run introduces to a published release."""
+        return tuple(
+            sorted(
+                {pkg.name for pkg in self.manifest.packages}
+                - {pkg.name for pkg in self.baseline_manifest.packages}
+            )
+        )
+
+
+def merge_catalog(baseline_data: dict[str, object], catalog_data: dict[str, object]) -> list[dict[str, object]]:
+    """Return baseline package entries plus catalog packages the baseline lacks.
+
+    Order and content follow the baseline for everything it already carries, so
+    a catalog that pins an older version can never overwrite a published newer
+    one; only genuinely new names are appended, in catalog order.
+    """
+    baseline_entries = baseline_data.get("packages")
+    catalog_entries = catalog_data.get("packages")
+    if not isinstance(baseline_entries, list) or not isinstance(catalog_entries, list):
+        raise ValueError("manifest packages must be a list")
+    present = {
+        entry.get("name") for entry in baseline_entries if isinstance(entry, dict)
+    }
+    merged = copy.deepcopy(baseline_entries)
+    merged.extend(
+        copy.deepcopy(entry)
+        for entry in catalog_entries
+        if isinstance(entry, dict) and entry.get("name") not in present
+    )
+    return merged
+
 
 def overlay_package(entry: dict[str, object], candidate: Candidate) -> dict[str, object]:
-    """Return one package entry with the candidate's version and arch targets.
+    """Return one package entry at the candidate's version.
 
-    Description, copyright, and the per-arch archive member and binary name are
-    carried over unchanged; only the version, the digests, and the tag-bound
-    license URL move, and the result must re-validate through `parse_manifest`.
+    The URL, digest, tag-bound license URL, archive member, installed binary, and
+    declared dependencies are all recomputed from the reviewed recipe, so a
+    nested member moves with the version and an architecture that gains a
+    runtime dependency gains it here too. The result must re-validate through
+    `parse_manifest`.
     """
+    name = str(entry.get("name"))
     license_id = entry.get("license")
-    if license_id != EXPECTED_LICENSES.get(candidate.name):
+    expected = expected_license_for(name)
+    if license_id != expected:
         raise ValueError(
-            f"{candidate.name} license {license_id!r} is not the expected "
-            f"{EXPECTED_LICENSES.get(candidate.name)!r}"
+            f"{name} license {license_id!r} is not the expected {expected!r}"
         )
     targets = entry.get("targets")
     if not isinstance(targets, dict):
-        raise ValueError(f"{candidate.name} manifest entry has no targets object")
+        raise ValueError(f"{name} manifest entry has no targets object")
+    version = candidate.version
     updated_targets: dict[str, object] = {}
-    for arch, target in targets.items():
-        if not isinstance(target, dict):
-            raise ValueError(f"{candidate.name} {arch} target is not an object")
+    for arch in ARCHES:
         override = candidate.targets.get(arch)
         if override is None:
-            raise ValueError(f"{candidate.name} has no discovered target for {arch}")
+            raise ValueError(f"{name} has no discovered target for {arch}")
         updated_targets[arch] = {
             "url": override["url"],
             "sha256": override["sha256"],
-            "archive_member": target["archive_member"],
-            "binary": target["binary"],
+            "archive_member": archive_member(name, version, arch),
+            "binary": binary_name(name),
+            "depends": depends_for(name, arch),
         }
     return {
         **entry,
-        "version": candidate.version,
+        "version": version,
         "license_url": candidate.license_url,
         "targets": updated_targets,
     }
@@ -103,6 +142,7 @@ def build_plan(
     *,
     baseline_release_id: str | None,
     baseline_data: dict[str, object],
+    catalog_data: dict[str, object],
     candidates: dict[str, Candidate],
 ) -> UpdatePlan:
     """Compare discovered stable versions with the trusted baseline."""
@@ -110,9 +150,10 @@ def build_plan(
         raise ValueError("no upstream candidates were discovered")
     data = copy.deepcopy(baseline_data)
     baseline = parse_manifest(baseline_data)
-    packages = list(data.get("packages") or [])
-    if not isinstance(packages, list):
-        raise ValueError("manifest packages must be a list")
+    catalog = parse_manifest(catalog_data)
+    baseline_names = {pkg.name for pkg in baseline.packages}
+    validated = baseline_names | {pkg.name for pkg in catalog.packages}
+    packages = merge_catalog(data, catalog_data)
 
     changed: list[str] = []
     versions: dict[str, str] = {}
@@ -123,7 +164,7 @@ def build_plan(
         candidate = candidates.get(name)
         if candidate is None:
             raise ValueError(f"no stable upstream release discovered for {name}")
-        if name not in {pkg.name for pkg in baseline.packages}:
+        if name not in validated:
             raise ValueError(f"manifest has no validated package entry for {name}")
         current = str(entry.get("version"))
         versions[name] = current
@@ -134,6 +175,10 @@ def build_plan(
             )
         if version_key(candidate.version) == version_key(current):
             check_same_version_immutable(entry, candidate)
+            if name not in baseline_names:
+                # A new package already pinned at its latest stable release still
+                # has to be built: nothing published carries it yet.
+                changed.append(name)
             continue
         rebuilt = overlay_package(entry, candidate)
         entry.clear()

@@ -59,7 +59,7 @@ class MetadataTest(unittest.TestCase):
             release_inputs: list[tuple[Path, str]] = []
             for arch in ("amd64", "arm64"):
                 arch_debs = sorted(pool.glob(f"*_{arch}.deb"))
-                self.assertEqual(len(arch_debs), 2)
+                self.assertEqual(len(arch_debs), len(manifest.packages))
                 arch_dir = output / "releases" / release_id / "dists" / "stable" / "main" / f"binary-{arch}"
                 packages, packages_gz = generate_packages(pool, arch_dir, arch_debs)
                 self.assertEqual(_packages_names(packages.read_text()), {pkg.name for pkg in manifest.packages})
@@ -68,7 +68,9 @@ class MetadataTest(unittest.TestCase):
                     self.assertEqual(fields["Architecture"], arch)
                     self.assertTrue(fields["Filename"].startswith("pool/"))
                     self.assertTrue((pool / fields["Filename"][len("pool/"):]).exists())
-                self.assertEqual(len(packages.read_text().strip().split("\n\n")), 2)
+                self.assertEqual(
+                    len(packages.read_text().strip().split("\n\n")), len(manifest.packages)
+                )
                 packages_files[arch] = [packages, packages_gz]
                 release_inputs.append((packages, f"main/binary-{arch}/Packages"))
                 release_inputs.append((packages_gz, f"main/binary-{arch}/Packages.gz"))

@@ -52,6 +52,76 @@
           "binary": "starship"
         }
       }
+    },
+    {
+      "name": "git-delta",
+      "version": "0.20.1",
+      "homepage": "https://github.com/dandavison/delta",
+      "description": "Syntax-highlighting pager for git, diff, and grep output",
+      "license": "MIT",
+      "copyright": "Copyright 2020 Dan Davison",
+      "license_url": "https://raw.githubusercontent.com/dandavison/delta/0.20.1/LICENSE",
+      "targets": {
+        "amd64": {
+          "url": "https://github.com/dandavison/delta/releases/download/0.20.1/delta-0.20.1-x86_64-unknown-linux-musl.tar.gz",
+          "sha256": "69dcb4043f55c29118f408c6efd30115e0a4e0a6709253343b8c8fa814ab4a31",
+          "archive_member": "delta-0.20.1-x86_64-unknown-linux-musl/delta",
+          "binary": "delta"
+        },
+        "arm64": {
+          "url": "https://github.com/dandavison/delta/releases/download/0.20.1/delta-0.20.1-aarch64-unknown-linux-gnu.tar.gz",
+          "sha256": "da7f4338f593572ff426ae153e0870e2fdc72729416eff551b40cdeb67940db8",
+          "archive_member": "delta-0.20.1-aarch64-unknown-linux-gnu/delta",
+          "binary": "delta",
+          "depends": "libc6 (>= 2.18), libgcc-s1"
+        }
+      }
+    },
+    {
+      "name": "rustfs-cli",
+      "version": "0.1.36",
+      "homepage": "https://github.com/rustfs/cli",
+      "description": "Command-line client for RustFS object storage",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2026 RustFS Contributors",
+      "license_url": "https://raw.githubusercontent.com/rustfs/cli/v0.1.36/LICENSE-MIT",
+      "targets": {
+        "amd64": {
+          "url": "https://github.com/rustfs/cli/releases/download/v0.1.36/rustfs-cli-linux-amd64-v0.1.36.tar.gz",
+          "sha256": "4a8128911ccad4e7b481f26635a4cfd1ec064412210526e57ad2c748d356f3b7",
+          "archive_member": "rc",
+          "binary": "rc"
+        },
+        "arm64": {
+          "url": "https://github.com/rustfs/cli/releases/download/v0.1.36/rustfs-cli-linux-arm64-v0.1.36.tar.gz",
+          "sha256": "6e9dea7ac4f81562add9e1e31206ba6059d6f5929ad4ed924986223282b3aa9c",
+          "archive_member": "rc",
+          "binary": "rc"
+        }
+      }
+    },
+    {
+      "name": "sccache",
+      "version": "0.18.0",
+      "homepage": "https://github.com/mozilla/sccache",
+      "description": "Compiler caching for Rust and other build systems",
+      "license": "Apache-2.0",
+      "copyright": "The sccache contributors; see upstream source for individual copyright notices.",
+      "license_url": "https://raw.githubusercontent.com/mozilla/sccache/v0.18.0/LICENSE",
+      "targets": {
+        "amd64": {
+          "url": "https://github.com/mozilla/sccache/releases/download/v0.18.0/sccache-v0.18.0-x86_64-unknown-linux-musl.tar.gz",
+          "sha256": "45f1447fbe231e3037bde351ef70677dd212216c8d62ae7ca409fecc4d6acc89",
+          "archive_member": "sccache-v0.18.0-x86_64-unknown-linux-musl/sccache",
+          "binary": "sccache"
+        },
+        "arm64": {
+          "url": "https://github.com/mozilla/sccache/releases/download/v0.18.0/sccache-v0.18.0-aarch64-unknown-linux-musl.tar.gz",
+          "sha256": "2b3284d5da3b46a47dc4229e75bb7b88ac4aa99c8d754fb7d2f84997e5a4354a",
+          "archive_member": "sccache-v0.18.0-aarch64-unknown-linux-musl/sccache",
+          "binary": "sccache"
+        }
+      }
     }
   ]
 }

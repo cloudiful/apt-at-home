@@ -89,7 +89,7 @@ EOF</code></pre>
       <li>
         <h3>${copy.install.title}</h3>
         <p>${copy.install.intro}</p>
-        <pre><code>sudo apt update &amp;&amp; sudo apt install zellij starship</code></pre>
+        <pre><code>sudo apt update &amp;&amp; sudo apt install git-delta rustfs-cli sccache starship zellij</code></pre>
       </li>`;
 }
 

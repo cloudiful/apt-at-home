@@ -7,7 +7,7 @@
 import type { HomepageCopy } from './homepage-content.js';
 
 export const homepageCopy: HomepageCopy = {
-  lede: 'A public, test-mode APT repository for Debian 13, publishing <strong>zellij</strong> and <strong>starship</strong> packages for amd64 and arm64.',
+  lede: 'A public, test-mode APT repository for Debian 13, publishing <strong>git-delta</strong>, <strong>rustfs-cli</strong>, <strong>sccache</strong>, <strong>starship</strong>, and <strong>zellij</strong> packages for amd64 and arm64.',
   languageLabel: 'Language',
   prerequisites: {
     heading: 'Before you start',
@@ -28,7 +28,7 @@ export const homepageCopy: HomepageCopy = {
     },
     install: {
       title: 'Update and install',
-      intro: 'Install the published packages:',
+      intro: 'Install the published packages (<code>git-delta</code> provides <code>delta</code>, <code>rustfs-cli</code> provides <code>rc</code>):',
     },
     auth: {
       summary: 'Device credentials (only when authentication is enabled)',

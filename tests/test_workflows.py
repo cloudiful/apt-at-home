@@ -168,7 +168,9 @@ class WorkflowStructureTest(unittest.TestCase):
             "APT_S3_ACCESS_KEY_ID", "APT_S3_SECRET_ACCESS_KEY",
             "APT_RELEASE_SIGNING_KEY", "APT_SIGNING_FINGERPRINT",
         }
-        used = set(re.findall(r"secrets\.([A-Z0-9_]+)", text))
+        # GITHUB_TOKEN is provided by the repository, not stored as a secret, so
+        # it does not widen the production secret set.
+        used = set(re.findall(r"secrets\.([A-Z0-9_]+)", text)) - {"GITHUB_TOKEN"}
         self.assertEqual(used, expected)
         # No Cloudflare material belongs in the publication path.
         for name in WORKFLOW_NAMES:
@@ -244,24 +246,69 @@ class WorkflowStructureTest(unittest.TestCase):
         text = read_workflow("ci.yml")
         self.assertIn("python -m scripts.update --help", text)
 
-    def test_smoke_jobs_install_no_unused_gpg(self) -> None:
-        # Fresh containers per job: smoke jobs never touch GPG, so they must
-        # not grow an unused keyring package.
+    def test_smoke_jobs_install_the_generated_packages(self) -> None:
+        # Each smoke job installs the debs its own architecture built, straight
+        # from the pool, so apt resolves and links them exactly as a user would.
+        text = read_workflow("ci.yml")
+        for job, arch in (("smoke-amd64", "amd64"), ("smoke-arm64", "arm64")):
+            block = job_block(text, job)
+            self.assertIn(f"apt-get install -y --no-install-recommends ./dist/repo/pool/*_{arch}.deb", block)
+            installed = " ".join(
+                line for line in block.splitlines() if "apt-get install" in line
+            )
+            self.assertNotIn("gpg", installed, msg=job)
+            self.assertNotIn("gnupg", installed, msg=job)
+
+    def test_each_smoke_job_installs_its_own_python_interpreter(self) -> None:
+        """Each smoke container is fresh: the helper cannot inherit an interpreter.
+
+        Asserted per job rather than against the whole document, because a
+        python3 installed by another job proves nothing about these two, and the
+        install must come before the helper runs in that same job.
+        """
         text = read_workflow("ci.yml")
         for job in ("smoke-amd64", "smoke-arm64"):
-            packages = install_packages(job_block(text, job))
-            self.assertNotIn("gpg", packages, msg=job)
-            self.assertNotIn("gnupg", packages, msg=job)
+            with self.subTest(job=job):
+                block = job_block(text, job)
+                install_lines = [
+                    line for line in block.splitlines() if "apt-get install" in line
+                ]
+                self.assertTrue(install_lines, msg=f"{job} installs nothing")
+                self.assertTrue(
+                    any("python3" in line for line in install_lines),
+                    msg=f"{job} never installs python3",
+                )
+                self.assertLess(
+                    block.index("python3"), block.index("-m scripts.smoke"),
+                    msg=f"{job} installs python3 after the helper runs",
+                )
 
-    def test_smoke_arm64_installs_file_in_same_job(self) -> None:
-        # Each job gets a fresh container, so the python job's tool install
-        # cannot satisfy the arm64 smoke job's `file` invocations.
-        job = job_block(read_workflow("ci.yml"), "smoke-arm64")
-        install_lines = [line for line in job.splitlines() if "apt-get install" in line]
-        self.assertEqual(len(install_lines), 1, msg="smoke-arm64 installs no tools")
-        self.assertIn("file", install_lines[0])
-        first_file_use = job.find("file /tmp/")
-        self.assertGreater(first_file_use, job.find("apt-get install"))
+    def test_smoke_jobs_check_every_package_from_the_manifest(self) -> None:
+        # No workflow may hard-code how many packages exist or which ones; the
+        # manifest drives both the count assertion and the per-package checks.
+        text = read_workflow("ci.yml")
+        for job, arch in (("smoke-amd64", "amd64"), ("smoke-arm64", "arm64")):
+            block = job_block(text, job)
+            self.assertIn(
+                "--manifest packaging/manifest.json --count", block, msg=job
+            )
+            self.assertIn("--pool dist/repo/pool", block, msg=job)
+            self.assertIn(f"--installed --arch {arch}", block, msg=job)
+            self.assertNotRegex(block, r'=\s*"4"')
+            self.assertNotIn("zellij_0.45.1-1", block, msg=job)
+            self.assertNotIn("starship_1.26.0-1", block, msg=job)
+
+    def test_release_counts_the_pool_from_the_manifest(self) -> None:
+        block = job_block(read_workflow("release.yml"), "publish")
+        self.assertIn("--manifest packaging/manifest.json --count", block)
+        self.assertNotRegex(block, r'=\s*"4"')
+
+    def test_update_discovery_uses_the_repository_token(self) -> None:
+        # Upstream tag discovery is a public API read; the workflow's own
+        # read-only token lifts the rate limit without adding a stored secret.
+        block = job_block(read_workflow("update.yml"), "update")
+        self.assertIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", block)
+        self.assertIn("contents: read", read_workflow("update.yml"))
 
     def test_builder_uses_explicit_xz(self) -> None:
         deb = (ROOT / "scripts" / "deb.py").read_text(encoding="utf-8")

@@ -90,7 +90,8 @@ jobs:
             exit 1
           fi
           uv run python -m scripts.repo verify --output dist/repo
-          test "$(find dist/repo/pool -maxdepth 1 -name '*.deb' | wc -l)" = "4"
+          test "$(find dist/repo/pool -maxdepth 1 -name '*.deb' | wc -l)" \
+            = "$(uv run python -m scripts.smoke --manifest packaging/manifest.json --count)"
       - name: Publish pool, indices, and release; pointer last
         run: |
           set -euo pipefail

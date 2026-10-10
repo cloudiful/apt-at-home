@@ -16,6 +16,8 @@ SOURCE_DATE_EPOCH = 1767225600
 
 
 def debian_control(pkg: Package, arch: str, manifest: Manifest, installed_size_kb: int) -> str:
+    depends = pkg.targets[arch].depends
+    dependency_field = f"Depends: {depends}\n" if depends else ""
     return (
         f"Package: {pkg.name}\n"
         f"Version: {debian_version(pkg, manifest)}\n"
@@ -25,8 +27,9 @@ def debian_control(pkg: Package, arch: str, manifest: Manifest, installed_size_k
         f"Maintainer: {manifest.maintainer}\n"
         f"Installed-Size: {installed_size_kb}\n"
         f"Homepage: {pkg.homepage}\n"
+        f"{dependency_field}"
         f"Description: {pkg.description}\n"
-        f" Repackaged upstream musl binary for a private APT repository.\n"
+        f" Repackaged upstream binary for a private APT repository.\n"
     )
 
 
@@ -77,7 +80,7 @@ def stage_package(
     (doc_dir / "copyright").write_text(copyright_text(pkg, license_body), encoding="utf-8")
     (doc_dir / "changelog.Debian").write_text(
         f"{pkg.name} ({debian_version(pkg, manifest)}) stable; urgency=low\n\n"
-        f"  * Repackage upstream {pkg.version} musl {arch} binary.\n\n"
+        f"  * Repackage upstream {pkg.version} {arch} binary.\n\n"
         f" -- {manifest.maintainer}  Thu, 01 Jan 2026 00:00:00 +0000\n",
         encoding="utf-8",
     )

@@ -1,79 +1,62 @@
-"""Trusted upstream release identity: repositories, tags, assets, and digests.
+"""Trusted upstream release identity: tags, official URLs, and digests.
 
 Everything discovered from GitHub passes through this module before a byte is
-downloaded, so an unexpected origin, an asset that does not follow the pinned
-musl naming scheme, or a release without an API digest fails closed instead of
-guessing. The two pinned packages and their license identifiers are the whole
-trusted surface; there is no generic upstream.
+downloaded, so an unexpected origin, an asset the reviewed recipe does not
+name, or a release without an API digest fails closed instead of guessing. The
+API endpoint, the download origin, and the raw license host are constants here:
+nothing a manifest or an upstream response can supply ever builds one.
 """
 
 from __future__ import annotations
 
 import re
 
+from .catalog import (
+    ARCHES,
+    asset_name,
+    license_path_for,
+    recipe_for,
+    tag_for,
+)
+
 API_BASE = "https://api.github.com"
 WEB_BASE = "https://github.com"
 RAW_BASE = "https://raw.githubusercontent.com"
 
-# The only upstream repositories this repository will ever talk to.
-TRUSTED_REPOS: dict[str, str] = {
-    "zellij": "zellij-org/zellij",
-    "starship": "starship/starship",
-}
-# SPDX identifiers carried by the committed manifest; a change is a stop, never
-# a licensing assumption.
-EXPECTED_LICENSES: dict[str, str] = {"zellij": "MIT", "starship": "ISC"}
-# License file inside each upstream repository, used to rebuild license_url.
-LICENSE_PATHS: dict[str, str] = {"zellij": "LICENSE.md", "starship": "LICENSE"}
-# Rust musl target triples the pinned manifests already build from.
-MUSL_TRIPLES: dict[str, str] = {
-    "amd64": "x86_64-unknown-linux-musl",
-    "arm64": "aarch64-unknown-linux-musl",
-}
-ARCHES = ("amd64", "arm64")
-
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-# Latest stable only: an exact v?N.N.N with no prerelease or build metadata.
-_STABLE_TAG = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+# Latest stable only: an exact <prefix>N.N.N with no prerelease or build part.
+_STABLE_TAG = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 
-def repo_for(package_name: str) -> str:
-    try:
-        return TRUSTED_REPOS[package_name]
-    except KeyError:
-        raise ValueError(f"no trusted upstream repository for {package_name!r}") from None
+def releases_api_url(repo: str) -> str:
+    """Return the fixed API endpoint for one repository's latest release."""
+    return f"{API_BASE}/repos/{repo}/releases/latest"
 
 
-def triple_for(arch: str) -> str:
-    try:
-        return MUSL_TRIPLES[arch]
-    except KeyError:
-        raise ValueError(f"unsupported architecture: {arch!r}") from None
+def license_path(package_name: str) -> str:
+    """Return the license file path inside this package's upstream repository."""
+    return license_path_for(package_name)
 
 
-def asset_name(package_name: str, arch: str) -> str:
-    """Return the only asset name accepted for this package and architecture."""
-    repo_for(package_name)
-    return f"{package_name}-{triple_for(arch)}.tar.gz"
-
-
-def parse_stable_tag(tag: str) -> str:
+def parse_stable_tag(package_name: str, tag: str) -> str:
     """Return the version of an exact stable release tag, or fail closed."""
+    recipe = recipe_for(package_name)
     if not isinstance(tag, str):
         raise ValueError("release tag must be a string")
-    match = _STABLE_TAG.match(tag.strip())
-    if match is None:
+    match = _STABLE_TAG.match(tag.removeprefix(recipe.tag_prefix))
+    if match is None or not tag.startswith(recipe.tag_prefix):
         raise ValueError(
-            f"release tag is not an exact stable v?N.N.N version: {tag!r}"
+            f"{package_name} release tag {tag!r} is not an exact stable "
+            f"{recipe.tag_prefix}N.N.N version"
         )
     return ".".join(match.groups())
 
 
 def version_key(version: str) -> tuple[int, int, int]:
     """Order two stable versions numerically; prereleases never reach here."""
-    match = _STABLE_TAG.match(version if version.startswith("v") else f"v{version}")
+    match = _STABLE_TAG.match(version.removeprefix("v"))
     if match is None:
-        raise ValueError(f"version is not an exact stable v?N.N.N version: {version!r}")
+        raise ValueError(f"version is not an exact stable N.N.N version: {version!r}")
     return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
 
 
@@ -105,6 +88,24 @@ def check_official_asset_url(url: object, *, repo: str, tag: str, name: str) -> 
     return expected
 
 
-def license_url(repo: str, tag: str, license_path: str) -> str:
+def license_url(repo: str, tag: str, path: str) -> str:
     """Return the raw license URL for one exact upstream tag."""
-    return f"{RAW_BASE}/{repo}/{tag}/{license_path}"
+    return f"{RAW_BASE}/{repo}/{tag}/{path}"
+
+
+__all__ = [
+    "ARCHES",
+    "API_BASE",
+    "RAW_BASE",
+    "WEB_BASE",
+    "asset_name",
+    "check_official_asset_url",
+    "license_path",
+    "license_url",
+    "parse_asset_digest",
+    "parse_stable_tag",
+    "release_download_url",
+    "releases_api_url",
+    "tag_for",
+    "version_key",
+]

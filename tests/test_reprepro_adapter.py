@@ -35,7 +35,7 @@ def _stanzas(text: str) -> list[dict[str, str]]:
 
 
 def _fake_debs(root: Path) -> tuple[list[Path], Path]:
-    """Stage four tiny .deb files without touching the network."""
+    """Stage one .deb per pinned package and architecture, without the network."""
     manifest = load_manifest()
     pool = root / "pool"
     pool.mkdir(parents=True, exist_ok=True)
@@ -64,16 +64,17 @@ class RepreproAdapterTest(unittest.TestCase):
     def test_exports_complete_flat_pool_indices(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            manifest = load_manifest()
             debs, pool = _fake_debs(root)
             dists = root / "dists"
             for arch in ARCHES:
                 arch_debs = sorted(pool.glob(f"*_{arch}.deb"))
-                self.assertEqual(len(arch_debs), 2)
+                self.assertEqual(len(arch_debs), len(manifest.packages))
                 packages, packages_gz = generate_packages(
                     pool, dists / "stable" / "main" / f"binary-{arch}", arch_debs
                 )
                 stanzas = _stanzas(packages.read_text())
-                self.assertEqual(len(stanzas), 2)
+                self.assertEqual(len(stanzas), len(manifest.packages))
                 names = set()
                 for stanza in stanzas:
                     self.assertEqual(stanza["Architecture"], arch)

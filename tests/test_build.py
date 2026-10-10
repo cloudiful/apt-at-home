@@ -162,7 +162,7 @@ class DebTest(unittest.TestCase):
             build_module.fetch_verified = lambda url, sha, dest: dest  # type: ignore[assignment]
             try:
                 every = build_all(manifest, pool_dir=pool, cache_dir=cache)
-                self.assertEqual(len(every), 4)
+                self.assertEqual(len(every), len(manifest.packages) * 2)
                 fresh = tmpdir / "pool-selected"
                 selected = build_all(
                     manifest, pool_dir=fresh, cache_dir=cache, packages=["zellij"]

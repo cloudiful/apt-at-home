@@ -8,12 +8,19 @@ key; the in-memory doubles keep a missing key distinguishable from a denied one.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from pathlib import Path
 
 from scripts.deb import build_deb, stage_package
-from scripts.manifest import default_manifest_path, deb_filename, load_manifest
+from scripts.manifest import (
+    Manifest,
+    default_manifest_path,
+    deb_filename,
+    load_manifest,
+    parse_manifest,
+)
 from scripts.metadata import ARCHES, generate_release, write_indices
 from scripts.release_manifest import (
     MANIFEST_NAME,
@@ -27,6 +34,30 @@ from scripts.storage import ObjectNotFound
 
 RELEASE_ID = "20260102-030405"
 COMMITTED = load_manifest()
+
+# What production publishes today: the current release predates the newer
+# catalog entries, so the fixtures below model that two-package baseline rather
+# than assuming the committed catalog was already shipped.
+PUBLISHED_NAMES = ("starship", "zellij")
+
+
+def published_manifest_data() -> dict[str, object]:
+    """The committed catalog restricted to what the published release carries."""
+    data = copy.deepcopy(load_manifest_data(default_manifest_path()))
+    packages = data.get("packages")
+    assert isinstance(packages, list)
+    data["packages"] = [
+        entry for entry in packages if entry.get("name") in PUBLISHED_NAMES
+    ]
+    return data
+
+
+def published_manifest() -> Manifest:
+    """The validated two-package catalog subset the published release binds."""
+    return parse_manifest(published_manifest_data())
+
+
+PUBLISHED = published_manifest()
 
 
 class FakeStorage:
@@ -54,20 +85,20 @@ class DeniedStorage(FakeStorage):
 
 
 def _build_debs(root: Path) -> None:
-    """Stage the four pinned packages as real .deb files under root/pool."""
+    """Stage the published packages as real .deb files under root/pool."""
     pool = root / "pool"
     pool.mkdir(parents=True, exist_ok=True)
-    for pkg in COMMITTED.packages:
+    for pkg in PUBLISHED.packages:
         for arch in ARCHES:
             binary = root / "src" / f"{pkg.name}-{arch}" / pkg.targets[arch].binary
             binary.parent.mkdir(parents=True, exist_ok=True)
             binary.write_bytes(f"fake-{pkg.name}-{arch}".encode())
             binary.chmod(0o755)
             stage = stage_package(
-                pkg=pkg, arch=arch, manifest=COMMITTED,
+                pkg=pkg, arch=arch, manifest=PUBLISHED,
                 binary_file=binary, stage_root=root / "stages",
             )
-            build_deb(stage, pool / deb_filename(pkg, arch, COMMITTED))
+            build_deb(stage, pool / deb_filename(pkg, arch, PUBLISHED))
 
 
 def build_release_objects(
@@ -94,7 +125,7 @@ def build_release_objects(
     extra: list[tuple[str, str]] = []
     if bind:
         artifact = write_manifest_document(
-            data=load_manifest_data(default_manifest_path()),
+            data=published_manifest_data(),
             destination=root / "releases" / RELEASE_ID / MANIFEST_NAME,
         )
         extra = manifest_binding_fields(artifact)
