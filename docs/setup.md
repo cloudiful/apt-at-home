@@ -1,17 +1,18 @@
 # Operator setup
 
-Repository `https://github.com/cloudiful/apt-at-home.git`, Cloudflare account
-`12412d5b061683494ea3e5c217d6a961`, R2 bucket `apt` (private, no `r2.dev`,
-no bucket custom domains). No cloud provisioning happens from this checkout.
-The operator creates the custom domain, the Worker secret, and the GitHub
-environment by hand. No live deploy or bucket mutation is performed here.
+Configure this repository for the operator's own account and storage in
+`worker/wrangler.jsonc` (`account_id`, `bucket_name`). Keep the bucket
+private with no `r2.dev` access and no bucket custom domain. No cloud
+provisioning happens from this checkout. The operator creates the custom
+domain, the Worker secret, and the GitHub environment by hand. No live deploy
+or bucket mutation is performed here.
 
 ## 1. Private bucket and domain
 
-- Bucket `apt` already exists and is private. Keep it that way: no public
-  `r2.dev` access and no bucket custom domain. `worker/wrangler.jsonc`
-  already pins `account_id` and `bucket_name: apt` with `workers_dev: false`
-  and `preview_urls: false`.
+- Create the operator's private bucket and set `account_id` and `bucket_name`
+  in `worker/wrangler.jsonc`; keep `workers_dev: false` and
+  `preview_urls: false`. Keep the bucket private: no public `r2.dev` access
+  and no bucket custom domain.
 - The base config carries no `routes` and is deployed as-is with
   `bunx wrangler deploy --config worker/wrangler.jsonc --domains "$APT_WORKER_DOMAIN"`.
   The domain comes from the validated `APT_WORKER_DOMAIN` repository
