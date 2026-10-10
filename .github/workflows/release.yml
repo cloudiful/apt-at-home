@@ -26,7 +26,7 @@ jobs:
     name: Build, verify, and publish (manual, serialized)
     runs-on: ubuntu-24.04
     container: debian:13
-    environment: apt-production
+    environment: prod
     env:
       APT_S3_BUCKET: ${{ secrets.APT_S3_BUCKET }}
       APT_S3_ENDPOINT: ${{ secrets.APT_S3_ENDPOINT }}

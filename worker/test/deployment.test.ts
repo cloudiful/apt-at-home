@@ -9,6 +9,7 @@ interface WranglerConfig {
   readonly account_id?: string;
   readonly workers_dev?: boolean;
   readonly preview_urls?: boolean;
+  readonly keep_vars?: boolean;
   readonly routes?: unknown;
   readonly vars?: Record<string, string>;
   readonly r2_buckets: ReadonlyArray<{
@@ -55,10 +56,16 @@ describe('deployment base config', () => {
   });
 
   it('carries no endpoint, no credential and no inline secret', () => {
-    for (const forbidden of ['r2.dev', 'http://', 'https://', 'api_token', 'secret', 'vars']) {
+    for (const forbidden of ['r2.dev', 'http://', 'https://', 'api_token', 'secret']) {
       expect(wranglerSource, forbidden).not.toContain(forbidden);
     }
+    expect(wranglerSource).not.toContain('"vars"');
+    expect(wranglerSource).not.toContain('AUTH_REQUIRED');
     expect(readConfig().vars).toBeUndefined();
+  });
+
+  it('preserves dashboard plaintext vars across deployments', () => {
+    expect(readConfig().keep_vars).toBe(true);
   });
 
   it('names the worker entry point that the gateway exports', () => {

@@ -4,6 +4,12 @@ export interface Env {
   readonly BUCKET: R2Bucket;
   /** Worker secret: JSON object mapping client name to SHA256 hex digest of its token. */
   readonly CREDENTIALS: string;
+  /**
+   * Optional testing toggle as exact text: absent or `"true"` requires
+   * credentials, only `"false"` allows anonymous artifact reads. Any other
+   * value fails closed with `503`.
+   */
+  readonly AUTH_REQUIRED?: string;
 }
 
 /** Key of the object that selects the currently published release. */

@@ -8,7 +8,7 @@
  * single public exception: it is answered with a static landing page before any
  * of this runs, and no other path is affected.
  */
-import { challengeHeaders, isAuthorized, parseCredentialConfig } from './auth.js';
+import { challengeHeaders, isAuthorized, parseCredentialConfig, resolveAuthMode } from './auth.js';
 import { cacheLookup, cacheStore, isCacheableBody, shouldBypassCache, toClientResponse } from './cache.js';
 import { handleRoot } from './homepage.js';
 import { serveObject } from './objects.js';
@@ -34,11 +34,16 @@ export default {
     const root = handleRoot(request);
     if (root !== null) return root;
 
-    const config = parseCredentialConfig(env.CREDENTIALS);
-    if (!config.ok) return serviceUnavailable();
+    const authMode = resolveAuthMode(env.AUTH_REQUIRED);
+    if (!authMode.ok) return serviceUnavailable();
 
-    if (!(await isAuthorized(request.headers.get('authorization'), config.credentials))) {
-      return unauthorized(challengeHeaders());
+    if (authMode.mode === 'required') {
+      const config = parseCredentialConfig(env.CREDENTIALS);
+      if (!config.ok) return serviceUnavailable();
+
+      if (!(await isAuthorized(request.headers.get('authorization'), config.credentials))) {
+        return unauthorized(challengeHeaders());
+      }
     }
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       return methodNotAllowed();

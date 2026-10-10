@@ -30,6 +30,14 @@ or bucket mutation is performed here.
 - Store `CREDENTIALS` as a **runtime** secret in the Cloudflare dashboard
   (Worker → Settings → Variables and Secrets). The gateway reads it while
   serving requests; the build never does.
+- Optional testing toggle `AUTH_REQUIRED` is exact text in Variables and
+  Secrets (a runtime variable, not a build variable and never committed):
+  absent or `"true"` keeps the credential gate, only `"false"` allows
+  anonymous artifact reads. Any other value fails closed with `503` before
+  storage or cache, except `/` which stays public. `"false"` exposes downloads
+  to anyone who can reach the Worker, so set `"true"` or delete the variable
+  immediately after testing. `keep_vars: true` in `worker/wrangler.jsonc` keeps
+  dashboard plaintext variables across deployments; secrets are unaffected.
 - Check credentials before any storage or cache access (the gateway already
   does this). Invalid configuration fails closed with `503`, and the bucket is
   never exposed publicly.
@@ -64,9 +72,9 @@ scripts the lock needs (`esbuild` and `workerd`). Nothing is approved by name
 or wildcard. `ci.yml` still bundles the Worker with a Wrangler `--dry-run` and
 synthetic credentials as a CI check; it never uploads.
 
-## 4. GitHub environment `apt-production`
+## 4. GitHub environment `prod`
 
-`release.yml` is `workflow_dispatch` only, carries `environment: apt-production`
+`release.yml` is `workflow_dispatch` only, carries `environment: prod`
 on its publish job, serializes through `concurrency: apt-release`, and uses
 least-privilege `contents: read`. Workflow inputs reach shell steps only
 through step `env` (never `${{ }}` interpolation). The release keeps the

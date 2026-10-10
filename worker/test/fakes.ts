@@ -155,8 +155,13 @@ export class FakeContext {
   }
 }
 
-export function createEnv(bucket: FakeBucket, credentials: unknown): Env {
-  return { BUCKET: bucket.asBinding(), CREDENTIALS: credentials } as unknown as Env;
+export function createEnv(bucket: FakeBucket, credentials: unknown, authRequired?: unknown): Env {
+  const env = { BUCKET: bucket.asBinding(), CREDENTIALS: credentials } as unknown as Record<
+    string,
+    unknown
+  >;
+  if (authRequired !== undefined) env['AUTH_REQUIRED'] = authRequired;
+  return env as unknown as Env;
 }
 
 export async function sha256Hex(value: string): Promise<string> {

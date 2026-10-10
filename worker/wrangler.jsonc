@@ -6,6 +6,7 @@
   "account_id": "12412d5b061683494ea3e5c217d6a961",
   "workers_dev": false,
   "preview_urls": false,
+  "keep_vars": true,
   "r2_buckets": [
     {
       "binding": "BUCKET",

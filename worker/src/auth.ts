@@ -34,6 +34,33 @@ export type ConfigResult =
   | { readonly ok: true; readonly credentials: CredentialMap }
   | { readonly ok: false };
 
+/**
+ * Result of resolving the optional `AUTH_REQUIRED` runtime variable.
+ *
+ * `required` keeps the fail-closed credential gate; `public` allows anonymous
+ * artifact reads for testing; an `ok: false` result means the configured value
+ * is malformed and the gateway must fail closed with `503`.
+ */
+export type AuthModeResult =
+  | { readonly ok: true; readonly mode: 'required' | 'public' }
+  | { readonly ok: false };
+
+/**
+ * Resolves the optional text `AUTH_REQUIRED` variable without coercion.
+ *
+ * Absent (`undefined`) or the exact lowercase text `"true"` requires
+ * credentials as before. Only the exact lowercase text `"false"` disables the
+ * credential gate. Every other value — including the empty string, whitespace,
+ * case variants, booleans, and null — is malformed. The input is never trimmed
+ * or coerced so testing stays explicit and the default stays private.
+ */
+export function resolveAuthMode(raw: unknown): AuthModeResult {
+  if (raw === undefined) return { ok: true, mode: 'required' };
+  if (raw === 'true') return { ok: true, mode: 'required' };
+  if (raw === 'false') return { ok: true, mode: 'public' };
+  return { ok: false };
+}
+
 /** Parses the credential secret, rejecting anything the worker cannot use safely. */
 export function parseCredentialConfig(raw: unknown): ConfigResult {
   if (typeof raw !== 'string') return { ok: false };

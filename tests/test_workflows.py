@@ -54,7 +54,7 @@ class WorkflowStructureTest(unittest.TestCase):
             self.assertNotIn("\nenvironment:", head, msg=name)
 
     def test_release_job_is_the_only_protected_job(self) -> None:
-        self.assertIn("    environment: apt-production", read_workflow("release.yml"))
+        self.assertIn("    environment: prod", read_workflow("release.yml"))
         self.assertNotIn("environment:", read_workflow("ci.yml"))
 
     def test_no_template_interpolation_inside_shell(self) -> None:
