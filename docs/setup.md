@@ -30,14 +30,19 @@ or bucket mutation is performed here.
 - Store `CREDENTIALS` as a **runtime** secret in the Cloudflare dashboard
   (Worker → Settings → Variables and Secrets). The gateway reads it while
   serving requests; the build never does.
-- Optional testing toggle `AUTH_REQUIRED` is exact text in Variables and
-  Secrets (a runtime variable, not a build variable and never committed):
-  absent or `"true"` keeps the credential gate, only `"false"` allows
-  anonymous artifact reads. Any other value fails closed with `503` before
-  storage or cache, except `/` which stays public. `"false"` exposes downloads
-  to anyone who can reach the Worker, so set `"true"` or delete the variable
-  immediately after testing. `keep_vars: true` in `worker/wrangler.jsonc` keeps
-  dashboard plaintext variables across deployments; secrets are unaffected.
+- The repository is deployed in **public test mode**: `worker/wrangler.jsonc`
+  commits the non-secret variable `AUTH_REQUIRED: "false"`, which is exact text
+  (a runtime variable, not a build variable). The committed config is the source
+  of truth for this value and overrides the same key set in the dashboard on
+  every deploy, so editing the dashboard alone does not change it. `keep_vars:
+  true` still preserves every **other** dashboard plaintext variable across
+  deployments; secrets are unaffected. Artifact downloads therefore need no
+  credentials and anyone who can reach the Worker can fetch them.
+- To restore the credential gate, change `AUTH_REQUIRED` to `"true"` (or remove
+  the `vars` entry) in `worker/wrangler.jsonc`, set a valid runtime
+  `CREDENTIALS` secret, and deploy. Absent or `"true"` requires credentials;
+  only `"false"` allows anonymous artifact reads, and any other value fails
+  closed with `503` before storage or cache, except `/` which stays public.
 - Check credentials before any storage or cache access (the gateway already
   does this). Invalid configuration fails closed with `503`, and the bucket is
   never exposed publicly.
@@ -94,19 +99,28 @@ stays portable. It needs no cloud secrets: the CI signing key is ephemeral and
 the Wrangler step is a dry run. Package publication and Worker deploys have
 separate owners, so the GitHub environment holds only the R2 and GPG material.
 
-## 5. Local credential and key bootstrap
+## 5. Client bootstrap
 
+The repository is in public test mode, so a client needs no credentials: fetch
+the armored key and add the source. See the installation guide served at `/` for
+the exact three steps, reproduced here for operators.
+
+- Install the armored public key with `sudo curl --fail --show-error --output
+  /etc/apt/keyrings/apt-at-home.asc <host>/key.asc`, then `sudo chmod 0644` it.
+  Debian 13's `apt-secure` accepts the `.asc` file directly; never use
+  `apt-key`, `trusted=yes`, or `--dearmor`.
 - Copy `client/personal.sources.example` to
-  `/etc/apt/sources.list.d/apt-at-home.sources`, replacing the hostname and
-  installing the repository public key at the `Signed-By` path. The path must
-  name that installed key file exactly. Never use `apt-key` or `trusted=yes`.
-- Copy `client/auth.conf.example` to `/etc/apt/auth.conf.d/apt-at-home.conf`,
-  replacing the device name and token, then `chmod 600` the file. Obtain the
-  per-device username and token from the administrator out of band; tokens stay
-  out of URLs, shell history, and logs.
-- Verify the signing key by its full trusted primary fingerprint before
-  installing it as `key.asc`, comparing it against the fingerprint received
-  through a separate channel — never a fingerprint printed by the gateway:
+  `/etc/apt/sources.list.d/apt-at-home.sources`, replacing the hostname. The
+  `Signed-By` path must name the installed key file exactly:
+  `/etc/apt/keyrings/apt-at-home.asc`.
+- Verify the signing key by its full trusted primary fingerprint, comparing it
+  against the fingerprint received through a separate channel — never a
+  fingerprint printed by the gateway: `gpg --show-keys /etc/apt/keyrings/apt-at-home.asc`.
+- If the credential gate is re-enabled, copy `client/auth.conf.example` to
+  `/etc/apt/auth.conf.d/apt-at-home.conf`, replacing the device name and token,
+  then `chmod 600` the file. Obtain the per-device username and token from the
+  administrator out of band; tokens stay out of URLs, shell history, and logs.
+- Repository verification by fingerprint:
   `APT_SIGNING_FINGERPRINT=<40-hex> uv run python -m scripts.repo verify --output dist/repo`.
   Local ephemeral builds may verify without the variable, but production
   verify and every publish require it; a missing, malformed, or mismatched
@@ -122,10 +136,14 @@ separate owners, so the GitHub environment holds only the R2 and GPG material.
 
 ## 6. WAF, limits, and alerts (limitations)
 
+- The repository is in public test mode, so every anonymous request to an
+  artifact path reaches R2 and counts against the Worker and storage request
+  quotas. Treat the hostname as a public resource and watch usage; re-enable the
+  credential gate (`AUTH_REQUIRED: "true"`) to stop anonymous traffic.
 - A Worker-side WAF, rate limit, or alert cannot guarantee blocking of
   malicious invocations on the free tier; treat them as defense in depth.
 - Keep tokens per-device and rotatable, watch Worker request logs for `401`
-  bursts, and rotate any token that may have leaked.
+  bursts while the gate is enabled, and rotate any token that may have leaked.
 - There is deliberately no `Valid-Until` on `Release`; clients do not expire
   metadata. This is a personal-repo freshness tradeoff documented in the
   manifest tooling.

@@ -220,53 +220,75 @@ describe('root page locale negotiation', () => {
 });
 
 describe('root page content', () => {
-  it('documents the support matrix, prerequisites, and ordered commands in Chinese', async () => {
+  it('renders exactly three ordered installation steps per locale', async () => {
     const fixture = await createFixture();
-    const html = await (await fixture.call(plain('/?lang=zh'))).text();
+    for (const path of ['/', '/?lang=zh']) {
+      const html = await (await fixture.call(plain(path))).text();
+      const list = html.slice(html.indexOf('<ol class="steps">'), html.indexOf('</ol>'));
+      expect((list.match(/<li>/g) ?? []).length, path).toBe(3);
+    }
+  });
+
+  it('documents the three public installation steps in English', async () => {
+    const fixture = await createFixture();
+    const html = await (await fixture.call(plain('/'))).text();
 
     expect(html).toContain('zellij');
     expect(html).toContain('starship');
     expect(html).toContain('amd64');
     expect(html).toContain('arm64');
-    expect(html).toContain('完整主密钥指纹');
-    expect(html).toContain('sudo chmod 600 /etc/apt/auth.conf.d/apt-at-home.conf');
-    expect(html).toContain('gpg --show-keys --with-fingerprint key.asc');
-    expect(html).toContain('/etc/apt/keyrings/apt-at-home.gpg');
-    expect(html).toContain('Signed-By');
-    expect(html).toContain('sudo apt install zellij starship');
-    expect(html).toContain('https://github.com/cloudiful/apt-at-home');
-  });
-
-  it('documents the same guide in English', async () => {
-    const fixture = await createFixture();
-    const html = await (await fixture.call(plain('/'))).text();
-
     expect(html).toContain('Before you start');
     expect(html).toContain('Installation steps');
-    expect(html).toContain('full trusted primary key fingerprint');
-    expect(html).toContain('sudo chmod 600 /etc/apt/auth.conf.d/apt-at-home.conf');
-    expect(html).toContain('gpg --show-keys --with-fingerprint key.asc');
-    expect(html).toContain('/etc/apt/keyrings/apt-at-home.gpg');
-    expect(html).toContain('Signed-By');
-    expect(html).toContain('sudo apt install zellij starship');
+    expect(html).toContain('full primary fingerprint');
+    expect(html).toContain('/etc/apt/keyrings/apt-at-home.asc');
+    expect(html).toContain('Signed-By: /etc/apt/keyrings/apt-at-home.asc');
+    expect(html).toContain('sudo apt update &amp;&amp; sudo apt install zellij starship');
     expect(html).toContain('https://github.com/cloudiful/apt-at-home');
   });
 
-  it('avoids token-bearing shell patterns and unauthenticated shortcuts', async () => {
+  it('documents the same guide in Chinese', async () => {
+    const fixture = await createFixture();
+    const html = await (await fixture.call(plain('/?lang=zh'))).text();
+
+    expect(html).toContain('zellij');
+    expect(html).toContain('starship');
+    expect(html).toContain('完整主密钥指纹');
+    expect(html).toContain('/etc/apt/keyrings/apt-at-home.asc');
+    expect(html).toContain('Signed-By: /etc/apt/keyrings/apt-at-home.asc');
+    expect(html).toContain('sudo apt update &amp;&amp; sudo apt install zellij starship');
+    expect(html).toContain('https://github.com/cloudiful/apt-at-home');
+  });
+
+  it('serves an anonymous key download without unsafe shortcuts', async () => {
     const fixture = await createFixture();
     for (const path of ['/?lang=en', '/?lang=zh']) {
       const html = await (await fixture.call(plain(path))).text();
       expect(html, path).not.toContain('apt-key');
       expect(html, path).not.toContain('trusted=yes');
+      expect(html, path).not.toContain('--dearmor');
+      expect(html, path).not.toContain('apt-at-home.gpg');
       expect(html, path).not.toContain('<script');
       expect(html, path).not.toContain('<form');
 
       const start = html.indexOf('curl --fail');
       expect(start, path).toBeGreaterThan(-1);
       const curlLine = html.slice(start).split('\n')[0] ?? '';
-      expect(curlLine, path).toContain('--fail --show-error --user DEVICE --output key.asc');
+      expect(curlLine, path).toContain(
+        '--fail --show-error --output /etc/apt/keyrings/apt-at-home.asc',
+      );
       expect(curlLine, path).not.toContain('--location');
+      expect(curlLine, path).not.toContain('--user');
     }
+  });
+
+  it('keeps the fingerprint and device-credential guidance collapsed by default', async () => {
+    const fixture = await createFixture();
+    const html = await (await fixture.call(plain('/?lang=en'))).text();
+    expect(html.match(/<details class="more">/g) ?? []).toHaveLength(2);
+    expect(html).not.toContain('<details open');
+    expect(html).toContain('gpg --show-keys /etc/apt/keyrings/apt-at-home.asc');
+    expect(html).toContain('/etc/apt/auth.conf.d/apt-at-home.conf');
+    expect(html).toContain('machine https://apt.example.test login DEVICE password TOKEN');
   });
 
   it('escapes a hostile origin instead of interpolating markup', () => {

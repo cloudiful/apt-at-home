@@ -7,7 +7,7 @@
  * is escaped inside the command builder before interpolation, so a crafted
  * hostname can never inject markup into the page.
  */
-import { renderInstallSteps } from './homepage-commands.js';
+import { renderAuthDetails, renderInstallSteps } from './homepage-commands.js';
 import { homepageCopy as en } from './homepage-content.en.js';
 import { homepageCopy as zh } from './homepage-content.zh.js';
 import type { InstallStepsCopy } from './homepage-commands.js';
@@ -72,6 +72,7 @@ export function renderHomepageBody(origin: string, locale: Locale): string {
     <ol class="steps">
 ${renderInstallSteps(origin, copy.steps)}
     </ol>
+${renderAuthDetails(origin, copy.steps.auth)}
   </section>
 
   <footer>

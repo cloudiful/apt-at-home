@@ -7,37 +7,39 @@
 import type { HomepageCopy } from './homepage-content.js';
 
 export const homepageCopy: HomepageCopy = {
-  lede: '面向 Debian 13 的私有、逐设备认证的 APT 软件源，提供 <strong>zellij</strong> 与 <strong>starship</strong> 的 amd64、arm64 软件包。',
+  lede: '面向 Debian 13 的公开测试 APT 软件源，提供 <strong>zellij</strong> 与 <strong>starship</strong> 的 amd64、arm64 软件包。',
   languageLabel: '语言',
   prerequisites: {
     heading: '开始之前',
-    body: '请向管理员获取本设备专属的<strong>用户名与令牌</strong>，以及<strong>完整的受信任主密钥指纹</strong>。软件源必须已完成首次发布，否则下面的命令没有可安装的内容。本页只说明如何配置，并不表示软件源已经就绪。',
+    body: '本指南需要已安装 <code>curl</code> 的 Debian 13，只说明如何配置客户端。软件源必须已完成首次发布，否则没有可安装的内容。当前下载不需要凭据，因此该主机名等同于公开资源。',
   },
   stepsHeading: '安装步骤',
   steps: {
-    prepare: {
-      title: '准备凭据文件',
-      intro: '创建密钥环与认证目录，用 <code>sudo touch</code> 建立文件后再 <code>sudo chmod 600</code>，然后用 <code>sudoedit</code> 写入。下面只是模板，<code>DEVICE</code> 与 <code>TOKEN</code> 是占位符：不要把真实令牌写进可执行脚本、命令行参数或 URL，服务器不提供任何凭据创建脚本。',
-      entryLabel: '文件内容（<code>machine</code> 使用完整来源地址）：',
-    },
     key: {
-      title: '获取并校验签名公钥',
-      fetchIntro: '用 <code>curl</code> 取回公钥（由 curl 提示输入密码，不使用 <code>--location</code>）：',
-      verifyIntro: '在导入前，用单独渠道收到的<strong>完整主密钥指纹</strong>逐字比对，不要信任本页或网关给出的指纹。确认一致后再转换为二进制密钥环并安装：',
-      installIntro: 'apt 使用的是二进制 <code>.gpg</code> 密钥环，而不是 armored 的 <code>.asc</code>；也不要把 apt 的 <code>auth.conf</code> 当作 curl 的 netrc 使用，两者的匹配语法不同。',
+      title: '安装签名公钥',
+      intro: '将 armored 公钥下载到 apt 信任的密钥环：',
+      fingerprintSummary: '校验公钥指纹（可选）',
+      fingerprintNote: '上面的下载会为获取公钥而信任本服务器。请用单独、独立可信渠道获得的完整主密钥指纹逐字比对，不要信任本页或网关给出的指纹。',
     },
     sources: {
       title: '添加软件源',
-      intro: '用 <code>sudoedit /etc/apt/sources.list.d/apt-at-home.sources</code> 写入 Deb822 配置：',
+      intro: '写入 Deb822 源条目，使用上面安装的公钥签名：',
       architectureNote: '架构按本机 dpkg 自动选择，不需要强制指定外来架构。',
     },
     install: {
       title: '更新并安装',
+      intro: '安装已发布的软件包：',
+    },
+    auth: {
+      summary: '设备凭据（仅在启用认证时）',
+      intro: '当前软件源匿名提供下载。若管理员重新启用凭据校验，请写入凭据文件并使用设备凭据获取公钥；源条目本身不变。',
+      fileLabel: '文件内容（<code>machine</code> 使用完整来源地址）：',
+      curlNote: '启用校验后，获取公钥改用设备名并提示输入密码，而非上面的匿名命令：',
     },
   },
   footer: {
     before: '更多说明见',
     linkText: '公开仓库的 README 与 docs/setup.md',
-    after: '。软件包、索引与签名密钥仍保持私有，只有本页公开。',
+    after: '。仓库处于公开测试模式时，软件包、索引与签名密钥无需凭据即可下载。',
   },
 };

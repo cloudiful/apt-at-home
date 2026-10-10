@@ -80,7 +80,8 @@ uv run python -m scripts.repo publish --output dist/repo --bucket <name>
 - The S3 endpoint and credentials come from `APT_S3_*`/`AWS_*` environment
   variables, never from CLI secrets or URLs.
 - The GitHub `release.yml` publish job runs manual-only in the `prod`
-  environment with the R2 and signing secrets. Published artifacts stay behind
-  the credential gate by default; testing without credentials uses the runtime
-  `AUTH_REQUIRED` text toggle (`"false"` exposes downloads, `"true"` or
-  deleted re-enables auth — see setup).
+  environment with the R2 and signing secrets. Published artifacts are public
+  while the repository is in test mode: `worker/wrangler.jsonc` commits
+  `AUTH_REQUIRED: "false"`, and that committed config is the source of truth on
+  deploy. Restore the credential gate by setting it to `"true"` (or removing the
+  `vars` entry) and deploying with a valid runtime `CREDENTIALS` — see setup.

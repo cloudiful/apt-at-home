@@ -11,6 +11,7 @@ interface WranglerConfig {
   readonly preview_urls?: boolean;
   readonly keep_vars?: boolean;
   readonly routes?: unknown;
+  /** Committed non-secret variables; the public toggle is the only one. */
   readonly vars?: Record<string, string>;
   readonly r2_buckets: ReadonlyArray<{
     readonly binding: string;
@@ -55,13 +56,19 @@ describe('deployment base config', () => {
     expect(readConfig().account_id).toBe('12412d5b061683494ea3e5c217d6a961');
   });
 
-  it('carries no endpoint, no credential and no inline secret', () => {
-    for (const forbidden of ['r2.dev', 'http://', 'https://', 'api_token', 'secret']) {
+  it('binds exactly the non-secret public AUTH_REQUIRED text toggle', () => {
+    const config = readConfig();
+    expect(config.vars).toEqual({ AUTH_REQUIRED: 'false' });
+    expect(typeof config.vars?.AUTH_REQUIRED).toBe('string');
+    for (const forbidden of ['api_token', 'API_TOKEN', 'CREDENTIALS', 'secret']) {
       expect(wranglerSource, forbidden).not.toContain(forbidden);
     }
-    expect(wranglerSource).not.toContain('"vars"');
-    expect(wranglerSource).not.toContain('AUTH_REQUIRED');
-    expect(readConfig().vars).toBeUndefined();
+  });
+
+  it('carries no endpoint in the base config', () => {
+    for (const forbidden of ['r2.dev', 'http://', 'https://']) {
+      expect(wranglerSource, forbidden).not.toContain(forbidden);
+    }
   });
 
   it('preserves dashboard plaintext vars across deployments', () => {

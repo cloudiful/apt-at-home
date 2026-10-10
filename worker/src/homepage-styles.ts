@@ -109,6 +109,25 @@ p {
   min-width: 0;
   padding-left: 0.25rem;
 }
+details {
+  min-width: 0;
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+details > p {
+  margin: 0.5rem 0 0;
+}
 pre {
   margin: 0.5rem 0;
   padding: 0.75rem;

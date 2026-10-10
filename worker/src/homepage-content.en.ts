@@ -7,37 +7,39 @@
 import type { HomepageCopy } from './homepage-content.js';
 
 export const homepageCopy: HomepageCopy = {
-  lede: 'A private, per-device authenticated APT repository for Debian 13, publishing <strong>zellij</strong> and <strong>starship</strong> packages for amd64 and arm64.',
+  lede: 'A public, test-mode APT repository for Debian 13, publishing <strong>zellij</strong> and <strong>starship</strong> packages for amd64 and arm64.',
   languageLabel: 'Language',
   prerequisites: {
     heading: 'Before you start',
-    body: 'Ask the administrator for this device’s <strong>username and token</strong> and for the <strong>full trusted primary key fingerprint</strong>. The repository must have completed its first publish, or the commands below have nothing to install. This page only explains how to configure a client; it does not mean the repository is ready.',
+    body: 'This guide needs Debian 13 with <code>curl</code> already installed, and configures a client only. The repository must have completed its first publish, or there is nothing to install yet. Downloads currently require no credentials, so treat the hostname as a public resource.',
   },
   stepsHeading: 'Installation steps',
   steps: {
-    prepare: {
-      title: 'Prepare the credential file',
-      intro: 'Create the keyring and authentication directories, then use <code>sudo touch</code> followed by <code>sudo chmod 600</code>, and write the file with <code>sudoedit</code>. The values below are placeholders: <code>DEVICE</code> and <code>TOKEN</code> are not real. Never put a real token in an executable script, a command-line argument, or a URL; the server offers no credential-creation script.',
-      entryLabel: 'File contents (<code>machine</code> uses the full source address):',
-    },
     key: {
-      title: 'Fetch and verify the signing key',
-      fetchIntro: 'Fetch the public key with <code>curl</code> (curl prompts for the password; <code>--location</code> is not used):',
-      verifyIntro: 'Before importing, compare <strong>the full primary key fingerprint</strong> received through a separate channel character by character; do not trust a fingerprint printed here or by the gateway. Once it matches, convert to a binary keyring and install it:',
-      installIntro: 'apt uses the binary <code>.gpg</code> keyring, not the armored <code>.asc</code> file, and apt’s <code>auth.conf</code> is not a curl netrc; their matching syntax differs.',
+      title: 'Install the signing key',
+      intro: 'Download the armored public key into the keyring apt trusts for this repository:',
+      fingerprintSummary: 'Verify the key fingerprint (optional)',
+      fingerprintNote: 'The download above trusts this server for the key. Compare the full primary fingerprint with a value you received through a separate, independently trusted channel; never trust a fingerprint printed by this page or the gateway.',
     },
     sources: {
       title: 'Add the repository',
-      intro: 'Write the Deb822 configuration with <code>sudoedit /etc/apt/sources.list.d/apt-at-home.sources</code>:',
+      intro: 'Write the Deb822 source entry, signed by the key installed above:',
       architectureNote: 'The architecture is selected automatically from the local dpkg; no foreign architecture has to be forced.',
     },
     install: {
       title: 'Update and install',
+      intro: 'Install the published packages:',
+    },
+    auth: {
+      summary: 'Device credentials (only when authentication is enabled)',
+      intro: 'This repository currently serves downloads anonymously. If the administrator re-enables the credential gate, write a credential file and fetch the key with your device credentials instead; the source entry does not change.',
+      fileLabel: 'File contents (<code>machine</code> uses the full source address):',
+      curlNote: 'With the gate enabled, the key fetch uses your device name and prompts for the password instead of the anonymous command above:',
     },
   },
   footer: {
     before: 'See the ',
     linkText: 'README and docs/setup.md in the public repository',
-    after: ' for more detail. Packages, indexes, and the signing key stay private; this page is the only public one.',
+    after: ' for operator detail. Packages, indexes, and the signing key are served without credentials while the repository stays in public test mode.',
   },
 };

@@ -7,6 +7,9 @@
   "workers_dev": false,
   "preview_urls": false,
   "keep_vars": true,
+  "vars": {
+    "AUTH_REQUIRED": "false"
+  },
   "r2_buckets": [
     {
       "binding": "BUCKET",
