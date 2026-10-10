@@ -5,6 +5,8 @@ import { renderHomepageDocument } from '../src/homepage.js';
 import { authorized, createEnv, FakeContext, plain } from './fakes.js';
 import { CLIENT, TOKEN, createFixture } from './harness.js';
 
+const encoder = new TextEncoder();
+
 describe('public root landing page', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -56,7 +58,7 @@ describe('public root landing page', () => {
     const fixture = await createFixture();
     vi.stubGlobal('caches', { default: fixture.cache.asBinding() });
     await fixture.call(plain('/'));
-    await fixture.call(plain('/'));
+    await fixture.call(plain('/?lang=zh'));
     expect(fixture.bucket.calls).toEqual([]);
     expect(fixture.cache.lookups).toEqual([]);
     expect(fixture.cache.writes).toEqual([]);
@@ -86,7 +88,7 @@ describe('public root landing page', () => {
     expect(fixture.bucket.calls).toEqual([]);
   });
 
-  it('ignores the query string and never reflects it', async () => {
+  it('ignores unrelated query values and never reflects them', async () => {
     const fixture = await createFixture();
     const response = await fixture.call(
       plain('/?token=SECRET-QUERY-VALUE&device=laptop&path=/key.asc'),
@@ -127,10 +129,100 @@ describe('public root landing page', () => {
   });
 });
 
-describe('root page content', () => {
-  it('documents the support matrix, prerequisites, and ordered commands', async () => {
+describe('root page locale negotiation', () => {
+  const withHeader = (path: string, acceptLanguage: string): Request =>
+    new Request(`https://apt.example.test${path}`, {
+      headers: { 'accept-language': acceptLanguage },
+    });
+
+  it('serves English by default and advertises the language', async () => {
     const fixture = await createFixture();
-    const html = await (await fixture.call(plain('/'))).text();
+    const response = await fixture.call(plain('/'));
+    expect(response.headers.get('Content-Language')).toBe('en');
+    expect(response.headers.get('Vary')).toBe('Accept-Language');
+    expect(await response.text()).toContain('<html lang="en">');
+  });
+
+  it('serves Chinese when the browser prefers it', async () => {
+    const fixture = await createFixture();
+    const response = await fixture.call(withHeader('/', 'zh-CN,zh;q=0.9,en;q=0.8'));
+    expect(response.headers.get('Content-Language')).toBe('zh-CN');
+    expect(await response.text()).toContain('<html lang="zh-CN">');
+  });
+
+  it('lets a supported override win over the header, in both directions', async () => {
+    const fixture = await createFixture();
+    const zh = await fixture.call(withHeader('/?lang=zh', 'en-US,en;q=0.9'));
+    expect(zh.headers.get('Content-Language')).toBe('zh-CN');
+    const en = await fixture.call(withHeader('/?lang=en', 'zh-CN,zh;q=0.9'));
+    expect(en.headers.get('Content-Language')).toBe('en');
+  });
+
+  it('accepts a case-insensitive override', async () => {
+    const fixture = await createFixture();
+    const response = await fixture.call(plain('/?lang=EN'));
+    expect(response.headers.get('Content-Language')).toBe('en');
+  });
+
+  it('ignores an unsupported override and never reflects it', async () => {
+    const fixture = await createFixture();
+    const response = await fixture.call(
+      withHeader('/?lang=%3Cscript%3Ealert(1)%3C/script%3E', 'zh-CN'),
+    );
+    const html = await response.text();
+    expect(response.headers.get('Content-Language')).toBe('zh-CN');
+    expect(html).not.toContain('<script>');
+    expect(html).not.toContain('%3Cscript');
+  });
+
+  it('marks the active locale link and normalizes the switch hrefs', async () => {
+    const fixture = await createFixture();
+    const html = await (await fixture.call(plain('/?lang=zh'))).text();
+    expect(html).toContain('href="?lang=en"');
+    expect(html).toContain('href="?lang=zh"');
+    expect(html).toMatch(/<a href="\?lang=zh"[^>]*aria-current="true"/);
+    expect(html).not.toMatch(/<a href="\?lang=en"[^>]*aria-current/);
+  });
+
+  it('sends a Content-Length matching each locale body and differing between them', async () => {
+    const fixture = await createFixture();
+    const en = await fixture.call(plain('/?lang=en'));
+    const zh = await fixture.call(plain('/?lang=zh'));
+    const enBody = await en.text();
+    const zhBody = await zh.text();
+    expect(Number(en.headers.get('Content-Length'))).toBe(encoder.encode(enBody).byteLength);
+    expect(Number(zh.headers.get('Content-Length'))).toBe(encoder.encode(zhBody).byteLength);
+    expect(en.headers.get('Content-Length')).not.toBe(zh.headers.get('Content-Length'));
+  });
+
+  it('answers HEAD with the GET headers for each locale', async () => {
+    const fixture = await createFixture();
+    for (const path of ['/', '/?lang=en', '/?lang=zh']) {
+      const get = await fixture.call(plain(path));
+      const head = await fixture.call(plain(path, { method: 'HEAD' }));
+      expect(head.status, path).toBe(200);
+      expect([...head.headers], path).toEqual([...get.headers]);
+      expect(await head.text()).toBe('');
+    }
+  });
+
+  it('shares identical command blocks across locales', async () => {
+    const fixture = await createFixture();
+    const blocksFor = async (path: string): Promise<string[]> => {
+      const html = await (await fixture.call(plain(path))).text();
+      return html.match(/<pre><code>[\s\S]*?<\/code><\/pre>/g) ?? [];
+    };
+    const en = await blocksFor('/?lang=en');
+    const zh = await blocksFor('/?lang=zh');
+    expect(en.length).toBeGreaterThan(0);
+    expect(zh).toEqual(en);
+  });
+});
+
+describe('root page content', () => {
+  it('documents the support matrix, prerequisites, and ordered commands in Chinese', async () => {
+    const fixture = await createFixture();
+    const html = await (await fixture.call(plain('/?lang=zh'))).text();
 
     expect(html).toContain('zellij');
     expect(html).toContain('starship');
@@ -145,26 +237,48 @@ describe('root page content', () => {
     expect(html).toContain('https://github.com/cloudiful/apt-at-home');
   });
 
-  it('avoids token-bearing shell patterns and unauthenticated shortcuts', async () => {
+  it('documents the same guide in English', async () => {
     const fixture = await createFixture();
     const html = await (await fixture.call(plain('/'))).text();
-    expect(html).not.toContain('apt-key');
-    expect(html).not.toContain('trusted=yes');
-    expect(html).not.toContain('<script');
-    expect(html).not.toContain('<form');
 
-    const start = html.indexOf('curl --fail');
-    expect(start).toBeGreaterThan(-1);
-    const curlLine = html.slice(start).split('\n')[0] ?? '';
-    expect(curlLine).toContain('--fail --show-error --user DEVICE --output key.asc');
-    expect(curlLine).not.toContain('--location');
+    expect(html).toContain('Before you start');
+    expect(html).toContain('Installation steps');
+    expect(html).toContain('full trusted primary key fingerprint');
+    expect(html).toContain('sudo chmod 600 /etc/apt/auth.conf.d/apt-at-home.conf');
+    expect(html).toContain('gpg --show-keys --with-fingerprint key.asc');
+    expect(html).toContain('/etc/apt/keyrings/apt-at-home.gpg');
+    expect(html).toContain('Signed-By');
+    expect(html).toContain('sudo apt install zellij starship');
+    expect(html).toContain('https://github.com/cloudiful/apt-at-home');
+  });
+
+  it('avoids token-bearing shell patterns and unauthenticated shortcuts', async () => {
+    const fixture = await createFixture();
+    for (const path of ['/?lang=en', '/?lang=zh']) {
+      const html = await (await fixture.call(plain(path))).text();
+      expect(html, path).not.toContain('apt-key');
+      expect(html, path).not.toContain('trusted=yes');
+      expect(html, path).not.toContain('<script');
+      expect(html, path).not.toContain('<form');
+
+      const start = html.indexOf('curl --fail');
+      expect(start, path).toBeGreaterThan(-1);
+      const curlLine = html.slice(start).split('\n')[0] ?? '';
+      expect(curlLine, path).toContain('--fail --show-error --user DEVICE --output key.asc');
+      expect(curlLine, path).not.toContain('--location');
+    }
   });
 
   it('escapes a hostile origin instead of interpolating markup', () => {
-    const html = renderHomepageDocument('https://evil"</code><script>alert(1)</script>');
-    expect(html).not.toContain('<script>');
-    expect(html).toContain('&lt;script&gt;');
-    expect(html).toContain('&quot;');
+    for (const locale of ['en', 'zh'] as const) {
+      const html = renderHomepageDocument(
+        'https://evil"</code><script>alert(1)</script>',
+        locale,
+      );
+      expect(html, locale).not.toContain('<script>');
+      expect(html, locale).toContain('&lt;script&gt;');
+      expect(html, locale).toContain('&quot;');
+    }
   });
 
   it('escapes markup-significant characters in a request origin', async () => {

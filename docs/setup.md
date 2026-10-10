@@ -35,7 +35,9 @@ or bucket mutation is performed here.
   never exposed publicly.
 - The exact root path `/` is the one public exception: `GET`/`HEAD /` serves a
   static installation guide before the credential check, so a misconfigured
-  runtime still explains how to bootstrap a client. Every other path stays
+  runtime still explains how to bootstrap a client. The guide follows the
+  browser's `Accept-Language` (English by default), and `?lang=en` or `?lang=zh`
+  overrides it. Every other path stays
   behind the credential gate, and a `503` there means the runtime credentials
   secret is missing or unusable — fix it under Worker → Settings → Variables
   and Secrets. The guide only installs anything after the first successful
