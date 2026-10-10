@@ -30,20 +30,30 @@ def generate_packages(pool_dir: Path, dists_arch_dir: Path, debs: list[Path]) ->
     packages_path = dists_arch_dir / "Packages"
     # apt-ftparchive resolves filenames relative to its working directory, so
     # invoke it from the pool directory with bare file names for stable output.
+    # One call per deb: extra positionals are parsed as override files, which
+    # silently drops every deb after the first one.
     rel_names = [Path(d).name for d in sorted(debs, key=lambda p: p.name)]
-    proc = run(
-        ["apt-ftparchive", "packages", *rel_names],
-        cwd=pool_dir,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"apt-ftparchive packages failed: {proc.stderr.strip()}")
+    stanzas: list[str] = []
+    for name in rel_names:
+        proc = run(
+            ["apt-ftparchive", "packages", name],
+            cwd=pool_dir,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"apt-ftparchive packages failed for {name}: {proc.stderr.strip()}")
+        stanza = proc.stdout.strip()
+        if not stanza:
+            raise RuntimeError(f"apt-ftparchive produced no stanza for {name}")
+        stanzas.append(stanza)
     # Normalize: apt-ftparchive emits Filename relative to the archive root.
     lines: list[str] = []
-    for line in proc.stdout.splitlines():
-        if line.startswith("Filename: "):
-            lines.append(f"Filename: pool/{line[len('Filename: '):].strip()}")
-        else:
-            lines.append(line)
+    for stanza in stanzas:
+        for line in stanza.splitlines():
+            if line.startswith("Filename: "):
+                lines.append(f"Filename: pool/{line[len('Filename: '):].strip()}")
+            else:
+                lines.append(line)
+        lines.append("")
     packages_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     gz_path = dists_arch_dir / "Packages.gz"
     _write_gzip_deterministic(packages_path, gz_path)

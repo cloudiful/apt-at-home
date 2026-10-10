@@ -1,3 +1,4 @@
+import gzip
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,6 +7,23 @@ from scripts.common import sha256_file
 from scripts.deb import build_deb, stage_package
 from scripts.manifest import load_manifest
 from scripts.metadata import generate_packages, generate_release, write_indices
+
+
+def _fields(stanza: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for line in stanza.splitlines():
+        if ": " in line:
+            key, value = line.split(": ", 1)
+            fields[key.strip()] = value.strip()
+    return fields
+
+
+def _packages_names(text: str) -> set[str]:
+    return {
+        _fields(stanza)["Package"]
+        for stanza in text.strip().split("\n\n")
+        if _fields(stanza).get("Package")
+    }
 
 
 def _fake_debs(tmpdir: Path) -> tuple[list[Path], Path]:
@@ -33,8 +51,6 @@ def _fake_debs(tmpdir: Path) -> tuple[list[Path], Path]:
 
 class MetadataTest(unittest.TestCase):
     def test_packages_release_and_indices(self) -> None:
-        from scripts.manifest import deb_filename
-
         manifest = load_manifest()
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -48,7 +64,13 @@ class MetadataTest(unittest.TestCase):
                 self.assertEqual(len(arch_debs), 2)
                 arch_dir = output / "releases" / release_id / "dists" / "stable" / "main" / f"binary-{arch}"
                 packages, packages_gz = generate_packages(pool, arch_dir, arch_debs)
-                self.assertIn(f"Architecture: {arch}", packages.read_text())
+                self.assertEqual(_packages_names(packages.read_text()), {pkg.name for pkg in manifest.packages})
+                for stanza in packages.read_text().strip().split("\n\n"):
+                    fields = _fields(stanza)
+                    self.assertEqual(fields["Architecture"], arch)
+                    self.assertTrue(fields["Filename"].startswith("pool/"))
+                    self.assertTrue((pool / fields["Filename"][len("pool/"):]).exists())
+                self.assertEqual(len(packages.read_text().strip().split("\n\n")), 2)
                 packages_files[arch] = [packages, packages_gz]
                 release_inputs.append((packages, f"main/binary-{arch}/Packages"))
                 release_inputs.append((packages_gz, f"main/binary-{arch}/Packages.gz"))
@@ -66,8 +88,23 @@ class MetadataTest(unittest.TestCase):
                 digest = sha256_file(served)
                 self.assertTrue((output / "indices" / arch / "SHA256" / digest).exists())
 
+    def test_input_order_does_not_change_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            _, pool = _fake_debs(tmpdir)
+            arch_debs = sorted(pool.glob("*_amd64.deb"))
+            self.assertEqual(len(arch_debs), 2)
+            forward, _ = generate_packages(pool, tmpdir / "fwd", arch_debs)
+            backward, _ = generate_packages(pool, tmpdir / "rev", list(reversed(arch_debs)))
+            self.assertEqual(forward.read_bytes(), backward.read_bytes())
+            stanzas = forward.read_text().strip().split("\n\n")
+            self.assertEqual(len(stanzas), 2)
+            names = [_fields(s)["Package"] for s in stanzas]
+            self.assertEqual(names, sorted(names))
+            for deb in arch_debs:
+                self.assertTrue(any(deb.name in s for s in stanzas))
+
     def test_gzip_is_deterministic(self) -> None:
-        manifest = load_manifest()
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             _, pool = _fake_debs(tmpdir)
@@ -78,6 +115,9 @@ class MetadataTest(unittest.TestCase):
             second_packages, second_gz = generate_packages(pool, second, arch_debs)
             self.assertEqual(first_gz.read_bytes(), second_gz.read_bytes())
             self.assertEqual(first_packages.read_bytes(), second_packages.read_bytes())
+            self.assertEqual(
+                gzip.decompress(first_gz.read_bytes()), first_packages.read_bytes()
+            )
 
 
 if __name__ == "__main__":

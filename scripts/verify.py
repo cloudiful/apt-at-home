@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .common import sha256_file, sha512_file
 from .fingerprint import check_key_matches_pin
+from .package_index import check_arch_packages, pool_debs_for_arch
 from .sign import IsolatedHomedir, import_key, verify_clearsign, verify_detached
 
 ARCHES = ("amd64", "arm64")
@@ -92,7 +93,7 @@ def verify_tree(
             raise ValueError(f"SHA512 mismatch for {rel}")
     findings.append(f"verified {len(sha256_entries)} hashed metadata files")
 
-    # Each Packages file must reference pool .debs that exist with matching hashes.
+    # Each Packages file must list exactly the pool .debs of its own architecture.
     pool_files = {p.name: p for p in (output_root / "pool").glob("*.deb")}
     if len(pool_files) != 4:
         raise ValueError(f"pool must hold exactly four .deb files, found {len(pool_files)}")
@@ -100,27 +101,13 @@ def verify_tree(
         packages_path = dists / "main" / f"binary-{arch}" / "Packages"
         if not packages_path.exists():
             raise ValueError(f"missing Packages for {arch}")
-        text = packages_path.read_text(encoding="utf-8")
-        if f"Architecture: {arch}" not in text:
-            raise ValueError(f"Packages for {arch} missing Architecture entry")
-        # Validate Filename/SHA256/Size stanzas against pool bytes.
-        for stanza in text.strip().split("\n\n"):
-            fields: dict[str, str] = {}
-            for line in stanza.splitlines():
-                if ": " in line:
-                    key, value = line.split(": ", 1)
-                    fields[key.strip()] = value.strip()
-            if "Filename" not in fields:
-                continue
-            filename = fields["Filename"]
-            if not filename.startswith("pool/"):
-                raise ValueError(f"Packages Filename must be pool-relative, got: {filename}")
-            deb = output_root / filename
-            if not deb.exists():
-                raise ValueError(f"Packages references missing pool file: {filename}")
-            if "SHA256" in fields and sha256_file(deb) != fields["SHA256"].lower():
-                raise ValueError(f"pool hash mismatch for {filename}")
-    findings.append("pool Packages references valid")
+        count = check_arch_packages(
+            packages_path.read_text(encoding="utf-8"),
+            arch=arch,
+            output_root=output_root,
+            expected_filenames=pool_debs_for_arch(output_root, arch),
+        )
+        findings.append(f"Packages for {arch} lists all {count} pool packages")
 
     # By-hash indices must match the served Packages bytes.
     for arch in ARCHES:
