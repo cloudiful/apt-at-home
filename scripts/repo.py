@@ -6,16 +6,16 @@ import argparse
 import json
 import os
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .build import build_all
-from .fingerprint import expected_fingerprint_from_env, normalize_fingerprint
-from .manifest import deb_filename, default_manifest_path, load_manifest
-from .metadata import ARCHES, generate_packages, generate_release, write_indices
+from .fingerprint import expected_fingerprint_from_env
+from .manifest import parse_manifest
 from .publish import publish_tree
-from .sign import IsolatedHomedir, export_public_key, import_key, sign_release
+from .publish_guard import guard_publish
+from .release_build import build_release
+from .release_manifest import MANIFEST_NAME, load_manifest_data
+from .restore import s3_source
 from .verify import verify_tree
 
 
@@ -36,64 +36,27 @@ def _key_material_from_env() -> tuple[Path | None, str | None]:
 
 
 def cmd_build(args: argparse.Namespace) -> int:
-    manifest = load_manifest(Path(args.manifest) if args.manifest else None)
     output: Path = Path(args.output)
+    env_key_file, env_key_id = _key_material_from_env()
+    signing_key = Path(args.signing_key_file) if args.signing_key_file else env_key_file
+    key_id = args.key_id or env_key_id
+    if signing_key is not None and not signing_key.exists():
+        print(f"signing key file not found: {signing_key}", file=sys.stderr)
+        return 1
     release_id = _release_id(args.release_id)
     cache_dir = Path(args.cache_dir) if args.cache_dir else output.parent / "cache" / "upstream"
-    pool_dir = output / "pool"
-
-    debs = build_all(manifest, pool_dir=pool_dir, cache_dir=cache_dir)
-
-    # Group debs per architecture for apt-ftparchive.
-    by_arch: dict[str, list[Path]] = {arch: [] for arch in ARCHES}
-    for deb in debs:
-        for arch in ARCHES:
-            if deb.name.endswith(f"_{arch}.deb"):
-                by_arch[arch].append(deb)
-    packages_files: dict[str, list[Path]] = {}
-    release_inputs: list[tuple[Path, str]] = []
-    for arch in ARCHES:
-        arch_dir = output / "releases" / release_id / "dists" / "stable" / "main" / f"binary-{arch}"
-        packages, packages_gz = generate_packages(pool_dir, arch_dir, by_arch[arch])
-        packages_files[arch] = [packages, packages_gz]
-        release_inputs.append((packages, f"main/binary-{arch}/Packages"))
-        release_inputs.append((packages_gz, f"main/binary-{arch}/Packages.gz"))
-    release_file = generate_release(output_root=output, release_id=release_id, files=release_inputs)
-    write_indices(output_root=output, release_id=release_id, packages_files=packages_files)
-
-    key_file_opt, key_id_opt = _key_material_from_env()
-    cli_key_file = Path(args.signing_key_file) if args.signing_key_file else None
-    signing_key = cli_key_file or key_file_opt
-    signing_key_id = args.key_id or key_id_opt
-    with IsolatedHomedir() as home:
-        if signing_key is not None:
-            if not signing_key.exists():
-                print(f"signing key file not found: {signing_key}", file=sys.stderr)
-                return 1
-            import_key(home, signing_key)
-            old = os.environ.get("GNUPGHOME")
-            os.environ["GNUPGHOME"] = str(home)
-            try:
-                sign_release(release_file=release_file, key_id=signing_key_id)
-            finally:
-                if old is None:
-                    os.environ.pop("GNUPGHOME", None)
-                else:
-                    os.environ["GNUPGHOME"] = old
-            public_key = output / "key.asc"
-            old2 = os.environ.get("GNUPGHOME")
-            os.environ["GNUPGHOME"] = str(home)
-            try:
-                export_public_key(homedir=home, key_id=signing_key_id, dest=public_key)
-            finally:
-                if old2 is None:
-                    os.environ.pop("GNUPGHOME", None)
-                else:
-                    os.environ["GNUPGHOME"] = old2
-        else:
-            print("no signing key provided; Release left unsigned (verify will fail until signed)",
-                  file=sys.stderr)
-    (output / "current.json").write_text(json.dumps({"release": release_id}) + "\n", encoding="utf-8")
+    try:
+        debs = build_release(
+            output_root=output,
+            release_id=release_id,
+            cache_dir=cache_dir,
+            manifest_path=Path(args.manifest) if args.manifest else None,
+            signing_key_file=signing_key,
+            key_id=key_id,
+        )
+    except Exception as exc:
+        print(f"build failed: {exc}", file=sys.stderr)
+        return 1
     print(f"built release {release_id} with {len(debs)} packages")
     for deb in sorted(debs):
         print(f"  pool/{deb.name}")
@@ -139,6 +102,19 @@ def cmd_publish(args: argparse.Namespace) -> int:
         expected = expected_fingerprint_from_env()
     except Exception as exc:
         print(f"publish failed: {exc}", file=sys.stderr)
+        return 1
+    try:
+        candidate = parse_manifest(
+            load_manifest_data(output / "releases" / release_id / MANIFEST_NAME)
+        )
+        guard_publish(
+            candidate=candidate,
+            source=s3_source(bucket, endpoint=args.endpoint or None),
+            fingerprint=expected,
+            allow_key_rotation=bool(args.allow_key_rotation),
+        )
+    except Exception as exc:
+        print(f"publish refused: {exc}", file=sys.stderr)
         return 1
     try:
         uploaded = publish_tree(

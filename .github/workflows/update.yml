@@ -1,0 +1,92 @@
+name: update
+
+on:
+  schedule:
+    # Every six hours, off the hour so scheduled runs do not pile onto the
+    # top of the hour. The run is a no-op unless upstream moved.
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Plan only. Set false to build, sign, and publish."
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+permissions:
+  contents: read
+
+# The same group as the manual release workflow: automatic updates and manual
+# releases must never move the release pointer at the same time.
+concurrency:
+  group: apt-production-release
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update to the latest stable upstream releases
+    # Production publication runs from the default branch only. A manual run on
+    # any other ref stops here rather than publishing from unreviewed code.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    container: debian:13
+    environment: prod
+    env:
+      APT_S3_BUCKET: ${{ secrets.APT_S3_BUCKET }}
+      APT_S3_ENDPOINT: ${{ secrets.APT_S3_ENDPOINT }}
+      APT_S3_REGION: ${{ secrets.APT_S3_REGION }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.APT_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.APT_S3_SECRET_ACCESS_KEY }}
+      APT_SIGNING_FINGERPRINT: ${{ secrets.APT_SIGNING_FINGERPRINT }}
+      UV_DEFAULT_INDEX: https://pypi.org/simple
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install system tools
+        run: apt-get update && apt-get install -y --no-install-recommends apt apt-utils file reprepro xz-utils gnupg python3 curl ca-certificates && rm -rf /var/lib/apt/lists/*
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      - name: Verify portable public dependency lock
+        run: uv lock --check
+      - run: uv sync --frozen
+      - run: uv run python -m unittest discover -s tests
+      - name: Import signing key into an isolated homedir
+        run: |
+          set -euo pipefail
+          if [ -z "${APT_RELEASE_SIGNING_KEY:-}" ]; then
+            echo "APT_RELEASE_SIGNING_KEY environment secret is required" >&2
+            exit 1
+          fi
+          if [ -z "${APT_SIGNING_FINGERPRINT:-}" ]; then
+            echo "APT_SIGNING_FINGERPRINT secret is required for production update" >&2
+            exit 1
+          fi
+          GNUPGHOME="$(mktemp -d)"
+          export GNUPGHOME
+          chmod 700 "$GNUPGHOME"
+          printf '%s' "$APT_RELEASE_SIGNING_KEY" >"$RUNNER_TEMP/release-private.asc"
+          chmod 600 "$RUNNER_TEMP/release-private.asc"
+          gpg --batch --import "$RUNNER_TEMP/release-private.asc"
+          {
+            echo "APT_SIGNING_KEY_FILE=$RUNNER_TEMP/release-private.asc"
+            echo "APT_SIGNING_KEY_ID=$APT_SIGNING_FINGERPRINT"
+            echo "GNUPGHOME=$GNUPGHOME"
+          } >>"$GITHUB_ENV"
+        env:
+          APT_RELEASE_SIGNING_KEY: ${{ secrets.APT_RELEASE_SIGNING_KEY }}
+      # A scheduled run publishes; a manual run plans only unless the operator
+      # explicitly chose otherwise. No upstream value ever reaches the shell.
+      - name: Update to the latest stable upstream releases
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ] || [ "$DRY_RUN_INPUT" = "false" ]; then
+            uv run python -m scripts.update --publish
+          else
+            uv run python -m scripts.update --dry-run
+          fi
+        env:
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+      - name: Scrub isolated key material
+        if: always()
+        run: rm -rf "${GNUPGHOME:-/nonexistent}" "$RUNNER_TEMP/release-private.asc" || true

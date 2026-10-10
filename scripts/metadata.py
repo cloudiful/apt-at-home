@@ -16,7 +16,7 @@ COMPONENT = "main"
 ARCHES = ("amd64", "arm64")
 
 
-def _write_gzip_deterministic(source: Path, dest: Path) -> None:
+def write_gzip_deterministic(source: Path, dest: Path) -> None:
     data = source.read_bytes()
     with dest.open("wb") as raw:
         with gzip.GzipFile(filename="", mode="wb", compresslevel=9, mtime=0, fileobj=raw) as gz:
@@ -56,7 +56,7 @@ def generate_packages(pool_dir: Path, dists_arch_dir: Path, debs: list[Path]) ->
         lines.append("")
     packages_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     gz_path = dists_arch_dir / "Packages.gz"
-    _write_gzip_deterministic(packages_path, gz_path)
+    write_gzip_deterministic(packages_path, gz_path)
     return packages_path, gz_path
 
 
@@ -75,6 +75,7 @@ def generate_release(
     output_root: Path,
     release_id: str,
     files: list[tuple[Path, str]],
+    extra_fields: list[tuple[str, str]] | None = None,
 ) -> Path:
     """Write dists/stable/Release referencing local Packages files only."""
     dists_dir = output_root / "releases" / release_id / "dists" / SUITE
@@ -91,6 +92,7 @@ def generate_release(
         sha512_lines.append(f" {sha512_file(path)} {size:16d} {rel}")
         digest = hashlib.md5(path.read_bytes()).hexdigest()
         md5_lines.append(f" {digest} {size:16d} {rel}")
+    extra = "".join(f"{name}: {value}\n" for name, value in (extra_fields or []))
     body = (
         f"Origin: apt-at-home\n"
         f"Label: apt-at-home\n"
@@ -101,6 +103,7 @@ def generate_release(
         f"Components: {COMPONENT}\n"
         f"Description: Private APT repository\n"
         f"Acquire-By-Hash: yes\n"
+        f"{extra}"
         f"MD5Sum:\n" + "\n".join(md5_lines) + "\n"
         f"SHA256:\n" + "\n".join(sha256_lines) + "\n"
         f"SHA512:\n" + "\n".join(sha512_lines) + "\n"

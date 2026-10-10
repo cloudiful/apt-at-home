@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 
 from .common import sha256_file
@@ -11,14 +12,31 @@ from .download import fetch_verified, safe_extract_member
 from .manifest import Manifest, deb_filename
 
 
-def build_all(manifest: Manifest, *, pool_dir: Path, cache_dir: Path) -> list[Path]:
-    """Build the four .deb files; returns the .deb paths in sorted order."""
+def build_all(
+    manifest: Manifest,
+    *,
+    pool_dir: Path,
+    cache_dir: Path,
+    packages: Iterable[str] | None = None,
+) -> list[Path]:
+    """Build the .deb files; returns the paths in sorted order.
+
+    `packages` narrows the work to the named packages, which lets an incremental
+    update rebuild only what changed while the restored pool keeps the rest. The
+    default builds every pinned package.
+    """
     pool_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
+    selected = None if packages is None else set(packages)
+    unknown = sorted(selected - {p.name for p in manifest.packages}) if selected else []
+    if unknown:
+        raise ValueError(f"unknown package selection: {', '.join(unknown)}")
     outputs: list[Path] = []
     with tempfile.TemporaryDirectory(prefix="apt-at-home-build-") as tmp:
         tmpdir = Path(tmp)
         for pkg in sorted(manifest.packages, key=lambda p: p.name):
+            if selected is not None and pkg.name not in selected:
+                continue
             for arch in ("amd64", "arm64"):
                 target = pkg.targets[arch]
                 archive = cache_dir / f"{pkg.name}-{pkg.version}-{arch}.tar.gz"

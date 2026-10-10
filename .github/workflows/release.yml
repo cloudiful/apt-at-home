@@ -17,8 +17,10 @@ on:
 permissions:
   contents: read
 
+# Shared with the automatic update workflow so a scheduled update and a manual
+# release can never move the release pointer at the same time.
 concurrency:
-  group: apt-release
+  group: apt-production-release
   cancel-in-progress: false
 
 jobs:
@@ -40,7 +42,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install system tools
-        run: apt-get update && apt-get install -y --no-install-recommends apt apt-utils file xz-utils gnupg python3 curl ca-certificates && rm -rf /var/lib/apt/lists/*
+        run: apt-get update && apt-get install -y --no-install-recommends apt apt-utils file reprepro xz-utils gnupg python3 curl ca-certificates && rm -rf /var/lib/apt/lists/*
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
       - name: Verify portable public dependency lock
         run: uv lock --check

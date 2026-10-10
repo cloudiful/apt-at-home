@@ -134,5 +134,89 @@ class DebTest(unittest.TestCase):
                 build_module.fetch_verified = original  # type: ignore[assignment]
 
 
+    def test_selection_builds_only_the_named_packages(self) -> None:
+        from scripts.build import build_all
+        from scripts import build as build_module
+
+        manifest = load_manifest()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            pool = tmpdir / "pool"
+            cache = tmpdir / "upstream"
+            cache.mkdir(parents=True, exist_ok=True)
+            import io
+            import tarfile
+
+            for pkg in manifest.packages:
+                for arch in ("amd64", "arm64"):
+                    archive = cache / f"{pkg.name}-{pkg.version}-{arch}.tar.gz"
+                    data = f"fake-{pkg.name}-{arch}".encode()
+                    info = tarfile.TarInfo(name=pkg.targets[arch].archive_member)
+                    info.size = len(data)
+                    info.mode = 0o755
+                    info.mtime = 0
+                    with tarfile.open(archive, "w:gz") as tar:
+                        tar.addfile(info, io.BytesIO(data))
+
+            original = build_module.fetch_verified
+            build_module.fetch_verified = lambda url, sha, dest: dest  # type: ignore[assignment]
+            try:
+                every = build_all(manifest, pool_dir=pool, cache_dir=cache)
+                self.assertEqual(len(every), 4)
+                fresh = tmpdir / "pool-selected"
+                selected = build_all(
+                    manifest, pool_dir=fresh, cache_dir=cache, packages=["zellij"]
+                )
+                self.assertEqual(sorted(p.name for p in selected), [
+                    "zellij_0.45.1-1_amd64.deb", "zellij_0.45.1-1_arm64.deb",
+                ])
+                self.assertEqual(sorted(p.name for p in fresh.glob("*.deb")), [
+                    "zellij_0.45.1-1_amd64.deb", "zellij_0.45.1-1_arm64.deb",
+                ])
+                with self.assertRaises(ValueError):
+                    build_all(manifest, pool_dir=fresh, cache_dir=cache, packages=["nvim"])
+            finally:
+                build_module.fetch_verified = original  # type: ignore[assignment]
+
+
+    def test_same_version_with_different_bytes_is_refused(self) -> None:
+        """A re-release of the same version must never silently replace a pool file."""
+        from scripts import build as build_module
+        from scripts.build import build_all
+
+        manifest = load_manifest()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            pool = tmpdir / "pool"
+            cache = tmpdir / "upstream"
+            cache.mkdir(parents=True, exist_ok=True)
+            original = build_module.fetch_verified
+
+            def write_archive(payload: bytes) -> None:
+                import io
+                import tarfile
+
+                pkg = next(p for p in manifest.packages if p.name == "starship")
+                for arch in ("amd64", "arm64"):
+                    archive = cache / f"{pkg.name}-{pkg.version}-{arch}.tar.gz"
+                    info = tarfile.TarInfo(name=pkg.targets[arch].archive_member)
+                    info.size = len(payload)
+                    info.mode = 0o755
+                    info.mtime = 0
+                    with tarfile.open(archive, "w:gz") as tar:
+                        tar.addfile(info, io.BytesIO(payload))
+
+            build_module.fetch_verified = lambda url, sha, dest: dest  # type: ignore[assignment]
+            try:
+                write_archive(b"first build")
+                build_all(manifest, pool_dir=pool, cache_dir=cache, packages=["starship"])
+                write_archive(b"second build with different bytes")
+                with self.assertRaises(ValueError) as ctx:
+                    build_all(manifest, pool_dir=pool, cache_dir=cache, packages=["starship"])
+                self.assertIn("refusing to overwrite", str(ctx.exception))
+            finally:
+                build_module.fetch_verified = original  # type: ignore[assignment]
+
+
 if __name__ == "__main__":
     unittest.main()

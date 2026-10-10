@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github" / "workflows"
-WORKFLOW_NAMES = ("ci.yml", "release.yml")
+WORKFLOW_NAMES = ("ci.yml", "release.yml", "update.yml")
 
 RUN_RE = re.compile(r"run: \|\n(?P<body>(?: {10,}[^\n]*\n)+)")
 
@@ -55,6 +55,12 @@ class WorkflowStructureTest(unittest.TestCase):
 
     def test_release_job_is_the_only_protected_job(self) -> None:
         self.assertIn("    environment: prod", read_workflow("release.yml"))
+        self.assertNotIn("environment:", read_workflow("ci.yml"))
+
+    def test_update_job_runs_in_the_protected_prod_environment(self) -> None:
+        # Automatic publication carries the same secrets as a manual release, so
+        # it must sit behind the same protected environment and its approvals.
+        self.assertIn("    environment: prod", job_block(read_workflow("update.yml"), "update"))
         self.assertNotIn("environment:", read_workflow("ci.yml"))
 
     def test_no_template_interpolation_inside_shell(self) -> None:
@@ -109,8 +115,82 @@ class WorkflowStructureTest(unittest.TestCase):
     def test_release_serialized_and_manual(self) -> None:
         text = read_workflow("release.yml")
         self.assertIn("workflow_dispatch:", text)
-        self.assertIn("group: apt-release", text)
+        self.assertNotIn("schedule:", text)
+        self.assertIn("group: apt-production-release", text)
         self.assertIn("cancel-in-progress: false", text)
+
+    def test_update_is_scheduled_and_dispatched(self) -> None:
+        text = read_workflow("update.yml")
+        self.assertIn("schedule:", text)
+        self.assertIn('cron: "17 */6 * * *"', text)
+        self.assertIn("workflow_dispatch:", text)
+
+    def test_update_dispatch_defaults_to_a_dry_run(self) -> None:
+        # The scheduled run publishes, but a human pressing the button must get
+        # a plan unless they explicitly choose to publish.
+        head = read_workflow("update.yml").split("permissions:")[0]
+        self.assertIn("dry_run:", head)
+        self.assertIn('default: "true"', head)
+
+    def test_manual_update_publishes_only_when_asked(self) -> None:
+        update = job_block(read_workflow("update.yml"), "update")
+        step = read_workflow("update.yml").split("- name: Update to the latest stable")[1]
+        # A scheduled run publishes; dispatch follows the explicit input.
+        self.assertIn('"$GITHUB_EVENT_NAME" = "schedule"', step)
+        self.assertIn('"$DRY_RUN_INPUT" = "false"', step)
+        self.assertIn("scripts.update --publish", step)
+        self.assertIn("scripts.update --dry-run", step)
+
+    def test_update_publishes_only_from_the_default_branch(self) -> None:
+        # A manual run on any other ref must not publish unreviewed code.
+        update = job_block(read_workflow("update.yml"), "update")
+        self.assertIn("if: github.ref == 'refs/heads/main'", update)
+
+    def test_production_jobs_share_one_serialized_concurrency_group(self) -> None:
+        # Automatic updates and manual releases must never move the pointer at
+        # the same time, so both workflows serialize on one group.
+        for name in ("release.yml", "update.yml"):
+            text = read_workflow(name)
+            self.assertIn("group: apt-production-release", text, msg=name)
+            self.assertIn("cancel-in-progress: false", text, msg=name)
+
+    def test_workflows_use_least_privilege_contents_read(self) -> None:
+        for name in WORKFLOW_NAMES:
+            text = read_workflow(name)
+            self.assertIn("permissions:\n  contents: read", text, msg=name)
+            for privilege in ("contents: write", "pull-requests: write", "id-token: write"):
+                self.assertNotIn(privilege, text, msg=f"{name}: {privilege}")
+
+    def test_update_reuses_the_existing_production_secrets_only(self) -> None:
+        text = read_workflow("update.yml")
+        expected = {
+            "APT_S3_BUCKET", "APT_S3_ENDPOINT", "APT_S3_REGION",
+            "APT_S3_ACCESS_KEY_ID", "APT_S3_SECRET_ACCESS_KEY",
+            "APT_RELEASE_SIGNING_KEY", "APT_SIGNING_FINGERPRINT",
+        }
+        used = set(re.findall(r"secrets\.([A-Z0-9_]+)", text))
+        self.assertEqual(used, expected)
+        # No Cloudflare material belongs in the publication path.
+        for name in WORKFLOW_NAMES:
+            self.assertNotIn("CLOUDFLARE", read_workflow(name), msg=name)
+
+    def test_update_signing_key_is_private_and_always_scrubbed(self) -> None:
+        text = read_workflow("update.yml")
+        import_step = text.split("Import signing key")[1].split("- name:")[0]
+        self.assertIn('chmod 600 "$RUNNER_TEMP/release-private.asc"', import_step)
+        self.assertIn("gpg --batch --import", import_step)
+        # The key is never an artifact and never echoed.
+        self.assertNotIn("upload-artifact", text)
+        cleanup = text.split("Scrub isolated key material")[1]
+        self.assertIn("if: always()", cleanup)
+        self.assertIn("$RUNNER_TEMP/release-private.asc", cleanup)
+
+    def test_update_never_interpolates_upstream_data_into_the_shell(self) -> None:
+        # Upstream API values must not reach a shell command or an output file.
+        update = job_block(read_workflow("update.yml"), "update")
+        self.assertNotIn("GITHUB_OUTPUT", update)
+        for body in run_bodies(read_workflow("update.yml")):
+            self.assertNotIn("${{", body, msg=body[:60])
 
     def test_release_signing_key_retained_until_cleanup(self) -> None:
         text = read_workflow("release.yml")
@@ -127,6 +207,17 @@ class WorkflowStructureTest(unittest.TestCase):
             for tool in ("apt-utils", "file", "xz-utils"):
                 self.assertIn(tool, text, msg=f"{name} missing {tool}")
 
+    def test_build_jobs_install_reprepro(self) -> None:
+        # Production `Packages` indices come from reprepro, so every job that
+        # runs the build must install it instead of falling back or skipping.
+        for name, job in (
+            ("ci.yml", "python"),
+            ("release.yml", "publish"),
+            ("update.yml", "update"),
+        ):
+            packages = install_packages(job_block(read_workflow(name), job))
+            self.assertIn("reprepro", packages, msg=f"{name}:{job}")
+
     def test_gpg_agent_installed_where_keys_are_generated(self) -> None:
         # A bare `gpg` install carries no gpg-agent, so non-interactive key
         # generation and import fail; the `gnupg` metapackage pulls the agent
@@ -140,6 +231,17 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertIn("gnupg", install_packages(publish_job))
         self.assertNotIn("gpg", install_packages(publish_job))
         self.assertIn("gpg --batch --import", publish_job)
+
+        update_job = job_block(read_workflow("update.yml"), "update")
+        self.assertIn("gnupg", install_packages(update_job))
+        self.assertNotIn("gpg", install_packages(update_job))
+        self.assertIn("gpg --batch --import", update_job)
+
+    def test_ci_exercises_the_update_cli(self) -> None:
+        # The scheduled updater runs the real CLI in production, so CI proves it
+        # at least parses and resolves without touching any secret.
+        text = read_workflow("ci.yml")
+        self.assertIn("python -m scripts.update --help", text)
 
     def test_smoke_jobs_install_no_unused_gpg(self) -> None:
         # Fresh containers per job: smoke jobs never touch GPG, so they must

@@ -7,6 +7,8 @@ Private per-device authenticated APT source for Debian 13. English | [中文](RE
 - Private authenticated source with per-device tokens over an authenticated gateway.
 - Debian 13 packages for amd64 and arm64: zellij and starship.
 - Signed repository published via GitHub Actions to private object storage.
+- Every six hours, `update.yml` publishes a new release when a newer stable
+  zellij or starship appears upstream; when nothing changed it does nothing.
 
 ## Usage
 

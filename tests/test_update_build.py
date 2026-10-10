@@ -1,0 +1,232 @@
+"""End-to-end incremental update against an in-memory object store.
+
+The published release, the reprepro indices, the GPG signature, and the pointer
+ordering are all real; only the upstream archive download is stubbed, so the
+test proves the update mechanics rather than GitHub's availability.
+"""
+
+import io
+import json
+import os
+import shutil
+import subprocess
+import tarfile
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from scripts.manifest import deb_filename, load_manifest
+from scripts.restore import ARCHES, MAX_DEB_BYTES, ObjectNotFound, restore_metadata
+from scripts.restore_packages import restore_pool
+from scripts.update_build import apply_update
+from scripts.update_plan import build_plan
+from tests.helpers import FakeS3, make_gpg_home_with_key
+from tests.test_restore import RELEASE_ID, build_release_objects
+from tests.test_update import candidate
+
+
+class Store:
+    """The published bucket: restore reads through it, publish writes to it."""
+
+    def __init__(self, client: FakeS3) -> None:
+        self.client = client
+        self.reads: list[str] = []
+
+    def seed(self, objects: dict[str, bytes]) -> None:
+        for key, payload in objects.items():
+            self.client.objects[(self.bucket, key)] = payload
+
+    bucket = "test-bucket"
+
+    def get(self, key: str, *, max_bytes: int) -> bytes:
+        self.reads.append(key)
+        payload = self.client.objects.get((self.bucket, key))
+        if payload is None:
+            raise ObjectNotFound(key)
+        if len(payload) > max_bytes:
+            raise ValueError(f"object {key} exceeded the {max_bytes} byte limit")
+        return payload
+
+
+def _fake_archive(path: Path, member: str = "starship") -> Path:
+    payload = b"#!/bin/sh\necho starship\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(path, "w:gz") as archive:
+        info = tarfile.TarInfo(member)
+        info.size = len(payload)
+        info.mode = 0o755
+        archive.addfile(info, io.BytesIO(payload))
+    return path
+
+
+def _stub_download(archive: Path):
+    def fetch(url: str, expected_sha256: str, dest: Path) -> Path:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(archive, dest)
+        return dest
+
+    return mock.patch("scripts.build.fetch_verified", fetch)
+
+
+def _export_private_key(home: Path, dest: Path) -> Path:
+    """Export the ephemeral test key so a build can sign exactly like production."""
+    proc = subprocess.run(
+        ["gpg", "--batch", "--armor", "--export-secret-keys"],
+        env={"GNUPGHOME": str(home), "PATH": os.environ["PATH"], "GPG_AGENT_INFO": ""},
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+    )
+    if proc.returncode != 0 or not proc.stdout:
+        raise RuntimeError(f"secret key export failed: {proc.stderr}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(proc.stdout, encoding="utf-8")
+    dest.chmod(0o600)
+    return dest
+
+
+class UpdateBuildTest(unittest.TestCase):
+    def _seeded_store(self, work: Path, key_home: Path, key_id: str) -> Store:
+        store = Store(FakeS3())
+        store.seed(build_release_objects(work / "published", key_home=key_home, key_id=key_id))
+        return store
+
+    def test_one_changed_package_rebuilds_two_debs_and_keeps_the_rest(self) -> None:
+        tmpdir, home, key_id = make_gpg_home_with_key()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                store = self._seeded_store(root, home, key_id)
+                output = root / "out"
+                restored = restore_metadata(store, fingerprint=key_id)
+                self.assertEqual(restored.release_id, RELEASE_ID)
+
+                published_pool = {
+                    path.name: store.get(f"pool/{path.name}", max_bytes=MAX_DEB_BYTES)
+                    for path in (root / "published" / "pool").glob("*.deb")
+                }
+
+                plan = build_plan(
+                    baseline_release_id=restored.release_id,
+                    baseline_data=restored.manifest_data or {},
+                    candidates={
+                        "starship": candidate("starship", "1.27.0"),
+                        "zellij": candidate("zellij", "0.45.1"),
+                    },
+                )
+                self.assertEqual(plan.changed, ("starship",))
+
+                archive = _fake_archive(root / "cache" / "starship.tar.gz")
+                key_file = _export_private_key(home, root / "test-private.asc")
+                with _stub_download(archive):
+                    result = apply_update(
+                        plan=plan,
+                        release=restored,
+                        source=store,
+                        output_root=output,
+                        cache_dir=output.parent / "cache" / "upstream",
+                        release_id="p2-release",
+                        bucket=Store.bucket,
+                        fingerprint=key_id,
+                        signing_key_file=key_file,
+                        key_id=key_id,
+                        client=store.client,
+                    )
+                self.assertEqual(result.release_id, "p2-release")
+
+                pool = {p.name: p.read_bytes() for p in (output / "pool").glob("*.deb")}
+                self.assertEqual(len(pool), 4)
+                self.assertEqual(
+                    sorted(path.name for path in result.debs),
+                    ["starship_1.27.0-1_amd64.deb", "starship_1.27.0-1_arm64.deb"],
+                )
+                # Only the changed package moved; the other two are byte-identical.
+                for name, payload in published_pool.items():
+                    if name.startswith("zellij"):
+                        self.assertEqual(pool[name], payload, msg=name)
+                self.assertNotIn("starship_1.26.0-1_amd64.deb", pool)
+
+                for arch in ARCHES:
+                    text = (
+                        output / "releases" / "p2-release" / "dists" / "stable"
+                        / "main" / f"binary-{arch}" / "Packages"
+                    ).read_text()
+                    self.assertEqual(len(text.strip().split("\n\n")), 2)
+                    self.assertIn(f"Version: 1.27.0-1", text)
+
+                # The pointer is the last object written.
+                self.assertEqual(store.client.puts[-1], "current.json")
+                self.assertEqual(
+                    json.loads(store.client.objects[(Store.bucket, "current.json")])["release"],
+                    "p2-release",
+                )
+                self.assertIn(
+                    f"releases/p2-release/manifest.json", store.client.puts
+                )
+        finally:
+            tmpdir.cleanup()
+
+    def test_second_run_follows_the_new_pointer_and_finds_nothing(self) -> None:
+        tmpdir, home, key_id = make_gpg_home_with_key()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                store = self._seeded_store(root, home, key_id)
+                output = root / "out"
+                restored = restore_metadata(store, fingerprint=key_id)
+                plan = build_plan(
+                    baseline_release_id=restored.release_id,
+                    baseline_data=restored.manifest_data or {},
+                    candidates={
+                        "starship": candidate("starship", "1.27.0"),
+                        "zellij": candidate("zellij", "0.45.1"),
+                    },
+                )
+                archive = _fake_archive(root / "cache" / "starship.tar.gz")
+                key_file = _export_private_key(home, root / "test-private.asc")
+                with _stub_download(archive):
+                    apply_update(
+                        plan=plan, release=restored, source=store, output_root=output,
+                        cache_dir=output.parent / "cache" / "upstream",
+                        release_id="p2-release", bucket=Store.bucket, fingerprint=key_id,
+                        signing_key_file=key_file, key_id=key_id, client=store.client,
+                    )
+
+            uploaded_before = list(store.client.puts)
+            follow_up = restore_metadata(store, fingerprint=key_id)
+            self.assertEqual(follow_up.release_id, "p2-release")
+            self.assertEqual(
+                {pkg.name: pkg.version for pkg in follow_up.manifest.packages},
+                {"starship": "1.27.0", "zellij": "0.45.1"},
+            )
+            second = build_plan(
+                baseline_release_id=follow_up.release_id,
+                baseline_data=follow_up.manifest_data or {},
+                candidates={
+                    "starship": candidate("starship", "1.27.0"),
+                    "zellij": candidate("zellij", "0.45.1"),
+                },
+            )
+            self.assertTrue(second.is_noop)
+            self.assertEqual(store.client.puts, uploaded_before)
+        finally:
+            tmpdir.cleanup()
+
+    def test_restore_rejects_a_tampered_pool_object(self) -> None:
+        tmpdir, home, key_id = make_gpg_home_with_key()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                store = self._seeded_store(root, home, key_id)
+                restored = restore_metadata(store, fingerprint=key_id)
+                committed = load_manifest()
+                target = deb_filename(committed.packages[0], "amd64", committed)
+                key = (Store.bucket, f"pool/{target}")
+                store.client.objects[key] = store.client.objects[key] + b"tampered"
+                with self.assertRaises(ValueError):
+                    restore_pool(restored, store, root / "out")
+        finally:
+            tmpdir.cleanup()
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -9,6 +9,7 @@ from pathlib import Path
 from .common import sha256_file, sha512_file
 from .fingerprint import check_key_matches_pin
 from .package_index import check_arch_packages, pool_debs_for_arch
+from .release_manifest import MANIFEST_NAME, check_binding
 from .sign import IsolatedHomedir, import_key, verify_clearsign, verify_detached
 
 ARCHES = ("amd64", "arm64")
@@ -66,6 +67,14 @@ def verify_tree(
     if "Valid-Until" in release_text:
         raise ValueError("Release must not carry Valid-Until (deliberate personal-repo tradeoff)")
     findings.append("Release header fields valid")
+
+    # A release that binds its baseline manifest must ship the exact bytes it
+    # signed for; an older release that binds neither is left to the reader.
+    if check_binding(
+        release_text=release_text,
+        manifest_path=output_root / "releases" / release_id / MANIFEST_NAME,
+    ):
+        findings.append("Release binds a matching baseline manifest")
 
     sha256_entries = _parse_release_hashes(release_text, "SHA256")
     sha512_entries = _parse_release_hashes(release_text, "SHA512")

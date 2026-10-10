@@ -79,25 +79,44 @@ synthetic credentials as a CI check; it never uploads.
 
 ## 4. GitHub environment `prod`
 
-`release.yml` is `workflow_dispatch` only, carries `environment: prod`
-on its publish job, serializes through `concurrency: apt-release`, and uses
-least-privilege `contents: read`. Workflow inputs reach shell steps only
-through step `env` (never `${{ }}` interpolation). The release keeps the
-imported key file until the final always-cleanup and signs with
-`APT_SIGNING_KEY_ID` set to the full trusted fingerprint. Configure these
-protected secrets:
+`release.yml` is `workflow_dispatch` only and `update.yml` adds a six-hour
+schedule plus a `workflow_dispatch` whose `dry_run` input defaults to `true`.
+Both carry `environment: prod` on their publish job, so both wait for the same
+approvals — a scheduled run does not bypass a protected environment, it waits.
+Both serialize through the same `concurrency: apt-production-release` group with
+`cancel-in-progress: false`, so an automatic update and a manual release can
+never move the release pointer at the same time. Both use least-privilege
+`contents: read`. Workflow inputs reach shell steps only through step `env`
+(never `${{ }}` interpolation), and `update.yml` publishes only from `main`, so
+a manual run on another ref cannot publish unreviewed code. Each keeps the
+imported key file in `$RUNNER_TEMP` with mode `600` until the final
+always-run cleanup and signs with `APT_SIGNING_KEY_ID` set to the full trusted
+fingerprint. Configure these protected secrets:
 
 - `APT_S3_BUCKET`, `APT_S3_ENDPOINT`, `APT_S3_REGION`,
   `APT_S3_ACCESS_KEY_ID`, `APT_S3_SECRET_ACCESS_KEY`
-- `APT_RELEASE_SIGNING_KEY` (armored private key, manual releases only)
+- `APT_RELEASE_SIGNING_KEY` (armored private key, used by both workflows)
 - `APT_SIGNING_FINGERPRINT` (full 40-hex primary fingerprint, enforced at
   verify and publish — not an echo)
+
+`update.yml` publishes only when upstream moved: a no-op builds, signs, and
+uploads nothing and still succeeds. A manual release is refused when the
+committed manifest is older than the published baseline, so publishing cannot
+downgrade clients. No automatic key rotation occurs.
+
+The first publication from an updated `main` may need to be manual: if the
+current remote release predates manifest binding and its index is incomplete,
+the updater stops with an explicit republish instruction instead of silently
+bootstrapping. Run one `release.yml` publish from `main` to repair the index.
 
 `ci.yml` runs the package build, verification, and native amd64/arm64 smoke on
 every push, and pins `UV_DEFAULT_INDEX` to public PyPI so the committed lock
 stays portable. It needs no cloud secrets: the CI signing key is ephemeral and
-the Wrangler step is a dry run. Package publication and Worker deploys have
-separate owners, so the GitHub environment holds only the R2 and GPG material.
+the Wrangler step is a dry run. The build and test jobs install `reprepro`,
+which generates the `Packages` indices, so a missing tool fails the job
+instead of silently producing a different index. Package publication and
+Worker deploys have separate owners, so the GitHub environment holds only the
+R2 and GPG material.
 
 ## 5. Client bootstrap
 

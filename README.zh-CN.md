@@ -7,6 +7,7 @@
 - 私有鉴权源：经鉴权网关按设备令牌访问。
 - 面向 Debian 13 的 amd64 与 arm64 软件包：zellij 与 starship。
 - 经 GitHub Actions 签名并发布到私有对象存储的仓库。
+- `update.yml` 每六小时检查一次：上游出现更新的稳定版 zellij 或 starship 时发布新版本，否则不做任何操作。
 
 ## 用法
 
