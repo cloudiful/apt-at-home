@@ -28,6 +28,8 @@ uv run python -m scripts.repo verify --output dist/repo
   `current.json` and `key.asc`.
 - Credentials never appear in CLI arguments; the signing key comes from
   `APT_SIGNING_KEY_FILE` (path only) and S3 credentials from the environment.
+- Building and signing need full GnuPG (`gnupg`, which provides `gpg-agent`);
+  a bare `gpg` binary cannot generate or import keys non-interactively.
 
 ## Dependency locks
 

@@ -33,6 +33,13 @@ or bucket mutation is performed here.
 - Check credentials before any storage or cache access (the gateway already
   does this). Invalid configuration fails closed with `503`, and the bucket is
   never exposed publicly.
+- The exact root path `/` is the one public exception: `GET`/`HEAD /` serves a
+  static installation guide before the credential check, so a misconfigured
+  runtime still explains how to bootstrap a client. Every other path stays
+  behind the credential gate, and a `503` there means the runtime credentials
+  secret is missing or unusable — fix it under Worker → Settings → Variables
+  and Secrets. The guide only installs anything after the first successful
+  release publishes the repository.
 
 ## 3. Cloudflare Worker Builds (deploy owner)
 
@@ -81,13 +88,15 @@ separate owners, so the GitHub environment holds only the R2 and GPG material.
 
 - Copy `client/personal.sources.example` to
   `/etc/apt/sources.list.d/apt-at-home.sources`, replacing the hostname and
-  installing the repository public key at the `Signed-By` path. Never use
-  `apt-key` or `trusted=yes`.
+  installing the repository public key at the `Signed-By` path. The path must
+  name that installed key file exactly. Never use `apt-key` or `trusted=yes`.
 - Copy `client/auth.conf.example` to `/etc/apt/auth.conf.d/apt-at-home.conf`,
-  replacing the device name and token, then `chmod 600` the file. Tokens stay
+  replacing the device name and token, then `chmod 600` the file. Obtain the
+  per-device username and token from the administrator out of band; tokens stay
   out of URLs, shell history, and logs.
 - Verify the signing key by its full trusted primary fingerprint before
-  installing it as `key.asc`:
+  installing it as `key.asc`, comparing it against the fingerprint received
+  through a separate channel — never a fingerprint printed by the gateway:
   `APT_SIGNING_FINGERPRINT=<40-hex> uv run python -m scripts.repo verify --output dist/repo`.
   Local ephemeral builds may verify without the variable, but production
   verify and every publish require it; a missing, malformed, or mismatched

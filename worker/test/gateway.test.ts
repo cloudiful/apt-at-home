@@ -89,7 +89,6 @@ describe('path gate', () => {
     '/dists/stable/main/binary-i386/Packages',
     '/releases/20260102-030405/dists/stable/Release',
     '/etc/passwd',
-    '/',
   ])('refuses %s without reading the bucket', async (path) => {
     const fixture = await createFixture();
     const response = await fixture.call(authorized(path, CLIENT, TOKEN));

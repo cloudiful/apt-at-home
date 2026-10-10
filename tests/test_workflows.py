@@ -33,6 +33,16 @@ def job_block(text: str, job: str) -> str:
     return rest[: nxt.start() + 1] if nxt else rest
 
 
+def install_packages(job: str) -> list[str]:
+    """Package names from the job's apt-get install line, flags stripped."""
+    for line in job.splitlines():
+        if "apt-get install" not in line:
+            continue
+        _, _, rest = line.partition("apt-get install")
+        return [token for token in rest.split() if not token.startswith("-")]
+    return []
+
+
 class WorkflowStructureTest(unittest.TestCase):
     def test_only_validation_and_release_workflows_exist(self) -> None:
         names = sorted(path.name for path in WORKFLOWS.glob("*.yml"))
@@ -116,6 +126,29 @@ class WorkflowStructureTest(unittest.TestCase):
             text = read_workflow(name)
             for tool in ("apt-utils", "file", "xz-utils"):
                 self.assertIn(tool, text, msg=f"{name} missing {tool}")
+
+    def test_gpg_agent_installed_where_keys_are_generated(self) -> None:
+        # A bare `gpg` install carries no gpg-agent, so non-interactive key
+        # generation and import fail; the `gnupg` metapackage pulls the agent
+        # in as a hard dependency.
+        python_job = job_block(read_workflow("ci.yml"), "python")
+        self.assertIn("gnupg", install_packages(python_job))
+        self.assertNotIn("gpg", install_packages(python_job))
+        self.assertIn("gpg --batch --generate-key", python_job)
+
+        publish_job = job_block(read_workflow("release.yml"), "publish")
+        self.assertIn("gnupg", install_packages(publish_job))
+        self.assertNotIn("gpg", install_packages(publish_job))
+        self.assertIn("gpg --batch --import", publish_job)
+
+    def test_smoke_jobs_install_no_unused_gpg(self) -> None:
+        # Fresh containers per job: smoke jobs never touch GPG, so they must
+        # not grow an unused keyring package.
+        text = read_workflow("ci.yml")
+        for job in ("smoke-amd64", "smoke-arm64"):
+            packages = install_packages(job_block(text, job))
+            self.assertNotIn("gpg", packages, msg=job)
+            self.assertNotIn("gnupg", packages, msg=job)
 
     def test_smoke_arm64_installs_file_in_same_job(self) -> None:
         # Each job gets a fresh container, so the python job's tool install

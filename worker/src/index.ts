@@ -4,10 +4,13 @@
  * The order of operations is the security contract: the credential secret is
  * validated, then the request is authenticated, and only then may the release
  * pointer, the cache or the bucket be touched. A rejected request therefore
- * reveals nothing about whether an object exists.
+ * reveals nothing about whether an object exists. The exact root path is the
+ * single public exception: it is answered with a static landing page before any
+ * of this runs, and no other path is affected.
  */
 import { challengeHeaders, isAuthorized, parseCredentialConfig } from './auth.js';
 import { cacheLookup, cacheStore, isCacheableBody, shouldBypassCache, toClientResponse } from './cache.js';
+import { handleRoot } from './homepage.js';
 import { serveObject } from './objects.js';
 import {
   classifyPath,
@@ -28,6 +31,9 @@ import type { Env, ResolvedObject } from './types.js';
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const root = handleRoot(request);
+    if (root !== null) return root;
+
     const config = parseCredentialConfig(env.CREDENTIALS);
     if (!config.ok) return serviceUnavailable();
 
