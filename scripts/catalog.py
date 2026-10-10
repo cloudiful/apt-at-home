@@ -1,127 +1,21 @@
 """The reviewed package catalog: which names exist and how each is fetched.
 
-One place decides the Debian name, the official upstream repository, the tag
-prefix, the release-asset name, the archive member, the installed binary, the
-declared dependencies, and the license identity of every package published
-here. A manifest may pin any non-empty subset of these recipes and never invent
-a name, and every asset path is computed from the pinned version, so a version
-bump recomputes a nested member instead of reusing a stale prefix.
+The recipe table lives in `scripts.recipes`; this module derives every asset
+path, member, binary, dependency, and relation from it, so a manifest may pin any
+non-empty subset of the reviewed recipes and never invent a name. Every asset
+path is computed from the pinned version, so a version bump recomputes a nested
+member instead of reusing a stale prefix.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from types import MappingProxyType
+
+from .recipes import RECIPES, Recipe
+
+__all__ = ["ARCHES", "KNOWN_PACKAGES", "RECIPES", "Recipe"]
 
 ARCHES = ("amd64", "arm64")
-
-# Rust target triples each upstream publishes for, which is not always the same
-# for every architecture of the same project.
-_MUSL = MappingProxyType(
-    {"amd64": "x86_64-unknown-linux-musl", "arm64": "aarch64-unknown-linux-musl"}
-)
-_DELTA = MappingProxyType(
-    {"amd64": "x86_64-unknown-linux-musl", "arm64": "aarch64-unknown-linux-gnu"}
-)
-_NO_TRIPLES: Mapping[str, str] = MappingProxyType({})
-_NO_DEPENDS: Mapping[str, str] = MappingProxyType({})
-
-
-@dataclass(frozen=True)
-class Recipe:
-    """How one Debian package is obtained from its official upstream.
-
-    `asset` and `member` are format templates. `asset` is filled with `upstream`
-    (the project's own asset stem, which is not always the Debian package name),
-    `version`, `arch`, and `triple`; `member` is filled with `prefix` (the asset
-    name without its `.tar.gz` suffix), `binary`, and `upstream`, so an archive
-    nesting its binary under a versioned directory recomputes that prefix.
-    """
-
-    name: str
-    upstream: str
-    repo: str
-    tag_prefix: str
-    license_id: str
-    license_path: str
-    asset: str
-    member: str
-    binary: str
-    triples: Mapping[str, str] = _MUSL
-    depends: Mapping[str, str] = _NO_DEPENDS
-    smoke: tuple[str, ...] = ("--version",)
-
-
-# zellij and starship publish one asset name per toolchain and never embed the
-# version in it; the other three embed it in both the asset and its member path.
-_PLAIN_MUSL_TEMPLATE = "{upstream}-{triple}.tar.gz"
-_VERSIONED_MUSL_TEMPLATE = "{upstream}-{version}-{triple}.tar.gz"
-
-RECIPES: dict[str, Recipe] = {
-    "zellij": Recipe(
-        name="zellij",
-        upstream="zellij",
-        repo="zellij-org/zellij",
-        tag_prefix="v",
-        license_id="MIT",
-        license_path="LICENSE.md",
-        asset=_PLAIN_MUSL_TEMPLATE,
-        member="{upstream}",
-        binary="zellij",
-    ),
-    "starship": Recipe(
-        name="starship",
-        upstream="starship",
-        repo="starship/starship",
-        tag_prefix="v",
-        license_id="ISC",
-        license_path="LICENSE",
-        asset=_PLAIN_MUSL_TEMPLATE,
-        member="{upstream}",
-        binary="starship",
-    ),
-    "git-delta": Recipe(
-        name="git-delta",
-        upstream="delta",
-        repo="dandavison/delta",
-        tag_prefix="",
-        license_id="MIT",
-        license_path="LICENSE",
-        asset=_VERSIONED_MUSL_TEMPLATE,
-        # delta publishes one toolchain per architecture, so the member prefix
-        # and the installed binary both move when the version changes.
-        member="{prefix}/{binary}",
-        binary="delta",
-        triples=_DELTA,
-        # delta's arm64 build is glibc-linked; its amd64 build is static musl.
-        depends=MappingProxyType({"arm64": "libc6 (>= 2.18), libgcc-s1"}),
-    ),
-    "rustfs-cli": Recipe(
-        name="rustfs-cli",
-        upstream="rustfs-cli",
-        repo="rustfs/cli",
-        tag_prefix="v",
-        license_id="MIT",
-        license_path="LICENSE-MIT",
-        asset="{upstream}-linux-{arch}-v{version}.tar.gz",
-        member="{binary}",
-        binary="rc",
-        triples=_NO_TRIPLES,
-        smoke=("--help",),
-    ),
-    "sccache": Recipe(
-        name="sccache",
-        upstream="sccache",
-        repo="mozilla/sccache",
-        tag_prefix="v",
-        license_id="Apache-2.0",
-        license_path="LICENSE",
-        asset="{upstream}-v{version}-{triple}.tar.gz",
-        member="{prefix}/{binary}",
-        binary="sccache",
-    ),
-}
 
 # Every package name this repository may publish, derived from the recipes so a
 # recipe and the accepted name set can never drift apart.
@@ -132,9 +26,9 @@ _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 
 # One comma-separated list of `name [ (relation version) ]` terms. The grammar is
 # deliberately closed: a shell metacharacter, a control character, or a newline
-# simply cannot match, so a dependency string can never escape the control file.
+# simply cannot match, so a relation string can never escape the control file.
 _TERM = r"[A-Za-z0-9][A-Za-z0-9.+~:-]*(?: \([<>=]{1,2} [A-Za-z0-9][A-Za-z0-9.+~:-]*\))?"
-_DEPENDS = re.compile(rf"^{_TERM}(?:, {_TERM})*$")
+_RELATIONS = re.compile(rf"^{_TERM}(?:, {_TERM})*$")
 
 
 def recipe_for(package_name: str) -> Recipe:
@@ -197,6 +91,25 @@ def archive_member(package_name: str, version: str, arch: str) -> str:
     return member
 
 
+def install_tree_for(package_name: str, version: str, arch: str) -> str:
+    """Return the upstream top root a tree package installs from, or '' when flat."""
+    recipe = recipe_for(package_name)
+    if not recipe.install_tree:
+        return ""
+    prefix = asset_name(package_name, version, arch).removesuffix(".tar.gz")
+    return recipe.install_tree.format(prefix=prefix)
+
+
+def required_paths_for(package_name: str) -> tuple[str, ...]:
+    """Return the package-relative paths a tree package must carry after install."""
+    return recipe_for(package_name).required
+
+
+def parsers_for(package_name: str) -> tuple[str, ...]:
+    """Return the reviewed parser library names a tree package must ship."""
+    return recipe_for(package_name).parsers
+
+
 def binary_name(package_name: str) -> str:
     """Return the file name installed under `/usr/bin` for this package."""
     return recipe_for(package_name).binary
@@ -217,6 +130,16 @@ def depends_for(package_name: str, arch: str) -> str:
     return recipe_for(package_name).depends.get(_arch(arch), "")
 
 
+def conflicts_for(package_name: str) -> str:
+    """Return the package-level Debian Conflicts relation, or '' when none."""
+    return recipe_for(package_name).conflicts
+
+
+def replaces_for(package_name: str) -> str:
+    """Return the package-level Debian Replaces relation, or '' when none."""
+    return recipe_for(package_name).replaces
+
+
 def smoke_args(package_name: str) -> tuple[str, ...]:
     """Return the read-only flags that prove the binary runs, per its own CLI."""
     return recipe_for(package_name).smoke
@@ -235,10 +158,10 @@ def check_known_names(names: list[str]) -> None:
         )
 
 
-def check_depends(name: str, arch: str, depends: str) -> str:
-    """Return the validated dependency string, or '' when the target is static."""
-    if not depends:
+def check_relations(label: str, relations: str) -> str:
+    """Return a validated Debian relation list (Depends, Conflicts, Replaces), or ''."""
+    if not relations:
         return ""
-    if not _DEPENDS.match(depends):
-        raise ValueError(f"invalid depends for {name} {arch}: {depends!r}")
-    return depends
+    if not _RELATIONS.match(relations):
+        raise ValueError(f"invalid {label}: {relations!r}")
+    return relations

@@ -12,10 +12,8 @@ network and no production object store is involved.
 """
 
 import copy
-import io
 import json
 import os
-import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -27,7 +25,7 @@ from scripts.release_manifest import load_manifest_data
 from scripts.repo import main
 from scripts.sign import export_public_key, sign_release
 from scripts.storage import ObjectNotFound
-from tests.helpers import FakeS3, make_gpg_home_with_key
+from tests.helpers import FakeS3, make_gpg_home_with_key, write_target_archive
 from tests.release_fixtures import build_release_objects
 
 BUCKET = "test-bucket"
@@ -70,14 +68,7 @@ def _fake_fetch(url: str, expected_sha256: str, dest: Path) -> Path:
     )
     pkg = next(p for p in manifest.packages if p.name == name)
     arch = stem.rsplit("-", 1)[1]
-    payload = f"fake-{name}-{arch}".encode()
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(dest, "w:gz") as archive:
-        info = tarfile.TarInfo(pkg.targets[arch].archive_member)
-        info.size = len(payload)
-        info.mode = 0o755
-        archive.addfile(info, io.BytesIO(payload))
-    return dest
+    return write_target_archive(dest, pkg, arch, f"fake-{name}-{arch}".encode())
 
 
 def _build_candidate(

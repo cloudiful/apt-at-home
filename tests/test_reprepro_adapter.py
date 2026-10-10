@@ -10,8 +10,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.deb import build_deb, stage_package
+from scripts.deb import build_deb
 from scripts.manifest import deb_filename, load_manifest
+from tests.helpers import stage_fixture_target
 from scripts.reprepro_adapter import (
     _normalize_stanzas,
     generate_packages,
@@ -42,13 +43,8 @@ def _fake_debs(root: Path) -> tuple[list[Path], Path]:
     outputs: list[Path] = []
     for pkg in manifest.packages:
         for arch in ARCHES:
-            binary = root / f"src-{pkg.name}-{arch}" / pkg.targets[arch].binary
-            binary.parent.mkdir(parents=True, exist_ok=True)
-            binary.write_bytes(f"fake-{pkg.name}-{arch}".encode())
-            binary.chmod(0o755)
-            stage = stage_package(
-                pkg=pkg, arch=arch, manifest=manifest,
-                binary_file=binary, stage_root=root / "stages",
+            stage = stage_fixture_target(
+                root, pkg, arch, manifest, f"fake-{pkg.name}-{arch}".encode(), root / "stages",
             )
             out = pool / deb_filename(pkg, arch, manifest)
             build_deb(stage, out)

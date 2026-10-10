@@ -7,7 +7,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .catalog import check_depends, check_known_names
+from .archive_tree import top_root
+from .catalog import check_known_names, check_relations
 from .download import canonical_member
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -18,11 +19,14 @@ _URL = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/release
 
 @dataclass(frozen=True)
 class ArchTarget:
+    """One architecture's pinned asset: a flat member or a tree root, never both."""
+
     url: str
     sha256: str
     archive_member: str
     binary: str
     depends: str = ""
+    install_tree: str = ""
 
 
 @dataclass(frozen=True)
@@ -35,6 +39,8 @@ class Package:
     copyright: str
     license_url: str
     targets: dict[str, ArchTarget]
+    conflicts: str = ""
+    replaces: str = ""
 
 
 @dataclass(frozen=True)
@@ -99,6 +105,26 @@ def parse_manifest(raw: object) -> Manifest:
     )
 
 
+def _parse_source(name: str, arch: str, target_raw: dict[str, object]) -> tuple[str, str]:
+    """Return (archive_member, install_tree) with exactly one of the two set."""
+    has_member = "archive_member" in target_raw
+    has_tree = "install_tree" in target_raw
+    if has_member == has_tree:
+        raise ValueError(f"{name} {arch} must declare exactly one of archive_member or install_tree")
+    if has_tree:
+        tree = str(target_raw["install_tree"])
+        try:
+            top_root(tree)
+        except ValueError as exc:
+            raise ValueError(f"invalid install_tree for {name} {arch}: {exc}") from None
+        return "", tree
+    try:
+        member = canonical_member(str(target_raw["archive_member"]))
+    except ValueError as exc:
+        raise ValueError(f"invalid archive_member for {name} {arch}: {exc}") from None
+    return member, ""
+
+
 def parse_package(raw: object) -> Package:
     if not isinstance(raw, dict):
         raise ValueError("package entry must be an object")
@@ -122,11 +148,10 @@ def parse_package(raw: object) -> Package:
         url = str(target_raw.get("url", ""))
         sha256 = str(target_raw.get("sha256", "")).lower()
         binary = str(target_raw.get("binary", ""))
-        try:
-            member = canonical_member(str(target_raw.get("archive_member", "")))
-        except ValueError as exc:
-            raise ValueError(f"invalid archive_member for {name} {arch}: {exc}") from None
-        depends = check_depends(name, arch, str(target_raw.get("depends", "") or ""))
+        member, install_tree = _parse_source(name, arch, target_raw)
+        depends = check_relations(
+            f"depends for {name} {arch}", str(target_raw.get("depends", "") or "")
+        )
         if not _URL.match(url):
             raise ValueError(f"invalid pinned URL for {name} {arch}: {url}")
         if not _SHA256.match(sha256):
@@ -134,8 +159,11 @@ def parse_package(raw: object) -> Package:
         if not binary or "/" in binary or binary.startswith("."):
             raise ValueError(f"invalid binary name for {name} {arch}")
         targets[arch] = ArchTarget(
-            url=url, sha256=sha256, archive_member=member, binary=binary, depends=depends
+            url=url, sha256=sha256, archive_member=member, binary=binary,
+            depends=depends, install_tree=install_tree,
         )
+    conflicts = check_relations(f"conflicts for {name}", str(raw.get("conflicts", "") or ""))
+    replaces = check_relations(f"replaces for {name}", str(raw.get("replaces", "") or ""))
     return Package(
         name=name,
         version=version,
@@ -145,6 +173,8 @@ def parse_package(raw: object) -> Package:
         copyright=str(raw["copyright"]),
         license_url=str(raw["license_url"]),
         targets=targets,
+        conflicts=conflicts,
+        replaces=replaces,
     )
 
 

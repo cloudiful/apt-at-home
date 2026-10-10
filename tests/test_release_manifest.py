@@ -147,7 +147,7 @@ class RemoteBindingTest(unittest.TestCase):
         self.assertEqual(data, json.loads(SOURCE.read_text(encoding="utf-8")))
         self.assertEqual(
             sorted(p.name for p in manifest.packages),
-            ["git-delta", "rustfs-cli", "sccache", "starship", "zellij"],
+            ["git-delta", "neovim", "rustfs-cli", "sccache", "starship", "zellij"],
         )
         self.assertEqual(canonical_bytes(data), canonical_bytes(load_manifest_data(SOURCE)))
 

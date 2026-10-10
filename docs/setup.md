@@ -157,6 +157,11 @@ the exact three steps, reproduced here for operators.
   (`target/<triple>/release/zellij`), not the tarball; starship
   `.tar.gz.sha256` files cover the tarball. See `checksum_provenance` in the
   manifest.
+- Neovim is the full upstream release tree, installed under `/usr` from one
+  archive root. It declares `Conflicts` and `Replaces` on `neovim-runtime`, so an
+  APT upgrade removes the distribution runtime through the normal solver. Its
+  headless check exercises the packaged runtime and the bundled Lua tree-sitter
+  parser.
 
 ## 6. WAF, limits, and alerts (limitations)
 

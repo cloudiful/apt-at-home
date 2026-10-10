@@ -135,7 +135,7 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   `Packages` hashes, and the manifest bound by `X-Manifest-SHA256` /
   `X-Manifest-Size`) before it reads a single package byte, then compares that
   signed baseline against the latest stable upstream release of every package
-  in the catalog: git-delta, rustfs-cli, sccache, starship, and zellij.
+  in the catalog: git-delta, neovim, rustfs-cli, sccache, starship, and zellij.
 - Each package has one reviewed recipe: the official repository, the release
   tag prefix, the asset name, the archive member, the installed command, the
   declared dependencies, and the SPDX license. A version bump recomputes the

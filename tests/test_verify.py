@@ -7,14 +7,14 @@ from collections.abc import Callable
 from pathlib import Path
 
 from scripts.common import sha256_file
-from scripts.deb import build_deb, stage_package
+from scripts.deb import build_deb
 from scripts.manifest import deb_filename, default_manifest_path, load_manifest
 from scripts.metadata import generate_release, write_indices
 from scripts.release_manifest import MANIFEST_NAME, manifest_binding_fields, write_manifest_artifact
 from scripts.reprepro_adapter import generate_packages
 from scripts.sign import export_public_key, import_key, sign_release
 from scripts.verify import verify_tree
-from tests.helpers import make_gpg_home_with_key
+from tests.helpers import make_gpg_home_with_key, stage_fixture_target
 
 
 def resign_tree(root: Path, release_id: str, *, key_home: Path, key_id: str) -> None:
@@ -73,13 +73,8 @@ def build_complete_tree(
     pool.mkdir(parents=True, exist_ok=True)
     for pkg in manifest.packages:
         for arch in ("amd64", "arm64"):
-            binary = root / "src" / f"{pkg.name}-{arch}" / pkg.targets[arch].binary
-            binary.parent.mkdir(parents=True, exist_ok=True)
-            binary.write_bytes(f"fake-{pkg.name}-{arch}".encode())
-            binary.chmod(0o755)
-            stage = stage_package(
-                pkg=pkg, arch=arch, manifest=manifest,
-                binary_file=binary, stage_root=root / "stages",
+            stage = stage_fixture_target(
+                root, pkg, arch, manifest, f"fake-{pkg.name}-{arch}".encode(), root / "stages",
             )
             build_deb(stage, pool / deb_filename(pkg, arch, manifest))
     packages_files: dict[str, list[Path]] = {}

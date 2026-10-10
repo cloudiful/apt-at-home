@@ -41,6 +41,18 @@ class DebianControlTest(unittest.TestCase):
             debian_control(by_name["git-delta"], "amd64", manifest, installed_size_kb=1),
         )
 
+    def test_neovim_control_declares_its_runtime_conflict_and_replacement(self) -> None:
+        manifest = load_manifest()
+        for arch in ("amd64", "arm64"):
+            control = debian_control(self._by_name()["neovim"], arch, manifest, installed_size_kb=1)
+            self.assertIn("Conflicts: neovim-runtime\n", control, msg=arch)
+            self.assertIn("Replaces: neovim-runtime\n", control, msg=arch)
+            self.assertLess(control.index("Depends:"), control.index("Conflicts:"), msg=arch)
+            self.assertLess(control.index("Replaces:"), control.index("Description:"), msg=arch)
+        sccache = debian_control(self._by_name()["sccache"], "amd64", manifest, installed_size_kb=1)
+        self.assertNotIn("Conflicts:", sccache)
+        self.assertNotIn("Replaces:", sccache)
+
     def test_description_makes_no_unverified_c_libc_claim(self) -> None:
         manifest = load_manifest()
         for name, pkg in self._by_name().items():

@@ -50,6 +50,7 @@ class ManifestTest(unittest.TestCase):
                 "git-delta": "0.20.1",
                 "rustfs-cli": "0.1.36",
                 "sccache": "0.18.0",
+                "neovim": "0.12.6",
             },
         )
 
@@ -149,7 +150,7 @@ class ManifestTest(unittest.TestCase):
     def test_rejects_an_unreviewed_or_repeated_package(self) -> None:
         data = _document()
         renamed = copy.deepcopy(data["packages"][0])
-        renamed["name"] = "neovim"
+        renamed["name"] = "vim-unreviewed"
         data["packages"] = data["packages"][:1] + [renamed]
         with self.assertRaises(ValueError) as ctx:
             parse_manifest(data)
@@ -206,6 +207,38 @@ class ManifestTest(unittest.TestCase):
             data["packages"][0]["targets"]["amd64"]["depends"] = depends
             with self.assertRaises(ValueError, msg=repr(depends)):
                 parse_manifest(data)
+
+    def test_each_arch_target_declares_exactly_one_payload_source(self) -> None:
+        data = _document()
+        neovim = next(e for e in data["packages"] if e["name"] == "neovim")
+        both = copy.deepcopy(neovim)
+        both["targets"]["amd64"]["archive_member"] = "nvim"
+        neither = copy.deepcopy(neovim)
+        del neither["targets"]["amd64"]["install_tree"]
+        subtree = copy.deepcopy(neovim)
+        subtree["targets"]["amd64"]["install_tree"] = "nvim-linux-x86_64/share"
+        for label, entry in (("both", both), ("neither", neither), ("subtree", subtree)):
+            with self.subTest(label):
+                bad = _document()
+                bad["packages"] = [entry if e["name"] == "neovim" else e for e in bad["packages"]]
+                with self.assertRaises(ValueError):
+                    parse_manifest(bad)
+
+    def test_neovim_declares_the_runtime_conflict_and_replacement(self) -> None:
+        by_name = {p.name: p for p in load_manifest().packages}
+        self.assertEqual(by_name["neovim"].conflicts, "neovim-runtime")
+        self.assertEqual(by_name["neovim"].replaces, "neovim-runtime")
+        for name in ("zellij", "starship", "git-delta", "rustfs-cli", "sccache"):
+            self.assertEqual(by_name[name].conflicts, "", msg=name)
+            self.assertEqual(by_name[name].replaces, "", msg=name)
+
+    def test_rejects_relation_injection_in_conflicts_and_replaces(self) -> None:
+        for key in ("conflicts", "replaces"):
+            for value in ("neovim-runtime; rm -rf /", "neovim-runtime\nPre-Depends: x", "a $(id)"):
+                data = _document()
+                data["packages"][0][key] = value
+                with self.assertRaises(ValueError, msg=f"{key}={value!r}"):
+                    parse_manifest(data)
 
     def test_accepts_a_plain_dependency_list(self) -> None:
         data = _document()

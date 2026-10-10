@@ -5,6 +5,7 @@ from pathlib import Path
 
 from scripts.deb import build_deb, stage_package
 from scripts.manifest import load_manifest
+from tests.helpers import write_target_archive
 
 
 class DebTest(unittest.TestCase):
@@ -103,20 +104,10 @@ class DebTest(unittest.TestCase):
             pool = tmpdir / "pool"
             cache = tmpdir / "upstream"
             cache.mkdir(parents=True, exist_ok=True)
-            import tarfile
-            import io
-
             for pkg in manifest.packages:
                 for arch in ("amd64", "arm64"):
                     archive = cache / f"{pkg.name}-{pkg.version}-{arch}.tar.gz"
-                    target = pkg.targets[arch]
-                    with tarfile.open(archive, "w:gz") as tar:
-                        data = f"fake-{pkg.name}-{arch}".encode()
-                        info = tarfile.TarInfo(name=target.archive_member)
-                        info.size = len(data)
-                        info.mode = 0o755
-                        info.mtime = 0
-                        tar.addfile(info, io.BytesIO(data))
+                    write_target_archive(archive, pkg, arch, f"fake-{pkg.name}-{arch}".encode())
             from scripts import download as download_module
             import scripts.build as build_module
 
@@ -144,19 +135,10 @@ class DebTest(unittest.TestCase):
             pool = tmpdir / "pool"
             cache = tmpdir / "upstream"
             cache.mkdir(parents=True, exist_ok=True)
-            import io
-            import tarfile
-
             for pkg in manifest.packages:
                 for arch in ("amd64", "arm64"):
                     archive = cache / f"{pkg.name}-{pkg.version}-{arch}.tar.gz"
-                    data = f"fake-{pkg.name}-{arch}".encode()
-                    info = tarfile.TarInfo(name=pkg.targets[arch].archive_member)
-                    info.size = len(data)
-                    info.mode = 0o755
-                    info.mtime = 0
-                    with tarfile.open(archive, "w:gz") as tar:
-                        tar.addfile(info, io.BytesIO(data))
+                    write_target_archive(archive, pkg, arch, f"fake-{pkg.name}-{arch}".encode())
 
             original = build_module.fetch_verified
             build_module.fetch_verified = lambda url, sha, dest: dest  # type: ignore[assignment]
@@ -193,18 +175,10 @@ class DebTest(unittest.TestCase):
             original = build_module.fetch_verified
 
             def write_archive(payload: bytes) -> None:
-                import io
-                import tarfile
-
                 pkg = next(p for p in manifest.packages if p.name == "starship")
                 for arch in ("amd64", "arm64"):
                     archive = cache / f"{pkg.name}-{pkg.version}-{arch}.tar.gz"
-                    info = tarfile.TarInfo(name=pkg.targets[arch].archive_member)
-                    info.size = len(payload)
-                    info.mode = 0o755
-                    info.mtime = 0
-                    with tarfile.open(archive, "w:gz") as tar:
-                        tar.addfile(info, io.BytesIO(payload))
+                    write_target_archive(archive, pkg, arch, payload)
 
             build_module.fetch_verified = lambda url, sha, dest: dest  # type: ignore[assignment]
             try:

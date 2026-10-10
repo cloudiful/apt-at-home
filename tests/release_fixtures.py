@@ -13,7 +13,7 @@ import json
 import os
 from pathlib import Path
 
-from scripts.deb import build_deb, stage_package
+from scripts.deb import build_deb
 from scripts.manifest import (
     Manifest,
     default_manifest_path,
@@ -31,6 +31,7 @@ from scripts.release_manifest import (
 from scripts.reprepro_adapter import generate_packages
 from scripts.sign import export_public_key, sign_release
 from scripts.storage import ObjectNotFound
+from tests.helpers import stage_fixture_target
 
 RELEASE_ID = "20260102-030405"
 COMMITTED = load_manifest()
@@ -39,22 +40,24 @@ COMMITTED = load_manifest()
 # catalog entries, so the fixtures below model that two-package baseline rather
 # than assuming the committed catalog was already shipped.
 PUBLISHED_NAMES = ("starship", "zellij")
+# The five packages the release carried before neovim joined the catalog.
+FIVE_PUBLISHED_NAMES = ("git-delta", "rustfs-cli", "sccache", "starship", "zellij")
 
 
-def published_manifest_data() -> dict[str, object]:
+def published_manifest_data(names: tuple[str, ...] = PUBLISHED_NAMES) -> dict[str, object]:
     """The committed catalog restricted to what the published release carries."""
     data = copy.deepcopy(load_manifest_data(default_manifest_path()))
     packages = data.get("packages")
     assert isinstance(packages, list)
     data["packages"] = [
-        entry for entry in packages if entry.get("name") in PUBLISHED_NAMES
+        entry for entry in packages if entry.get("name") in names
     ]
     return data
 
 
-def published_manifest() -> Manifest:
-    """The validated two-package catalog subset the published release binds."""
-    return parse_manifest(published_manifest_data())
+def published_manifest(names: tuple[str, ...] = PUBLISHED_NAMES) -> Manifest:
+    """The validated catalog subset the published release binds."""
+    return parse_manifest(published_manifest_data(names))
 
 
 PUBLISHED = published_manifest()
@@ -84,32 +87,35 @@ class DeniedStorage(FakeStorage):
         raise RuntimeError("An error occurred (403) Forbidden: access denied")
 
 
-def _build_debs(root: Path) -> None:
+def _build_debs(root: Path, manifest: Manifest) -> None:
     """Stage the published packages as real .deb files under root/pool."""
     pool = root / "pool"
     pool.mkdir(parents=True, exist_ok=True)
-    for pkg in PUBLISHED.packages:
+    for pkg in manifest.packages:
         for arch in ARCHES:
-            binary = root / "src" / f"{pkg.name}-{arch}" / pkg.targets[arch].binary
-            binary.parent.mkdir(parents=True, exist_ok=True)
-            binary.write_bytes(f"fake-{pkg.name}-{arch}".encode())
-            binary.chmod(0o755)
-            stage = stage_package(
-                pkg=pkg, arch=arch, manifest=PUBLISHED,
-                binary_file=binary, stage_root=root / "stages",
+            stage = stage_fixture_target(
+                root, pkg, arch, manifest, f"fake-{pkg.name}-{arch}".encode(), root / "stages",
             )
-            build_deb(stage, pool / deb_filename(pkg, arch, PUBLISHED))
+            build_deb(stage, pool / deb_filename(pkg, arch, manifest))
 
 
 def build_release_objects(
-    root: Path, *, key_home: Path, key_id: str, bind: bool = True
+    root: Path,
+    *,
+    key_home: Path,
+    key_id: str,
+    bind: bool = True,
+    names: tuple[str, ...] = PUBLISHED_NAMES,
 ) -> dict[str, bytes]:
     """Build a signed release and return its served objects.
 
     `bind` stays for the explicit negative case: an unbound release has no
     `X-Manifest-*` fields and no artifact, which the trust chain must reject.
+    `names` selects the published package set, so the incremental fixtures can
+    model a five-package baseline without changing the two-package default.
     """
-    _build_debs(root)
+    published = published_manifest(names)
+    _build_debs(root, published)
     pool = root / "pool"
     dists = root / "releases" / RELEASE_ID / "dists" / "stable"
     packages_files: dict[str, list[Path]] = {}
@@ -125,7 +131,7 @@ def build_release_objects(
     extra: list[tuple[str, str]] = []
     if bind:
         artifact = write_manifest_document(
-            data=published_manifest_data(),
+            data=published_manifest_data(names),
             destination=root / "releases" / RELEASE_ID / MANIFEST_NAME,
         )
         extra = manifest_binding_fields(artifact)

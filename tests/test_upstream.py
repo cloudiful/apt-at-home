@@ -54,6 +54,13 @@ UPSTREAMS = {
             "arm64": "sccache-v0.18.0-aarch64-unknown-linux-musl.tar.gz",
         },
     ),
+    "neovim": (
+        "neovim/neovim", "v0.12.6", "LICENSE.txt",
+        {
+            "amd64": "nvim-linux-x86_64.tar.gz",
+            "arm64": "nvim-linux-arm64.tar.gz",
+        },
+    ),
 }
 
 
@@ -300,6 +307,17 @@ class DiscoverTest(unittest.TestCase):
     def test_unknown_package_is_refused(self) -> None:
         with self.assertRaises(ValueError):
             discover(FakeHttp({}), "nvim", vendored_license=b"x")
+
+    def test_neovim_discovery_yields_the_official_tree_assets(self) -> None:
+        client = FakeHttp(fixture_payloads("neovim"))
+        candidate = discover(client, "neovim", vendored_license=vendored("neovim"))
+        self.assertEqual(candidate.version, "0.12.6")
+        for arch, name in (("amd64", "nvim-linux-x86_64.tar.gz"), ("arm64", "nvim-linux-arm64.tar.gz")):
+            self.assertEqual(
+                candidate.targets[arch]["url"],
+                f"https://github.com/neovim/neovim/releases/download/v0.12.6/{name}",
+            )
+            self.assertRegex(candidate.targets[arch]["sha256"], r"^[0-9a-f]{64}$")
 
 
 class UrllibClientTest(unittest.TestCase):

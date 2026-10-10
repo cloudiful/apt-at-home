@@ -146,3 +146,56 @@ jobs:
             = "$(python3 -m scripts.smoke --manifest packaging/manifest.json --count)"
           python3 -m scripts.smoke --manifest packaging/manifest.json --pool dist/repo/pool
           python3 -m scripts.smoke --manifest packaging/manifest.json --installed --arch arm64
+
+  upgrade-amd64:
+    name: Debian 13 APT upgrade from distro neovim (amd64)
+    runs-on: ubuntu-24.04
+    needs: [python]
+    container: debian:13
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: apt-repo-amd64
+          path: dist/repo
+      - name: Install the distro neovim, then upgrade it with the generated packages
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends python3 neovim
+          # The normal APT solver removes the distro runtime; nothing is forced.
+          apt-get install -y --no-install-recommends ./dist/repo/pool/*_amd64.deb
+          rm -rf /var/lib/apt/lists/*
+      - name: Check the upgraded state and run the packaged runtime headless
+        run: |
+          set -euo pipefail
+          python3 -m scripts.smoke --manifest packaging/manifest.json --upgraded
+          python3 -m scripts.smoke --manifest packaging/manifest.json --installed --arch amd64
+
+  upgrade-arm64:
+    name: Debian 13 APT upgrade from distro neovim (arm64, native runner)
+    runs-on: ubuntu-24.04-arm
+    needs: [python]
+    container: debian:13
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: apt-repo-amd64
+          path: dist/repo
+      - name: Install the distro neovim, then upgrade it with the generated packages
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends python3 neovim
+          apt-get install -y --no-install-recommends ./dist/repo/pool/*_arm64.deb
+          rm -rf /var/lib/apt/lists/*
+      - name: Check the upgraded state and run the packaged runtime headless
+        run: |
+          set -euo pipefail
+          python3 -m scripts.smoke --manifest packaging/manifest.json --upgraded
+          python3 -m scripts.smoke --manifest packaging/manifest.json --installed --arch arm64

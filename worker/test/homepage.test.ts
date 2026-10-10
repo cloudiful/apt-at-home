@@ -233,7 +233,7 @@ describe('root page content', () => {
     const fixture = await createFixture();
     const html = await (await fixture.call(plain('/'))).text();
 
-    for (const name of ['git-delta', 'rustfs-cli', 'sccache', 'starship', 'zellij']) {
+    for (const name of ['git-delta', 'neovim', 'rustfs-cli', 'sccache', 'starship', 'zellij']) {
       expect(html).toContain(name);
     }
     expect(html).toContain('amd64');
@@ -244,7 +244,7 @@ describe('root page content', () => {
     expect(html).toContain('/etc/apt/keyrings/apt-at-home.asc');
     expect(html).toContain('Signed-By: /etc/apt/keyrings/apt-at-home.asc');
     expect(html).toContain(
-      'sudo apt update &amp;&amp; sudo apt install git-delta rustfs-cli sccache starship zellij',
+      'sudo apt update &amp;&amp; sudo apt install git-delta neovim rustfs-cli sccache starship zellij',
     );
     // The two packages whose command differs from their Debian name say so.
     expect(html).toContain('<code>git-delta</code> provides <code>delta</code>');
@@ -256,14 +256,14 @@ describe('root page content', () => {
     const fixture = await createFixture();
     const html = await (await fixture.call(plain('/?lang=zh'))).text();
 
-    for (const name of ['git-delta', 'rustfs-cli', 'sccache', 'starship', 'zellij']) {
+    for (const name of ['git-delta', 'neovim', 'rustfs-cli', 'sccache', 'starship', 'zellij']) {
       expect(html).toContain(name);
     }
     expect(html).toContain('完整主密钥指纹');
     expect(html).toContain('/etc/apt/keyrings/apt-at-home.asc');
     expect(html).toContain('Signed-By: /etc/apt/keyrings/apt-at-home.asc');
     expect(html).toContain(
-      'sudo apt update &amp;&amp; sudo apt install git-delta rustfs-cli sccache starship zellij',
+      'sudo apt update &amp;&amp; sudo apt install git-delta neovim rustfs-cli sccache starship zellij',
     );
     expect(html).toContain('<code>git-delta</code> 提供 <code>delta</code>');
     expect(html).toContain('<code>rustfs-cli</code> 提供 <code>rc</code>');

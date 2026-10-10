@@ -277,6 +277,21 @@ class WorkflowStructureTest(unittest.TestCase):
             self.assertNotIn("zellij_0.45.1-1", block, msg=job)
             self.assertNotIn("starship_1.26.0-1", block, msg=job)
 
+    def test_apt_upgrade_jobs_install_distro_neovim_then_the_generated_debs(self) -> None:
+        # The distro neovim must be installed first, so the upgrade is a real transition.
+        text = read_workflow("ci.yml")
+        for job, arch in (("upgrade-amd64", "amd64"), ("upgrade-arm64", "arm64")):
+            with self.subTest(job=job):
+                block = job_block(text, job)
+                self.assertIn("needs: [python]", block)
+                distro = block.index("apt-get install -y --no-install-recommends python3 neovim")
+                generated = block.index(f"./dist/repo/pool/*_{arch}.deb")
+                self.assertLess(distro, generated)
+                self.assertIn("--upgraded", block)
+                self.assertIn(f"--installed --arch {arch}", block)
+                self.assertNotIn("dpkg -i", block)
+                self.assertNotIn("--force", block)
+
     def test_publish_counts_the_pool_from_the_manifest(self) -> None:
         block = job_block(read_workflow("publish.yml"), "publish")
         self.assertIn("--manifest packaging/manifest.json --count", block)

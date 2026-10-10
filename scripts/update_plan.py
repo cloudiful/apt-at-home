@@ -13,7 +13,15 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 
-from .catalog import archive_member, binary_name, depends_for, expected_license_for
+from .catalog import (
+    archive_member,
+    binary_name,
+    conflicts_for,
+    depends_for,
+    expected_license_for,
+    install_tree_for,
+    replaces_for,
+)
 from .manifest import Manifest, parse_manifest
 from .upstream import Candidate
 from .upstream_assets import ARCHES, version_key
@@ -73,6 +81,14 @@ def merge_catalog(baseline_data: dict[str, object], catalog_data: dict[str, obje
     return merged
 
 
+def _payload_source(name: str, version: str, arch: str) -> dict[str, str]:
+    """Return the one payload key the reviewed recipe names: a tree root or a member."""
+    tree = install_tree_for(name, version, arch)
+    if tree:
+        return {"install_tree": tree}
+    return {"archive_member": archive_member(name, version, arch)}
+
+
 def overlay_package(entry: dict[str, object], candidate: Candidate) -> dict[str, object]:
     """Return one package entry at the candidate's version.
 
@@ -93,6 +109,7 @@ def overlay_package(entry: dict[str, object], candidate: Candidate) -> dict[str,
     if not isinstance(targets, dict):
         raise ValueError(f"{name} manifest entry has no targets object")
     version = candidate.version
+    relations = {"conflicts": conflicts_for(name), "replaces": replaces_for(name)}
     updated_targets: dict[str, object] = {}
     for arch in ARCHES:
         override = candidate.targets.get(arch)
@@ -101,12 +118,13 @@ def overlay_package(entry: dict[str, object], candidate: Candidate) -> dict[str,
         updated_targets[arch] = {
             "url": override["url"],
             "sha256": override["sha256"],
-            "archive_member": archive_member(name, version, arch),
+            **_payload_source(name, version, arch),
             "binary": binary_name(name),
             "depends": depends_for(name, arch),
         }
     return {
-        **entry,
+        **{key: value for key, value in entry.items() if key not in relations},
+        **{key: value for key, value in relations.items() if value},
         "version": version,
         "license_url": candidate.license_url,
         "targets": updated_targets,

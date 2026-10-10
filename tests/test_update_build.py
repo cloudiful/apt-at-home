@@ -9,17 +9,14 @@ six .deb files, keep the four published ones byte-identical, and publish a
 complete ten-file release.
 """
 
-import io
 import json
 import os
 import subprocess
-import tarfile
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts.catalog import archive_member
 from scripts.manifest import deb_filename, load_manifest
 from scripts.metadata import ARCHES
 from scripts.release_verify import restore_metadata
@@ -27,7 +24,7 @@ from scripts.restore_packages import restore_pool
 from scripts.storage import MAX_DEB_BYTES, ObjectNotFound
 from scripts.update_build import apply_update
 from scripts.update_plan import build_plan
-from tests.helpers import FakeS3, make_gpg_home_with_key
+from tests.helpers import FakeS3, make_gpg_home_with_key, write_target_archive
 from tests.release_fixtures import (
     RELEASE_ID,
     build_release_objects,
@@ -73,14 +70,7 @@ def _stub_archive():
         )
         pkg = next(p for p in manifest.packages if p.name == name)
         arch = stem.rsplit("-", 1)[1]
-        payload = f"fake-{name}-{arch}".encode()
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(dest, "w:gz") as archive:
-            info = tarfile.TarInfo(archive_member(name, pkg.version, arch))
-            info.size = len(payload)
-            info.mode = 0o755
-            archive.addfile(info, io.BytesIO(payload))
-        return dest
+        return write_target_archive(dest, pkg, arch, f"fake-{name}-{arch}".encode())
 
     return mock.patch("scripts.build.fetch_verified", fetch)
 
@@ -130,7 +120,7 @@ class UpdateBuildTest(unittest.TestCase):
                     catalog_data=catalog_document(),
                     candidates=_catalog_candidates(),
                 )
-                self.assertEqual(plan.changed, ("git-delta", "rustfs-cli", "sccache"))
+                self.assertEqual(plan.changed, ("git-delta", "neovim", "rustfs-cli", "sccache"))
 
                 key_file = _export_private_key(home, root / "test-private.asc")
                 with _stub_archive():
@@ -150,13 +140,15 @@ class UpdateBuildTest(unittest.TestCase):
                 self.assertEqual(result.release_id, "catalog-release")
 
                 pool = {p.name: p.read_bytes() for p in (output / "pool").glob("*.deb")}
-                self.assertEqual(len(pool), 10)
-                # Exactly the three added packages were built.
+                self.assertEqual(len(pool), 12)
+                # Exactly the four added packages were built.
                 self.assertEqual(
                     sorted(path.name for path in result.debs),
                     [
                         "git-delta_0.20.1-1_amd64.deb",
                         "git-delta_0.20.1-1_arm64.deb",
+                        "neovim_0.12.6-1_amd64.deb",
+                        "neovim_0.12.6-1_arm64.deb",
                         "rustfs-cli_0.1.36-1_amd64.deb",
                         "rustfs-cli_0.1.36-1_arm64.deb",
                         "sccache_0.18.0-1_amd64.deb",
@@ -172,19 +164,27 @@ class UpdateBuildTest(unittest.TestCase):
                         output / "releases" / "catalog-release" / "dists" / "stable"
                         / "main" / f"binary-{arch}" / "Packages"
                     ).read_text()
-                    self.assertEqual(len(text.strip().split("\n\n")), 5)
+                    self.assertEqual(len(text.strip().split("\n\n")), 6)
                     self.assertIn("Version: 0.20.1-1", text)
                     # The Debian name and the installed command differ for rc.
                     self.assertIn(f"Package: rustfs-cli\n", text)
                     self.assertIn(f"Filename: pool/rustfs-cli_0.1.36-1_{arch}.deb", text)
-                    # Only the glibc-linked delta arm64 build declares a dependency.
-                    self.assertEqual("Depends:" in text, arch == "arm64", msg=arch)
+                    # The glibc-linked delta arm64 build and every neovim build declare
+                    # runtime dependencies; the static delta amd64 build declares none.
+                    stanzas = text.strip().split("\n\n")
+                    neovim_stanza = next(s for s in stanzas if s.startswith("Package: neovim\n"))
+                    self.assertIn("Depends: libc6 (>= 2.34), libgcc-s1", neovim_stanza, msg=arch)
+                    delta_stanza = next(
+                        s for s in stanzas
+                        if s.startswith("Package: git-delta\n") and f"Architecture: {arch}\n" in s
+                    )
+                    self.assertEqual("Depends:" in delta_stanza, arch == "arm64", msg=arch)
 
                 # The new release binds the five-package manifest.
                 bound = json.loads(
                     (output / "releases" / "catalog-release" / "manifest.json").read_text()
                 )
-                self.assertEqual(len(bound["packages"]), 5)
+                self.assertEqual(len(bound["packages"]), 6)
                 self.assertIn("releases/catalog-release/manifest.json", store.client.puts)
                 # The pointer is the last object written.
                 self.assertEqual(store.client.puts[-1], "current.json")
@@ -222,7 +222,7 @@ class UpdateBuildTest(unittest.TestCase):
                 uploaded_before = list(store.client.puts)
                 follow_up = restore_metadata(store, fingerprint=key_id)
                 self.assertEqual(follow_up.release_id, "catalog-release")
-                self.assertEqual(len(follow_up.manifest.packages), 5)
+                self.assertEqual(len(follow_up.manifest.packages), 6)
                 second = build_plan(
                     baseline_release_id=follow_up.release_id,
                     baseline_data=follow_up.manifest_data,

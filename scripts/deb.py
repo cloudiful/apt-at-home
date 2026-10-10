@@ -7,8 +7,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .archive_tree import TreeInventory
 from .common import require_tool
 from .manifest import Manifest, Package, deb_filename, debian_version
+from .package_tree import install_tree
 
 # Fixed per-source epoch so identical manifests rebuild byte-identical .debs.
 # Matches the static changelog date below (2026-01-01 00:00:00 UTC).
@@ -16,8 +18,12 @@ SOURCE_DATE_EPOCH = 1767225600
 
 
 def debian_control(pkg: Package, arch: str, manifest: Manifest, installed_size_kb: int) -> str:
-    depends = pkg.targets[arch].depends
-    dependency_field = f"Depends: {depends}\n" if depends else ""
+    relations = (
+        ("Depends", pkg.targets[arch].depends),
+        ("Conflicts", pkg.conflicts),
+        ("Replaces", pkg.replaces),
+    )
+    relation_fields = "".join(f"{field}: {value}\n" for field, value in relations if value)
     return (
         f"Package: {pkg.name}\n"
         f"Version: {debian_version(pkg, manifest)}\n"
@@ -27,7 +33,7 @@ def debian_control(pkg: Package, arch: str, manifest: Manifest, installed_size_k
         f"Maintainer: {manifest.maintainer}\n"
         f"Installed-Size: {installed_size_kb}\n"
         f"Homepage: {pkg.homepage}\n"
-        f"{dependency_field}"
+        f"{relation_fields}"
         f"Description: {pkg.description}\n"
         f" Repackaged upstream binary for a private APT repository.\n"
     )
@@ -58,23 +64,41 @@ def stage_package(
     pkg: Package,
     arch: str,
     manifest: Manifest,
-    binary_file: Path,
     stage_root: Path,
+    binary_file: Path | None = None,
+    tree: tuple[Path, TreeInventory, tuple[str, ...]] | None = None,
 ) -> Path:
-    """Create the staging tree; never executes the upstream binary."""
-    binary_name = pkg.targets[arch].binary
+    """Create the staging tree; never executes the upstream binary.
+
+    Exactly one payload is staged: a flat `binary_file`, or a reviewed `tree` as
+    (archive, validated inventory, required paths). The tree form installs the
+    binary from the archive's `bin` root instead of a separate file.
+    """
+    if (binary_file is None) == (tree is None):
+        raise ValueError("stage_package needs exactly one of binary_file or tree")
+    target = pkg.targets[arch]
+    if bool(target.install_tree) != (tree is not None):
+        raise ValueError(
+            f"{pkg.name} {arch} declares "
+            f"{'install_tree' if target.install_tree else 'archive_member'}; "
+            "stage it from the matching payload"
+        )
+    binary_name = target.binary
     stage = stage_root / f"{pkg.name}_{arch}"
     if stage.exists():
         shutil.rmtree(stage)
-    bin_dir = stage / "usr" / "bin"
-    doc_dir = stage / "usr" / "share" / "doc" / pkg.name
+    usr = stage / "usr"
+    bin_dir = usr / "bin"
+    doc_dir = usr / "share" / "doc" / pkg.name
     debian_dir = stage / "DEBIAN"
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    doc_dir.mkdir(parents=True, exist_ok=True)
+    if tree is not None:
+        archive, inventory, required = tree
+        install_tree(archive, inventory, usr, required=required)
+    else:
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(binary_file, bin_dir / binary_name)
     debian_dir.mkdir(parents=True, exist_ok=True)
-
-    dest_binary = bin_dir / binary_name
-    shutil.copyfile(binary_file, dest_binary)
+    doc_dir.mkdir(parents=True, exist_ok=True)
 
     license_body = read_vendor_license(pkg.name)
     (doc_dir / "copyright").write_text(copyright_text(pkg, license_body), encoding="utf-8")
@@ -89,21 +113,28 @@ def stage_package(
     (debian_dir / "control").write_text(
         debian_control(pkg, arch, manifest, installed_kb), encoding="utf-8"
     )
-    _apply_deterministic_modes(stage)
+    _apply_deterministic_modes(stage, keep_executables=tree is not None)
     _clamp_mtimes(stage, SOURCE_DATE_EPOCH)
     return stage
 
 
-def _apply_deterministic_modes(stage: Path) -> None:
-    """Root-owned layout: dirs/executables 0755, docs and control 0644."""
+def _apply_deterministic_modes(stage: Path, *, keep_executables: bool) -> None:
+    """Root-owned layout: dirs 0755; docs and control 0644.
+
+    A flat binary is always 0755. A tree keeps the executable bit its validated
+    archive member declared (`bin/nvim`, `less.sh`), so the policy is not
+    flattened to one mode for the whole package.
+    """
     for directory in sorted(p for p in stage.rglob("*") if p.is_dir()):
         directory.chmod(0o755)
     stage.chmod(0o755)
     for path in sorted(p for p in stage.rglob("*") if p.is_file()):
         relative = path.relative_to(stage).as_posix()
-        if relative in ("DEBIAN/control",) or relative.startswith("usr/share/doc/"):
+        if relative == "DEBIAN/control" or relative.startswith("usr/share/doc/"):
             path.chmod(0o644)
         elif relative.startswith("usr/bin/"):
+            path.chmod(0o755)
+        elif keep_executables and path.stat().st_mode & 0o100:
             path.chmod(0o755)
         else:
             path.chmod(0o644)

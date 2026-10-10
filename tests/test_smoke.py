@@ -7,14 +7,16 @@ path and every way a package can disagree with its manifest.
 
 import contextlib
 import io
+import os
 import shutil
 import struct
 import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.deb import build_deb, stage_package
+from scripts.deb import build_deb
 from scripts.manifest import Manifest, deb_filename, parse_manifest
+from tests.helpers import stage_fixture_target
 from scripts.smoke import (
     ELF_MACHINE,
     MAX_BINARY_BYTES,
@@ -26,6 +28,7 @@ from scripts.smoke import (
     main,
     run_installed,
 )
+from scripts.smoke_runtime import NEOVIM_LUA_CHECK, arguments_for
 
 # coreutils is present on every image that runs this suite; both are real
 # x86-64 ELF executables with a fixed exit status.
@@ -63,13 +66,8 @@ def _build_pool(root: Path, manifest: Manifest) -> Path:
     pool.mkdir(parents=True, exist_ok=True)
     for pkg in manifest.packages:
         for arch in ("amd64", "arm64"):
-            binary = root / "src" / f"{pkg.name}-{arch}" / pkg.targets[arch].binary
-            binary.parent.mkdir(parents=True, exist_ok=True)
-            binary.write_bytes(fake_elf(arch))
-            binary.chmod(0o755)
-            stage = stage_package(
-                pkg=pkg, arch=arch, manifest=manifest,
-                binary_file=binary, stage_root=root / "stages",
+            stage = stage_fixture_target(
+                root, pkg, arch, manifest, fake_elf(arch), root / "stages",
             )
             build_deb(stage, pool / deb_filename(pkg, arch, manifest))
     return pool
@@ -198,6 +196,80 @@ class RunInstalledTest(unittest.TestCase):
             with self.assertRaises(SmokeError) as ctx:
                 run_installed(manifest, "amd64", prefix=root)
             self.assertIn("not an ELF binary", str(ctx.exception))
+
+
+class NeovimRuntimeTest(unittest.TestCase):
+    """The reviewed Neovim handler runs headless and fails closed on a broken runtime."""
+
+    def test_neovim_uses_the_headless_handler_not_a_version_flag(self) -> None:
+        args = arguments_for("neovim")
+        self.assertEqual(args[:2], ("--headless", "--clean"))
+        self.assertIn("-u", args)
+        self.assertIn("NONE", args)
+        self.assertNotIn("--version", args)
+        self.assertEqual(args[-2:], ("-c", "qa!"))
+
+    def test_other_packages_keep_their_recipe_flag(self) -> None:
+        self.assertEqual(arguments_for("git-delta"), ("--version",))
+        self.assertEqual(arguments_for("rustfs-cli"), ("--help",))
+
+    def test_the_lua_check_fails_closed_with_an_explicit_nonzero_exit(self) -> None:
+        self.assertIn("cquit 1", NEOVIM_LUA_CHECK)
+        self.assertIn("pcall", NEOVIM_LUA_CHECK)
+        self.assertNotIn("qa0", NEOVIM_LUA_CHECK)
+
+    def test_a_non_elf_neovim_is_never_executed(self) -> None:
+        manifest = _catalog(("neovim",))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "usr" / "bin" / "nvim"
+            script.parent.mkdir(parents=True)
+            script.write_text("#!/bin/sh\necho should not run\n", encoding="utf-8")
+            script.chmod(0o755)
+            with self.assertRaises(SmokeError) as ctx:
+                run_installed(manifest, "amd64", prefix=root)
+            self.assertIn("not an ELF binary", str(ctx.exception))
+
+    def test_a_wrong_architecture_neovim_is_refused_before_any_run(self) -> None:
+        manifest = _catalog(("neovim",))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root / "usr" / "bin" / "nvim"
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(fake_elf("arm64"))
+            binary.chmod(0o755)
+            with self.assertRaises(SmokeError) as ctx:
+                run_installed(manifest, "amd64", prefix=root)
+            self.assertIn("expected x86-64", str(ctx.exception))
+
+
+class NativeNeovimRunTest(unittest.TestCase):
+    """Runs the real pinned Neovim when its verified archive is cached and the host is amd64."""
+
+    CACHED = Path.home() / ".cache" / "opencode" / "apt-neovim" / "nvim-amd64.tar.gz"
+
+    @unittest.skipUnless(
+        os.uname().machine == "x86_64" and CACHED.is_file(),
+        "needs an amd64 host and the cached pinned Neovim archive",
+    )
+    def test_the_packaged_neovim_runtime_and_lua_parser_run_headless(self) -> None:
+        import tarfile
+
+        from scripts.smoke_runtime import _run
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with tarfile.open(self.CACHED, "r:gz") as tar:
+                for member in tar.getmembers():
+                    if member.name.startswith("nvim-linux-x86_64/bin/nvim") or (
+                        member.name.startswith("nvim-linux-x86_64/share/nvim/runtime/")
+                        or member.name.startswith("nvim-linux-x86_64/lib/nvim/")
+                    ):
+                        tar.extract(member, root, filter="data")
+            binary = root / "nvim-linux-x86_64" / "bin" / "nvim"
+            proc = _run(binary, arguments_for("neovim"), scratch=root / "scratch")
+            self.assertEqual(proc.returncode, 0, msg=proc.stdout)
+            self.assertIn("neovim runtime and lua parser ok", proc.stdout)
 
 
 class CliTest(unittest.TestCase):

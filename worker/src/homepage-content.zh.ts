@@ -7,7 +7,7 @@
 import type { HomepageCopy } from './homepage-content.js';
 
 export const homepageCopy: HomepageCopy = {
-  lede: '面向 Debian 13 的公开测试 APT 软件源，提供 <strong>git-delta</strong>、<strong>rustfs-cli</strong>、<strong>sccache</strong>、<strong>starship</strong> 与 <strong>zellij</strong> 的 amd64、arm64 软件包。',
+  lede: '面向 Debian 13 的公开测试 APT 软件源，提供 <strong>git-delta</strong>、<strong>neovim</strong>、<strong>rustfs-cli</strong>、<strong>sccache</strong>、<strong>starship</strong> 与 <strong>zellij</strong> 的 amd64、arm64 软件包。',
   languageLabel: '语言',
   prerequisites: {
     heading: '开始之前',

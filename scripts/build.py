@@ -6,10 +6,38 @@ import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
+from .archive_tree import inventory_tree
+from .catalog import required_paths_for
 from .common import sha256_file
 from .deb import build_deb, stage_package
 from .download import fetch_verified, safe_extract_member
-from .manifest import Manifest, deb_filename
+from .manifest import Manifest, Package, deb_filename
+
+
+def _stage_target(
+    pkg: Package, arch: str, manifest: Manifest, archive: Path, tmpdir: Path
+) -> Path:
+    """Stage one target from its archive: a flat member or a validated upstream tree."""
+    target = pkg.targets[arch]
+    if target.install_tree:
+        inventory = inventory_tree(archive, target.install_tree)
+        return stage_package(
+            pkg=pkg,
+            arch=arch,
+            manifest=manifest,
+            stage_root=tmpdir / "stages",
+            tree=(archive, inventory, required_paths_for(pkg.name)),
+        )
+    binary_src = tmpdir / f"{pkg.name}-{arch}-bin" / target.binary
+    binary_src.parent.mkdir(parents=True, exist_ok=True)
+    safe_extract_member(archive, target.archive_member, binary_src)
+    return stage_package(
+        pkg=pkg,
+        arch=arch,
+        manifest=manifest,
+        binary_file=binary_src,
+        stage_root=tmpdir / "stages",
+    )
 
 
 def build_all(
@@ -41,17 +69,8 @@ def build_all(
                 target = pkg.targets[arch]
                 archive = cache_dir / f"{pkg.name}-{pkg.version}-{arch}.tar.gz"
                 fetch_verified(target.url, target.sha256, archive)
-                binary_src = tmpdir / f"{pkg.name}-{arch}-bin" / target.binary
-                binary_src.parent.mkdir(parents=True, exist_ok=True)
-                safe_extract_member(archive, target.archive_member, binary_src)
-                # The extracted binary is never executed during the host build.
-                stage = stage_package(
-                    pkg=pkg,
-                    arch=arch,
-                    manifest=manifest,
-                    binary_file=binary_src,
-                    stage_root=tmpdir / "stages",
-                )
+                # Nothing in the archive is executed during the host build.
+                stage = _stage_target(pkg, arch, manifest, archive, tmpdir)
                 output_deb = pool_dir / deb_filename(pkg, arch, manifest)
                 if output_deb.exists():
                     # Same name/version must never change bytes silently.

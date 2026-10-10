@@ -3,10 +3,11 @@ import unittest
 from pathlib import Path
 
 from scripts.common import sha256_file
-from scripts.deb import build_deb, stage_package
+from scripts.deb import build_deb
 from scripts.manifest import deb_filename, load_manifest
 from scripts.metadata import generate_release, write_indices
 from scripts.reprepro_adapter import generate_packages
+from tests.helpers import stage_fixture_target
 
 
 def _fields(stanza: str) -> dict[str, str]:
@@ -33,13 +34,8 @@ def _fake_debs(tmpdir: Path) -> tuple[list[Path], Path]:
     outputs: list[Path] = []
     for pkg in manifest.packages:
         for arch in ("amd64", "arm64"):
-            binary = tmpdir / f"src-{pkg.name}-{arch}" / pkg.targets[arch].binary
-            binary.parent.mkdir(parents=True, exist_ok=True)
-            binary.write_bytes(f"fake-{pkg.name}-{arch}".encode())
-            binary.chmod(0o755)
-            stage = stage_package(
-                pkg=pkg, arch=arch, manifest=manifest,
-                binary_file=binary, stage_root=tmpdir / "stages",
+            stage = stage_fixture_target(
+                tmpdir, pkg, arch, manifest, f"fake-{pkg.name}-{arch}".encode(), tmpdir / "stages",
             )
             out = pool / deb_filename(pkg, arch, manifest)
             build_deb(stage, out)
