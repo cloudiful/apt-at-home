@@ -1,0 +1,22 @@
+{
+  "name": "apt-at-home-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Authenticated Cloudflare Worker gateway for a private Debian APT repository",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "bun run typecheck && bun run test",
+    "check:py": "uv run python -m unittest discover -s tests",
+    "check:all": "bun run typecheck && bun run test && uv run python -m unittest discover -s tests",
+    "worker:dry-run": "wrangler deploy --config worker/wrangler.jsonc --dry-run --outdir dist/worker"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261010.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11",
+    "wrangler": "4.149.0"
+  }
+}

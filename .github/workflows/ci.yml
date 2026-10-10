@@ -1,0 +1,127 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  worker:
+    name: Worker gateway gates
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run test
+      - name: Dry-run production-equivalent deploy command
+        run: |
+          set -euo pipefail
+          cat >"$RUNNER_TEMP/ci-secrets.json" <<'EOF'
+          {"CREDENTIALS":"{\"ci-device\":\"0000000000000000000000000000000000000000000000000000000000000000\"}"}
+          EOF
+          chmod 600 "$RUNNER_TEMP/ci-secrets.json"
+          bunx wrangler deploy --config worker/wrangler.jsonc --domains apt-ci.example.com --secrets-file "$RUNNER_TEMP/ci-secrets.json" --dry-run --outdir dist/worker
+
+  python:
+    name: Python build and verify gates
+    runs-on: ubuntu-24.04
+    container: debian:13
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install system tools
+        run: apt-get update && apt-get install -y --no-install-recommends apt apt-utils file xz-utils gpg python3 curl ca-certificates && rm -rf /var/lib/apt/lists/*
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      - run: uv sync --frozen
+      - run: uv run python -m unittest discover -s tests
+      - run: uv run python -m scripts.repo --help
+      - name: Generate ephemeral signing key (CI only, isolated homedir)
+        run: |
+          set -euo pipefail
+          GNUPGHOME="$(mktemp -d)"
+          export GNUPGHOME
+          chmod 700 "$GNUPGHOME"
+          cat >"$GNUPGHOME/batch" <<'EOF'
+          %no-protection
+          Key-Type: RSA
+          Key-Length: 2048
+          Subkey-Type: RSA
+          Subkey-Length: 2048
+          Name-Real: apt-at-home ci
+          Name-Email: ci@apt-at-home.local
+          Expire-Date: 0
+          %commit
+          EOF
+          gpg --batch --generate-key "$GNUPGHOME/batch"
+          gpg --batch --armor --export-secret-keys >"$RUNNER_TEMP/ci-private.asc"
+          echo "APT_SIGNING_KEY_FILE=$RUNNER_TEMP/ci-private.asc" >>"$GITHUB_ENV"
+          echo "GNUPGHOME_ISOLATED=$GNUPGHOME" >>"$GITHUB_ENV"
+      - run: uv run python -m scripts.repo build --output dist/repo
+      - run: uv run python -m scripts.repo verify --output dist/repo
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: apt-repo-amd64
+          path: dist/repo
+          retention-days: 7
+
+  smoke-amd64:
+    name: Debian 13 binary smoke (amd64)
+    runs-on: ubuntu-24.04
+    needs: [python]
+    container: debian:13
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: apt-repo-amd64
+          path: dist/repo
+      - name: Inspect packages and run amd64 binaries
+        run: |
+          set -euo pipefail
+          ls -lh dist/repo/pool
+          test "$(find dist/repo/pool -maxdepth 1 -name '*.deb' | wc -l)" = "4"
+          dpkg-deb -f dist/repo/pool/zellij_0.45.1-1_amd64.deb Package Version Architecture
+          dpkg-deb -f dist/repo/pool/starship_1.26.0-1_amd64.deb Package Version Architecture
+          rm -rf /tmp/smoke-amd64 && mkdir -p /tmp/smoke-amd64
+          dpkg-deb -x dist/repo/pool/zellij_0.45.1-1_amd64.deb /tmp/smoke-amd64/z
+          dpkg-deb -x dist/repo/pool/starship_1.26.0-1_amd64.deb /tmp/smoke-amd64/s
+          /tmp/smoke-amd64/z/usr/bin/zellij --version
+          /tmp/smoke-amd64/s/usr/bin/starship --version
+
+  smoke-arm64:
+    name: Debian 13 binary smoke (arm64, native runner)
+    runs-on: ubuntu-24.04-arm
+    needs: [python]
+    container: debian:13
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: apt-repo-amd64
+          path: dist/repo
+      - name: Install smoke tools
+        run: apt-get update && apt-get install -y --no-install-recommends file && rm -rf /var/lib/apt/lists/*
+      - name: Inspect packages and run arm64 binaries
+        run: |
+          set -euo pipefail
+          ls -lh dist/repo/pool
+          rm -rf /tmp/smoke-arm64 && mkdir -p /tmp/smoke-arm64
+          dpkg-deb -x dist/repo/pool/zellij_0.45.1-1_arm64.deb /tmp/smoke-arm64/z
+          dpkg-deb -x dist/repo/pool/starship_1.26.0-1_arm64.deb /tmp/smoke-arm64/s
+          file /tmp/smoke-arm64/z/usr/bin/zellij
+          file /tmp/smoke-arm64/s/usr/bin/starship
+          /tmp/smoke-arm64/z/usr/bin/zellij --version
+          /tmp/smoke-arm64/s/usr/bin/starship --version

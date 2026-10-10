@@ -1,0 +1,12 @@
+node_modules/
+.wrangler/
+bun.lock
+coverage/
+*.log
+.DS_Store
+dist/
+.venv/
+.pytest_cache/
+.cache/
+__pycache__/
+*.pyc

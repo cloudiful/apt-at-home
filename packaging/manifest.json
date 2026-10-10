@@ -1,0 +1,57 @@
+{
+  "manifest_version": 1,
+  "debian_revision": "-1",
+  "maintainer": "APT At Home <apt-at-home@localhost>",
+  "section": "utils",
+  "priority": "optional",
+  "source_date_epoch": 1767225600,
+  "checksum_provenance": "Tarball SHA256 verified by direct download against GitHub API digests. Zellij upstream .sha256sum files cover the inner binary (target/<triple>/release/zellij), not the tarball; starship .tar.gz.sha256 files cover the tarball and match the API digests.",
+  "packages": [
+    {
+      "name": "zellij",
+      "version": "0.45.1",
+      "homepage": "https://github.com/zellij-org/zellij",
+      "description": "Terminal workspace with multiplexing and plugins",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2020 Zellij contributors",
+      "license_url": "https://raw.githubusercontent.com/zellij-org/zellij/v0.45.1/LICENSE.md",
+      "targets": {
+        "amd64": {
+          "url": "https://github.com/zellij-org/zellij/releases/download/v0.45.1/zellij-x86_64-unknown-linux-musl.tar.gz",
+          "sha256": "40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc",
+          "archive_member": "zellij",
+          "binary": "zellij"
+        },
+        "arm64": {
+          "url": "https://github.com/zellij-org/zellij/releases/download/v0.45.1/zellij-aarch64-unknown-linux-musl.tar.gz",
+          "sha256": "05f0802afadd53f8db9514e7cae53c9ae8432fed1b35b8294aa816ee3044a16b",
+          "archive_member": "zellij",
+          "binary": "zellij"
+        }
+      }
+    },
+    {
+      "name": "starship",
+      "version": "1.26.0",
+      "homepage": "https://github.com/starship/starship",
+      "description": "Minimal, fast, customizable shell prompt",
+      "license": "ISC",
+      "copyright": "Copyright (c) 2019-2022, Starship Contributors",
+      "license_url": "https://raw.githubusercontent.com/starship/starship/v1.26.0/LICENSE",
+      "targets": {
+        "amd64": {
+          "url": "https://github.com/starship/starship/releases/download/v1.26.0/starship-x86_64-unknown-linux-musl.tar.gz",
+          "sha256": "b7c232b0e8249d8e55a40beb79c5c43a7d370f3f9408bd215deb0170daeaadf3",
+          "archive_member": "starship",
+          "binary": "starship"
+        },
+        "arm64": {
+          "url": "https://github.com/starship/starship/releases/download/v1.26.0/starship-aarch64-unknown-linux-musl.tar.gz",
+          "sha256": "dc30189378d2f2e287384e8a692d3f95ad1df64cf0e8c36aa9201516028aed6b",
+          "archive_member": "starship",
+          "binary": "starship"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+machine apt.example.invalid login REPLACE_WITH_DEVICE_NAME password REPLACE_WITH_RANDOM_TOKEN
