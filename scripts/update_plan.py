@@ -14,6 +14,7 @@ import copy
 from dataclasses import dataclass
 
 from .catalog import (
+    additional_binaries_for,
     archive_member,
     binary_name,
     conflicts_for,
@@ -81,12 +82,16 @@ def merge_catalog(baseline_data: dict[str, object], catalog_data: dict[str, obje
     return merged
 
 
-def _payload_source(name: str, version: str, arch: str) -> dict[str, str]:
-    """Return the one payload key the reviewed recipe names: a tree root or a member."""
+def _payload_source(name: str, version: str, arch: str) -> dict[str, object]:
+    """Return the reviewed payload source and any additional command members."""
     tree = install_tree_for(name, version, arch)
     if tree:
         return {"install_tree": tree}
-    return {"archive_member": archive_member(name, version, arch)}
+    source: dict[str, object] = {"archive_member": archive_member(name, version, arch)}
+    additional = additional_binaries_for(name, version, arch)
+    if additional:
+        source["additional_binaries"] = additional
+    return source
 
 
 def overlay_package(entry: dict[str, object], candidate: Candidate) -> dict[str, object]:
@@ -122,9 +127,11 @@ def overlay_package(entry: dict[str, object], candidate: Candidate) -> dict[str,
             "binary": binary_name(name),
             "depends": depends_for(name, arch),
         }
+    extras = {"extra_license_urls": list(candidate.extra_license_urls)}
     return {
         **{key: value for key, value in entry.items() if key not in relations},
         **{key: value for key, value in relations.items() if value},
+        **(extras if candidate.extra_license_urls else {}),
         "version": version,
         "license_url": candidate.license_url,
         "targets": updated_targets,
@@ -139,6 +146,17 @@ def check_same_version_immutable(entry: dict[str, object], candidate: Candidate)
     rebuilding it would overwrite an existing .deb under a version clients have
     already installed. The run stops and names the architecture instead.
     """
+    if entry.get("license_url") != candidate.license_url:
+        raise ValueError(
+            f"{candidate.name} {candidate.version} license source changed; "
+            "a published release is immutable"
+        )
+    extra_urls = entry.get("extra_license_urls", [])
+    if not isinstance(extra_urls, list) or tuple(extra_urls) != candidate.extra_license_urls:
+        raise ValueError(
+            f"{candidate.name} {candidate.version} supplemental license sources changed; "
+            "a published release is immutable"
+        )
     targets = entry.get("targets")
     if not isinstance(targets, dict):
         raise ValueError(f"{candidate.name} manifest entry has no targets object")

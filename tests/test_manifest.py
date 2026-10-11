@@ -51,6 +51,9 @@ class ManifestTest(unittest.TestCase):
                 "rustfs-cli": "0.1.36",
                 "sccache": "0.18.0",
                 "neovim": "0.12.6",
+                "bottom": "0.14.9",
+                "uv": "0.13.0",
+                "zoxide": "0.10.0",
             },
         )
 
@@ -67,6 +70,12 @@ class ManifestTest(unittest.TestCase):
             ("rustfs-cli", "arm64"): "6e9dea7ac4f81562add9e1e31206ba6059d6f5929ad4ed924986223282b3aa9c",
             ("sccache", "amd64"): "45f1447fbe231e3037bde351ef70677dd212216c8d62ae7ca409fecc4d6acc89",
             ("sccache", "arm64"): "2b3284d5da3b46a47dc4229e75bb7b88ac4aa99c8d754fb7d2f84997e5a4354a",
+            ("bottom", "amd64"): "e0c325829e8bdcea25a8a7651da05dbb6f1fc109ac5d2f0187867d3d5d9c0df8",
+            ("bottom", "arm64"): "a6a0a0dda426b31b2c72e15a26c7e97c2224aafdd66f60632e34ee464a64ec8f",
+            ("uv", "amd64"): "1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154",
+            ("uv", "arm64"): "3ccfb6af6e242433eb552f7d9676abd5412c6595c497e990d9c8cb7b5bd4d2c3",
+            ("zoxide", "amd64"): "2d93385b99f3e82cf2701609a1bffcad863fbeb75aa3fe7eb6be4d29be68b1ae",
+            ("zoxide", "arm64"): "f1f16c5d6298d63dee467eedea1cdcd8490e43e493bea43acd416dc9033ef641",
         }
         for (name, arch), digest in expected.items():
             self.assertEqual(by_name[name].targets[arch].sha256, digest, msg=f"{name} {arch}")
@@ -89,6 +98,12 @@ class ManifestTest(unittest.TestCase):
         )
         self.assertEqual(by_name["rustfs-cli"].targets["arm64"].archive_member, "rc")
         self.assertEqual(by_name["rustfs-cli"].targets["arm64"].binary, "rc")
+        uv = by_name["uv"]
+        self.assertEqual(uv.targets["amd64"].additional_binaries,
+                         {"uv-x86_64-unknown-linux-gnu/uvx": "uvx"})
+        self.assertEqual(uv.extra_license_urls,
+                         ("https://raw.githubusercontent.com/astral-sh/uv/0.13.0/LICENSE-APACHE",))
+        self.assertEqual(uv.license, "MIT OR Apache-2.0")
         self.assertEqual(by_name["sccache"].license, "Apache-2.0")
         self.assertEqual(by_name["git-delta"].license, "MIT")
         self.assertEqual(by_name["rustfs-cli"].license, "MIT")
@@ -101,7 +116,13 @@ class ManifestTest(unittest.TestCase):
             "libc6 (>= 2.18), libgcc-s1",
         )
         self.assertEqual(by_name["git-delta"].targets["amd64"].depends, "")
-        for name in ("sccache", "rustfs-cli", "zellij", "starship"):
+        self.assertEqual(by_name["bottom"].targets["amd64"].depends,
+                         "libc6 (>= 2.34), libgcc-s1")
+        self.assertEqual(by_name["uv"].targets["amd64"].depends,
+                         "libc6 (>= 2.17), libgcc-s1")
+        self.assertEqual(by_name["uv"].targets["arm64"].depends,
+                         "libc6 (>= 2.28), libgcc-s1")
+        for name in ("sccache", "rustfs-cli", "zellij", "starship", "zoxide"):
             for arch in ("amd64", "arm64"):
                 self.assertEqual(by_name[name].targets[arch].depends, "", msg=f"{name} {arch}")
 
@@ -231,6 +252,26 @@ class ManifestTest(unittest.TestCase):
         for name in ("zellij", "starship", "git-delta", "rustfs-cli", "sccache"):
             self.assertEqual(by_name[name].conflicts, "", msg=name)
             self.assertEqual(by_name[name].replaces, "", msg=name)
+
+    def test_reviewed_extra_metadata_is_required_and_closed(self) -> None:
+        data = _document()
+        invalid = []
+        missing = copy.deepcopy(data)
+        del next(p for p in missing["packages"] if p["name"] == "uv")["extra_license_urls"]
+        invalid.append(missing)
+        renamed = copy.deepcopy(data)
+        uv = next(p for p in renamed["packages"] if p["name"] == "uv")
+        uv["targets"]["amd64"]["additional_binaries"] = {
+            "uv-x86_64-unknown-linux-gnu/uvx": "uv"
+        }
+        invalid.append(renamed)
+        injected = copy.deepcopy(data)
+        uv = next(p for p in injected["packages"] if p["name"] == "uv")
+        uv["targets"]["amd64"]["additional_binaries"] = {"../uvx": "uvx"}
+        invalid.append(injected)
+        for bad in invalid:
+            with self.assertRaises(ValueError):
+                parse_manifest(bad)
 
     def test_rejects_relation_injection_in_conflicts_and_replaces(self) -> None:
         for key in ("conflicts", "replaces"):

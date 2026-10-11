@@ -1,11 +1,10 @@
 """Incremental catalog updates from two realistic baselines, proven by file identity.
 
-The two fixtures are the ones the Neovim phase depends on. A two-package
-published release that meets the full catalog adds four packages (2+4). A
-five-package release that predates Neovim adds one package (5+1). Each run
-rebuilds exactly the added packages, keeps every published .deb byte-identical,
-and publishes a complete pool. Assertions name the files, so a count that happens
-to match never passes on its own.
+The six-package release adds the three new commands (6+3). A five-package
+release adds the four packages it lacks (5+4). Each run rebuilds exactly the
+added packages, keeps every published .deb byte-identical, and publishes a
+complete pool. Assertions name the files, so a count that happens to match never
+passes on its own.
 """
 
 import unittest
@@ -21,7 +20,7 @@ from scripts.update_plan import UpdatePlan, build_plan
 from tests.helpers import FakeS3, make_gpg_home_with_key
 from tests.release_fixtures import (
     FIVE_PUBLISHED_NAMES,
-    PUBLISHED_NAMES,
+    SIX_PUBLISHED_NAMES,
     build_release_objects,
 )
 from tests.test_update import _catalog_candidates, catalog_document
@@ -85,37 +84,37 @@ def _expected_built(names: tuple[str, ...]) -> list[str]:
     )
 
 
-class TwoPublishedFourAddedTest(unittest.TestCase):
-    """2 published (starship, zellij) + 4 catalog additions: 8 rebuilt, 2 kept."""
+class SixPublishedThreeAddedTest(unittest.TestCase):
+    """6 published packages + bottom, uv, and zoxide: 6 rebuilt, 12 kept."""
 
-    ADDED = ("git-delta", "neovim", "rustfs-cli", "sccache")
+    ADDED = ("bottom", "uv", "zoxide")
 
-    def test_builds_exactly_the_four_additions_and_keeps_the_two_published(self) -> None:
-        run = run_incremental(self, names=PUBLISHED_NAMES, release_id="incremental-2-4")
+    def test_builds_exactly_the_three_additions_and_keeps_the_six_published(self) -> None:
+        run = run_incremental(self, names=SIX_PUBLISHED_NAMES, release_id="incremental-6-3")
         self.assertEqual(run.plan.added, self.ADDED)
         self.assertEqual(sorted(p.name for p in run.result.debs), _expected_built(self.ADDED))
-        self.assertEqual(len(run.result.debs), 8)
-        self.assertEqual(len(run.pool), 12)
-        self.assertEqual(len(run.published), 4)
+        self.assertEqual(len(run.result.debs), 6)
+        self.assertEqual(len(run.pool), 18)
+        self.assertEqual(len(run.published), 12)
         for name, payload in run.published.items():
             self.assertEqual(run.pool[name], payload, msg=name)
         for arch in ARCHES:
-            packages = run.output / "releases" / "incremental-2-4" / "dists" / "stable" / "main" / f"binary-{arch}" / "Packages"
-            self.assertEqual(len(packages.read_text().strip().split("\n\n")), 6, msg=arch)
+            packages = run.output / "releases" / "incremental-6-3" / "dists" / "stable" / "main" / f"binary-{arch}" / "Packages"
+            self.assertEqual(len(packages.read_text().strip().split("\n\n")), 9, msg=arch)
 
 
-class FivePublishedOneAddedTest(unittest.TestCase):
-    """5 published (no neovim) + 1 catalog addition: 2 rebuilt, 10 kept."""
+class FivePublishedFourAddedTest(unittest.TestCase):
+    """5 published packages + four missing packages: 8 rebuilt, 10 kept."""
 
-    def test_builds_exactly_neovim_and_keeps_the_ten_published_debs(self) -> None:
-        run = run_incremental(self, names=FIVE_PUBLISHED_NAMES, release_id="incremental-5-1")
-        self.assertEqual(run.plan.added, ("neovim",))
-        self.assertEqual(
-            sorted(p.name for p in run.result.debs),
-            ["neovim_0.12.6-1_amd64.deb", "neovim_0.12.6-1_arm64.deb"],
-        )
+    ADDED = ("bottom", "neovim", "uv", "zoxide")
+
+    def test_builds_exactly_the_four_additions_and_keeps_the_ten_published_debs(self) -> None:
+        run = run_incremental(self, names=FIVE_PUBLISHED_NAMES, release_id="incremental-5-4")
+        self.assertEqual(run.plan.added, self.ADDED)
+        self.assertEqual(sorted(p.name for p in run.result.debs), _expected_built(self.ADDED))
+        self.assertEqual(len(run.result.debs), 8)
         self.assertEqual(len(run.published), 10)
-        self.assertEqual(len(run.pool), 12)
+        self.assertEqual(len(run.pool), 18)
         for name, payload in run.published.items():
             self.assertEqual(run.pool[name], payload, msg=name)
 

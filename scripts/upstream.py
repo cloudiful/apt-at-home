@@ -17,13 +17,12 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Protocol
 
-from .catalog import repo_of
+from .catalog import license_path_for, repo_of
+from .license_sources import check_license_sources, vendor_license_sources
 from .upstream_assets import (
     ARCHES,
     asset_name,
     check_official_asset_url,
-    license_path,
-    license_url,
     parse_asset_digest,
     parse_stable_tag,
     releases_api_url,
@@ -36,7 +35,6 @@ BYTES_TIMEOUT = 60
 # Generous ceilings: the largest pinned musl tarball is well under this, and a
 # response that exceeds it is refused rather than buffered without bound.
 MAX_JSON_BYTES = 4 * 1024 * 1024
-MAX_LICENSE_BYTES = 1024 * 1024
 
 
 class HttpClient(Protocol):
@@ -100,6 +98,7 @@ class Candidate:
     version: str
     license_url: str
     targets: dict[str, dict[str, str]]
+    extra_license_urls: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -144,30 +143,37 @@ def latest_stable(client: HttpClient, package_name: str) -> tuple[str, str, dict
     return repo, tag, assets
 
 
-def check_license(client: HttpClient, *, package_name: str, repo: str, tag: str, vendored: bytes) -> str:
-    """Compare the tagged license bytes with the vendored copy; return its URL."""
-    url = license_url(repo, tag, license_path(package_name))
-    remote = client.get_bytes(url, max_bytes=MAX_LICENSE_BYTES)
-    if remote != vendored:
-        raise ValueError(
-            f"{package_name} license bytes changed in {tag}; "
-            f"human review required before republishing ({url})"
-        )
-    return url
+def check_license(
+    client: HttpClient, *, package_name: str, repo: str, tag: str, vendored: bytes
+) -> str:
+    """Compare every reviewed license source and return the primary URL."""
+    if repo != repo_of(package_name):
+        raise ValueError(f"{package_name} license repository is not the reviewed upstream")
+    sources = vendor_license_sources(package_name)
+    sources[license_path_for(package_name)] = vendored
+    primary, _ = check_license_sources(client, package_name, tag, vendored=sources)
+    return primary
 
 
-def discover(client: HttpClient, package_name: str, *, vendored_license: bytes) -> Candidate:
+def discover(
+    client: HttpClient, package_name: str, *, vendored_license: bytes | None = None
+) -> Candidate:
     """Discover and fully validate the latest stable release of one package."""
     repo, tag, assets = latest_stable(client, package_name)
     version = parse_stable_tag(package_name, tag)
-    url = check_license(client, package_name=package_name, repo=repo, tag=tag, vendored=vendored_license)
+    sources = vendor_license_sources(package_name)
+    if vendored_license is not None:
+        sources[license_path_for(package_name)] = vendored_license
+    primary_url, extra_urls = check_license_sources(
+        client, package_name, tag, vendored=sources
+    )
     targets = {
         arch: {"url": assets[arch].url, "sha256": assets[arch].sha256}
         for arch in ARCHES
     }
     return Candidate(
         name=package_name, repo=repo, tag=tag, version=version,
-        license_url=url, targets=targets,
+        license_url=primary_url, targets=targets, extra_license_urls=extra_urls,
     )
 
 

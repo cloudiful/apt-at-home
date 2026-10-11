@@ -58,6 +58,8 @@ class Recipe:
     # Tree-sitter parser libraries under lib/nvim/parser, each checked for the
     # package architecture's ELF machine.
     parsers: tuple[str, ...] = ()
+    additional_members: Mapping[str, str] = _NO_DEPENDS
+    extra_license_paths: tuple[str, ...] = ()
 
 
 # zellij and starship publish one asset name per toolchain and never embed the
@@ -65,7 +67,7 @@ class Recipe:
 _PLAIN_MUSL_TEMPLATE = "{upstream}-{triple}.tar.gz"
 _VERSIONED_MUSL_TEMPLATE = "{upstream}-{version}-{triple}.tar.gz"
 
-RECIPES: dict[str, Recipe] = {
+_BASE_RECIPES: dict[str, Recipe] = {
     "zellij": Recipe(
         name="zellij",
         upstream="zellij",
@@ -162,3 +164,11 @@ RECIPES: dict[str, Recipe] = {
         binary="sccache",
     ),
 }
+
+def _cli_recipes() -> dict[str, Recipe]:
+    from .recipes_cli import make_cli_recipes
+
+    return make_cli_recipes(Recipe)
+
+
+RECIPES: dict[str, Recipe] = {**_BASE_RECIPES, **_cli_recipes()}

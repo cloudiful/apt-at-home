@@ -13,6 +13,8 @@ from pathlib import Path
 
 from scripts.deb import build_deb, copyright_text, debian_control, stage_package
 from scripts.manifest import deb_filename, load_manifest
+from scripts.package_licenses import read_vendor_licenses
+from tests.helpers import stage_fixture_target
 
 
 class DebianControlTest(unittest.TestCase):
@@ -66,13 +68,21 @@ class StagePackageTest(unittest.TestCase):
     def _stage(self, root: Path, name: str, arch: str) -> Path:
         manifest = load_manifest()
         pkg = next(p for p in manifest.packages if p.name == name)
-        binary = root / f"src-{name}-{arch}" / pkg.targets[arch].binary
-        binary.parent.mkdir(parents=True, exist_ok=True)
+        source_root = root / f"src-{name}-{arch}"
+        source_root.mkdir(parents=True, exist_ok=True)
+        binary = source_root / pkg.targets[arch].binary
         binary.write_bytes(f"fake-{name}-{arch}".encode())
         binary.chmod(0o755)
+        additional = {}
+        for binary_name in pkg.targets[arch].additional_binaries.values():
+            source = source_root / binary_name
+            source.write_bytes(f"fake-{name}-{binary_name}".encode())
+            source.chmod(0o755)
+            additional[binary_name] = source
         return stage_package(
             pkg=pkg, arch=arch, manifest=manifest,
-            binary_file=binary, stage_root=root / "stages",
+            binary_file=binary, additional_binary_files=additional,
+            stage_root=root / "stages",
         )
 
     def test_each_package_installs_its_own_binary_and_license(self) -> None:
@@ -151,6 +161,55 @@ class StagePackageTest(unittest.TestCase):
         text = copyright_text(pkg, "Apache License\nVersion 2.0\n")
         self.assertIn("License: Apache-2.0", text)
         self.assertIn("sccache contributors", text)
+
+    def test_repeated_staging_replaces_flat_commands_and_tree_payloads(self) -> None:
+        manifest = load_manifest()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            flat = self._stage(root, "uv", "amd64")
+            stale_command = flat / "usr" / "bin" / "stale-command"
+            stale_command.write_text("stale", encoding="utf-8")
+            flat_again = self._stage(root, "uv", "amd64")
+            self.assertEqual(flat_again, flat)
+            self.assertFalse(stale_command.exists())
+            self.assertEqual(
+                {path.name for path in (flat / "usr" / "bin").iterdir()}, {"uv", "uvx"}
+            )
+
+            neovim = next(pkg for pkg in manifest.packages if pkg.name == "neovim")
+            tree = stage_fixture_target(
+                root, neovim, "amd64", manifest, b"first", root / "stages"
+            )
+            stale_tree_file = tree / "usr" / "share" / "doc" / "neovim" / "stale.txt"
+            stale_tree_file.write_text("stale", encoding="utf-8")
+            tree_again = stage_fixture_target(
+                root, neovim, "amd64", manifest, b"second", root / "stages"
+            )
+            self.assertEqual(tree_again, tree)
+            self.assertFalse(stale_tree_file.exists())
+            self.assertEqual((tree / "usr" / "bin" / "nvim").read_bytes(), b"second")
+
+    def test_uv_stages_both_commands_and_both_license_texts(self) -> None:
+        manifest = load_manifest()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stage = self._stage(root, "uv", "amd64")
+            for name, payload in (("uv", b"fake-uv-amd64"), ("uvx", b"fake-uv-uvx")):
+                self.assertEqual((stage / "usr" / "bin" / name).read_bytes(), payload)
+                self.assertEqual((stage / "usr" / "bin" / name).stat().st_mode & 0o777, 0o755)
+            copyright_file = stage / "usr" / "share" / "doc" / "uv" / "copyright"
+            text = copyright_file.read_text()
+            self.assertIn("License: MIT OR Apache-2.0", text)
+            for body in read_vendor_licenses(next(p for p in manifest.packages if p.name == "uv")):
+                self.assertIn(body.rstrip(), text)
+            output = root / "uv.deb"
+            build_deb(stage, output)
+            contents = subprocess.run(
+                ["dpkg-deb", "-c", str(output)], text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            )
+            self.assertEqual(contents.returncode, 0)
+            self.assertIn("./usr/bin/uvx", contents.stdout)
 
 
 if __name__ == "__main__":

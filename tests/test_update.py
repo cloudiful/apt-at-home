@@ -20,7 +20,9 @@ from scripts.metadata import ARCHES
 from scripts.release_manifest import validated_document
 from scripts.update_plan import build_plan, merge_catalog
 from scripts.upstream import Candidate
-from scripts.upstream_assets import asset_name, license_path, license_url, release_download_url
+from scripts.upstream_assets import (
+    asset_name, license_path, license_url, license_urls_for, release_download_url,
+)
 from tests.release_fixtures import published_manifest, published_manifest_data
 
 
@@ -53,6 +55,7 @@ def candidate(name: str, version: str, *, sha: str | None = None) -> Candidate:
             }
             for arch in ARCHES
         },
+        extra_license_urls=license_urls_for(name, tag)[1:],
     )
 
 
@@ -89,10 +92,7 @@ def _catalog_candidates(**overrides: str) -> dict[str, Candidate]:
 class MergeCatalogTest(unittest.TestCase):
     def test_only_absent_packages_are_added(self) -> None:
         merged = merge_catalog(baseline_document(), catalog_document())
-        self.assertEqual(
-            [entry["name"] for entry in merged],
-            ["zellij", "starship", "git-delta", "rustfs-cli", "sccache", "neovim"],
-        )
+        self.assertEqual([entry["name"] for entry in merged], ["zellij", "starship", "git-delta", "rustfs-cli", "sccache", "neovim", "bottom", "uv", "zoxide"])
 
     def test_a_newer_published_version_survives_the_merge(self) -> None:
         baseline = baseline_document()
@@ -102,7 +102,7 @@ class MergeCatalogTest(unittest.TestCase):
         merged = merge_catalog(baseline, catalog_document())
         starship = next(e for e in merged if e["name"] == "starship")
         self.assertEqual(starship["version"], "1.27.0")
-        self.assertEqual(len(merged), 6)
+        self.assertEqual(len(merged), 9)
 
     def test_the_committed_catalog_never_drops_a_published_package(self) -> None:
         """A catalog that lost a name cannot delete what is already published."""
@@ -112,7 +112,7 @@ class MergeCatalogTest(unittest.TestCase):
             if e["name"] != "zellij"
         ]
         merged = merge_catalog(baseline_document(), trimmed)
-        self.assertEqual(len(merged), 6)
+        self.assertEqual(len(merged), 9)
         self.assertIn("zellij", [e["name"] for e in merged])
 
 
@@ -135,14 +135,12 @@ class PlanTest(unittest.TestCase):
             catalog_data=catalog_document(),
             candidates=_catalog_candidates(),
         )
-        # Every package sits at its pinned version, but the four the release
+        # Every package sits at its pinned version, but the seven the release
         # does not carry still have to be built.
-        self.assertEqual(plan.changed, ("git-delta", "neovim", "rustfs-cli", "sccache"))
-        self.assertEqual(plan.added, ("git-delta", "neovim", "rustfs-cli", "sccache"))
-        self.assertEqual(
-            sorted(p.name for p in plan.manifest.packages),
-            ["git-delta", "neovim", "rustfs-cli", "sccache", "starship", "zellij"],
-        )
+        additions = ("bottom", "git-delta", "neovim", "rustfs-cli", "sccache", "uv", "zoxide")
+        self.assertEqual(plan.changed, additions)
+        self.assertEqual(plan.added, additions)
+        self.assertEqual(sorted(p.name for p in plan.manifest.packages), ["bottom", "git-delta", "neovim", "rustfs-cli", "sccache", "starship", "uv", "zellij", "zoxide"])
         by_name = {p.name: p for p in plan.manifest.packages}
         # An added package keeps its catalog member and dependency profile.
         self.assertEqual(
@@ -162,8 +160,8 @@ class PlanTest(unittest.TestCase):
             catalog_data=catalog_document(),
             candidates=_catalog_candidates(starship="1.27.0", sccache="0.19.0"),
         )
-        self.assertEqual(plan.changed, ("git-delta", "neovim", "rustfs-cli", "sccache", "starship"))
-        self.assertEqual(plan.added, ("git-delta", "neovim", "rustfs-cli", "sccache"))
+        self.assertEqual(plan.changed, ("bottom", "git-delta", "neovim", "rustfs-cli", "sccache", "starship", "uv", "zoxide"))
+        self.assertEqual(plan.added, ("bottom", "git-delta", "neovim", "rustfs-cli", "sccache", "uv", "zoxide"))
         by_name = {p.name: p for p in plan.manifest.packages}
         starship = by_name["starship"]
         self.assertTrue(starship.license_url.endswith("/v1.27.0/LICENSE"))
@@ -207,6 +205,7 @@ class PlanTest(unittest.TestCase):
         for entry in baseline["packages"]:  # type: ignore[index]
             if entry["name"] == "starship":
                 entry["version"] = "1.27.0"
+                entry["license_url"] = candidate("starship", "1.27.0").license_url
         plan = build_plan(
             baseline_release_id="20260102-030405",
             baseline_data=baseline,
@@ -216,14 +215,15 @@ class PlanTest(unittest.TestCase):
         starship = next(p for p in plan.manifest.packages if p.name == "starship")
         self.assertEqual(starship.version, "1.27.0")
         self.assertNotIn("starship", plan.changed)
-        # Only the catalog additions remain to be built.
-        self.assertEqual(plan.changed, ("git-delta", "neovim", "rustfs-cli", "sccache"))
+        # Only the seven catalog additions remain to be built.
+        self.assertEqual(plan.changed, ("bottom", "git-delta", "neovim", "rustfs-cli", "sccache", "uv", "zoxide"))
 
     def test_an_older_candidate_for_a_newer_published_version_is_refused(self) -> None:
         baseline = baseline_document()
         for entry in baseline["packages"]:  # type: ignore[index]
             if entry["name"] == "starship":
                 entry["version"] = "1.27.0"
+                entry["license_url"] = candidate("starship", "1.27.0").license_url
         with self.assertRaises(ValueError) as ctx:
             build_plan(
                 baseline_release_id="20260102-030405",
@@ -341,8 +341,9 @@ class CliTest(unittest.TestCase):
                 storage=storage, candidates=_catalog_candidates(), fingerprint=key_id,
             )
             self.assertEqual(code, 0, msg=output)
-            self.assertIn("adding to the catalog: git-delta, neovim, rustfs-cli, sccache", output)
-            self.assertIn("would rebuild: git-delta, neovim, rustfs-cli, sccache", output)
+            expected = "bottom, git-delta, neovim, rustfs-cli, sccache, uv, zoxide"
+            self.assertIn(f"adding to the catalog: {expected}", output)
+            self.assertIn(f"would rebuild: {expected}", output)
             self.assertIn("dry run: no key imported", output)
             self.assertFalse((root / "out").exists())
             self.assertEqual([key for key in storage.reads if key.startswith("pool/")], [])

@@ -4,16 +4,25 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 
 from .archive_tree import top_root
-from .catalog import check_known_names, check_relations
+from .catalog import (
+    KNOWN_PACKAGES,
+    additional_binaries_for,
+    check_known_names,
+    check_relations,
+    extra_license_urls_for,
+)
 from .download import canonical_member
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _ARCHES = ("amd64", "arm64")
 _VERSION = re.compile(r"^[0-9][A-Za-z0-9.+~:-]*$")
+_BINARY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 _URL = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/[^ ]+$")
 
 
@@ -27,6 +36,7 @@ class ArchTarget:
     binary: str
     depends: str = ""
     install_tree: str = ""
+    additional_binaries: Mapping[str, str] = MappingProxyType({})
 
 
 @dataclass(frozen=True)
@@ -39,6 +49,7 @@ class Package:
     copyright: str
     license_url: str
     targets: dict[str, ArchTarget]
+    extra_license_urls: tuple[str, ...] = ()
     conflicts: str = ""
     replaces: str = ""
 
@@ -125,6 +136,40 @@ def _parse_source(name: str, arch: str, target_raw: dict[str, object]) -> tuple[
     return member, ""
 
 
+def _parse_additional_binaries(
+    name: str, version: str, arch: str, target_raw: dict[str, object],
+    primary_member: str, primary_binary: str, install_tree: str,
+) -> Mapping[str, str]:
+    if install_tree:
+        if "additional_binaries" in target_raw:
+            raise ValueError(f"{name} {arch} tree targets cannot declare additional_binaries")
+        return MappingProxyType({})
+    raw = target_raw.get("additional_binaries", {})
+    if not isinstance(raw, dict):
+        raise ValueError(f"additional_binaries must be an object for {name} {arch}")
+    parsed: dict[str, str] = {}
+    members = {primary_member}
+    binaries = {primary_binary}
+    for source, binary in raw.items():
+        if not isinstance(source, str):
+            raise ValueError(f"invalid additional archive member for {name} {arch}")
+        try:
+            member = canonical_member(source)
+        except ValueError as exc:
+            raise ValueError(f"invalid additional archive member for {name} {arch}: {exc}") from None
+        if member != source or member in members:
+            raise ValueError(f"duplicate or non-canonical additional member for {name} {arch}: {source!r}")
+        if not isinstance(binary, str) or not _BINARY.fullmatch(binary) or binary in binaries:
+            raise ValueError(f"invalid or duplicate additional binary for {name} {arch}: {binary!r}")
+        parsed[member] = binary
+        members.add(member)
+        binaries.add(binary)
+    expected = additional_binaries_for(name, version, arch) if name in KNOWN_PACKAGES else {}
+    if parsed != expected:
+        raise ValueError(f"additional_binaries for {name} {arch} do not match the reviewed recipe")
+    return MappingProxyType(parsed)
+
+
 def parse_package(raw: object) -> Package:
     if not isinstance(raw, dict):
         raise ValueError("package entry must be an object")
@@ -136,6 +181,13 @@ def parse_package(raw: object) -> Package:
     version = str(raw["version"])
     if not _VERSION.match(version):
         raise ValueError(f"invalid version for {name}: {version}")
+    extra_raw = raw.get("extra_license_urls", [])
+    if not isinstance(extra_raw, list) or any(not isinstance(url, str) for url in extra_raw):
+        raise ValueError(f"extra_license_urls must be a string list for {name}")
+    extra_urls = tuple(extra_raw)
+    expected_extra_urls = extra_license_urls_for(name, version) if name in KNOWN_PACKAGES else ()
+    if len(set(extra_urls)) != len(extra_urls) or extra_urls != expected_extra_urls:
+        raise ValueError(f"extra_license_urls for {name} do not match the reviewed recipe")
     targets_raw = raw["targets"]
     if not isinstance(targets_raw, dict):
         raise ValueError(f"targets must be an object for {name}")
@@ -156,11 +208,14 @@ def parse_package(raw: object) -> Package:
             raise ValueError(f"invalid pinned URL for {name} {arch}: {url}")
         if not _SHA256.match(sha256):
             raise ValueError(f"invalid sha256 for {name} {arch}")
-        if not binary or "/" in binary or binary.startswith("."):
+        if not _BINARY.fullmatch(binary):
             raise ValueError(f"invalid binary name for {name} {arch}")
+        additional = _parse_additional_binaries(
+            name, version, arch, target_raw, member, binary, install_tree
+        )
         targets[arch] = ArchTarget(
             url=url, sha256=sha256, archive_member=member, binary=binary,
-            depends=depends, install_tree=install_tree,
+            depends=depends, install_tree=install_tree, additional_binaries=additional,
         )
     conflicts = check_relations(f"conflicts for {name}", str(raw.get("conflicts", "") or ""))
     replaces = check_relations(f"replaces for {name}", str(raw.get("replaces", "") or ""))
@@ -173,6 +228,7 @@ def parse_package(raw: object) -> Package:
         copyright=str(raw["copyright"]),
         license_url=str(raw["license_url"]),
         targets=targets,
+        extra_license_urls=extra_urls,
         conflicts=conflicts,
         replaces=replaces,
     )

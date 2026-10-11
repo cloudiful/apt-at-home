@@ -29,9 +29,6 @@ from .update_build import apply_update
 from .update_plan import UpdatePlan, build_plan
 from .upstream import Candidate, client_from_env, discover
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
 def _default_output() -> Path:
     return Path("dist/update-repo")
 
@@ -68,8 +65,7 @@ def _discover(client) -> dict[str, Candidate]:  # type: ignore[no-untyped-def]
     """Discover the latest stable release of every reviewed package."""
     candidates: dict[str, Candidate] = {}
     for name in sorted(RECIPES):
-        vendored = (REPO_ROOT / "packaging" / "licenses" / name / "LICENSE.txt").read_bytes()
-        candidates[name] = discover(client, name, vendored_license=vendored)
+        candidates[name] = discover(client, name)
     return candidates
 
 

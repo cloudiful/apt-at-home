@@ -75,7 +75,10 @@ def write_target_archive(dest: Path, pkg: Package, arch: str, payload: bytes) ->
             required=required,
             payload=payload,
         )
-    return write_fake_archive(dest, member=target.archive_member, payload=payload)
+    return write_fake_archive(
+        dest, member=target.archive_member, payload=payload,
+        additional_members=tuple(target.additional_binaries),
+    )
 
 
 def stage_fixture_target(
@@ -94,12 +97,20 @@ def stage_fixture_target(
             pkg=pkg, arch=arch, manifest=manifest, stage_root=stage_root,
             tree=(archive, inventory, required_paths_for(pkg.name)),
         )
-    binary = root / "src" / f"{pkg.name}-{arch}" / target.binary
-    binary.parent.mkdir(parents=True, exist_ok=True)
+    source_root = root / "src" / f"{pkg.name}-{arch}"
+    binary = source_root / target.binary
+    source_root.mkdir(parents=True, exist_ok=True)
     binary.write_bytes(payload)
     binary.chmod(0o755)
+    additional: dict[str, Path] = {}
+    for name in target.additional_binaries.values():
+        source = source_root / name
+        source.write_bytes(payload)
+        source.chmod(0o755)
+        additional[name] = source
     return stage_package(
-        pkg=pkg, arch=arch, manifest=manifest, binary_file=binary, stage_root=stage_root,
+        pkg=pkg, arch=arch, manifest=manifest, binary_file=binary,
+        additional_binary_files=additional, stage_root=stage_root,
     )
 
 
@@ -148,11 +159,14 @@ def valid_tree_entries(
     ]
 
 
-def write_fake_archive(dest: Path, *, member: str, payload: bytes) -> Path:
-    """Write a gzipped tar holding one flat member at the exact pinned path."""
+def write_fake_archive(
+    dest: Path, *, member: str, payload: bytes, additional_members: tuple[str, ...] = ()
+) -> Path:
+    """Write a gzipped tar holding the exact pinned flat command members."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(dest, "w:gz") as tar:
-        _add_file(tar, member, payload, mode=0o755)
+        for name in (member, *additional_members):
+            _add_file(tar, name, payload, mode=0o755)
     return dest
 
 

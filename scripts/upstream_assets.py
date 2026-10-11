@@ -14,8 +14,10 @@ import re
 from .catalog import (
     ARCHES,
     asset_name,
+    extra_license_paths_for,
     license_path_for,
     recipe_for,
+    repo_of,
     tag_for,
 )
 
@@ -93,6 +95,13 @@ def license_url(repo: str, tag: str, path: str) -> str:
     return f"{RAW_BASE}/{repo}/{tag}/{path}"
 
 
+def license_urls_for(package_name: str, tag: str) -> tuple[str, ...]:
+    """Return primary and supplemental license URLs in reviewed recipe order."""
+    paths = (license_path(package_name), *extra_license_paths_for(package_name))
+    repo = repo_of(package_name)
+    return tuple(license_url(repo, tag, path) for path in paths)
+
+
 __all__ = [
     "ARCHES",
     "API_BASE",
@@ -102,6 +111,7 @@ __all__ = [
     "check_official_asset_url",
     "license_path",
     "license_url",
+    "license_urls_for",
     "parse_asset_digest",
     "parse_stable_tag",
     "release_download_url",

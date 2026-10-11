@@ -5,11 +5,14 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 
 from .archive_tree import TreeInventory
 from .common import require_tool
 from .manifest import Manifest, Package, deb_filename, debian_version
+from .package_binaries import stage_binaries
+from .package_licenses import copyright_text, read_vendor_licenses
 from .package_tree import install_tree
 
 # Fixed per-source epoch so identical manifests rebuild byte-identical .debs.
@@ -39,26 +42,6 @@ def debian_control(pkg: Package, arch: str, manifest: Manifest, installed_size_k
     )
 
 
-def copyright_text(pkg: Package, license_body: str) -> str:
-    return (
-        f"Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\n"
-        f"Upstream-Name: {pkg.name}\n"
-        f"Upstream-Contact: {pkg.homepage}\n"
-        f"Source: {pkg.homepage}\n"
-        f"\n"
-        f"Files: *\n"
-        f"Copyright: {pkg.copyright}\n"
-        f"License: {pkg.license}\n"
-        f"{license_body.rstrip()}\n"
-    )
-
-
-def read_vendor_license(package_name: str) -> str:
-    here = Path(__file__).resolve().parent.parent
-    path = here / "packaging" / "licenses" / package_name / "LICENSE.txt"
-    return path.read_text(encoding="utf-8")
-
-
 def stage_package(
     *,
     pkg: Package,
@@ -67,16 +50,23 @@ def stage_package(
     stage_root: Path,
     binary_file: Path | None = None,
     tree: tuple[Path, TreeInventory, tuple[str, ...]] | None = None,
+    additional_binary_files: Mapping[str, Path] | None = None,
 ) -> Path:
     """Create the staging tree; never executes the upstream binary.
 
     Exactly one payload is staged: a flat `binary_file`, or a reviewed `tree` as
-    (archive, validated inventory, required paths). The tree form installs the
-    binary from the archive's `bin` root instead of a separate file.
+    (archive, validated inventory, required paths). Additional flat commands are
+    supplied only by the reviewed target mapping.
     """
     if (binary_file is None) == (tree is None):
         raise ValueError("stage_package needs exactly one of binary_file or tree")
     target = pkg.targets[arch]
+    additional = dict(additional_binary_files or {})
+    expected_additional = set(target.additional_binaries.values())
+    if (tree is not None and additional) or (
+        tree is None and set(additional) != expected_additional
+    ):
+        raise ValueError(f"{pkg.name} {arch} additional binaries do not match the reviewed target")
     if bool(target.install_tree) != (tree is not None):
         raise ValueError(
             f"{pkg.name} {arch} declares "
@@ -95,13 +85,15 @@ def stage_package(
         archive, inventory, required = tree
         install_tree(archive, inventory, usr, required=required)
     else:
-        bin_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(binary_file, bin_dir / binary_name)
+        assert binary_file is not None
+        stage_binaries(bin_dir, binary_name, binary_file, additional)
     debian_dir.mkdir(parents=True, exist_ok=True)
     doc_dir.mkdir(parents=True, exist_ok=True)
 
-    license_body = read_vendor_license(pkg.name)
-    (doc_dir / "copyright").write_text(copyright_text(pkg, license_body), encoding="utf-8")
+    license_bodies = read_vendor_licenses(pkg)
+    (doc_dir / "copyright").write_text(
+        copyright_text(pkg, *license_bodies), encoding="utf-8"
+    )
     (doc_dir / "changelog.Debian").write_text(
         f"{pkg.name} ({debian_version(pkg, manifest)}) stable; urgency=low\n\n"
         f"  * Repackage upstream {pkg.version} {arch} binary.\n\n"

@@ -135,18 +135,20 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   `Packages` hashes, and the manifest bound by `X-Manifest-SHA256` /
   `X-Manifest-Size`) before it reads a single package byte, then compares that
   signed baseline against the latest stable upstream release of every package
-  in the catalog: git-delta, neovim, rustfs-cli, sccache, starship, and zellij.
+  in the catalog: bottom, git-delta, neovim, rustfs-cli, sccache, starship,
+   uv, zellij, and zoxide.
 - Each package has one reviewed recipe: the official repository, the release
-  tag prefix, the asset name, the archive member, the installed command, the
-  declared dependencies, and the SPDX license. A version bump recomputes the
-  member path from the new version, so an archive that nests its binary under a
-  versioned directory never reuses a stale prefix.
+  tag prefix, asset names, archive members, installed commands, dependencies,
+  and SPDX license sources. Version bumps recompute member paths from the new
+  version, preserving uvx and uv's supplemental Apache provenance without
+  trusting release metadata to choose files.
 - A package the published release does not carry yet is added from the catalog
-  rather than replacing anything. Adding three packages to a two-package
-  release builds six new `.deb` files and keeps the four published ones
-  byte-identical; the final indices list every package the new bound manifest
-  declares. The published version is authoritative, so a catalog that pins an
-  older version never overwrites a newer published one.
+  rather than replacing anything. With the nine-package catalog, a two-package
+  baseline adds seven packages (14 `.deb` files), a six-package baseline adds
+  three (6 `.deb` files), and a five-package baseline adds four (8 `.deb` files);
+  every existing package stays byte-identical. The final indices list every
+  package the new bound manifest declares. The published version is authoritative,
+  so a catalog that pins an older version never overwrites a newer published one.
 - Only changed packages are rebuilt — one package is two architectures, so a
   later single-package update produces exactly two new `.deb` files while the
   rest of the pool stays byte-identical.

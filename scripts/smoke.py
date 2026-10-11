@@ -29,12 +29,13 @@ from .smoke_package import (
     ELF_MACHINE,
     MAX_BINARY_BYTES,
     SmokeError,
+    check_copyright,
     check_elf,
     check_package,
     control_fields,
     elf_machine,
-    expected_binary,
 )
+from .smoke_commands import binaries_for_target
 from .smoke_runtime import run_installed
 from .smoke_tree import check_relations, check_tree_payload
 from .smoke_upgrade import check_upgraded_state
@@ -75,7 +76,10 @@ def check_pool(manifest: Manifest, pool: Path, arches: tuple[str, ...]) -> list[
                     pool / deb_filename(pkg, arch, manifest),
                     Path(scratch) / f"{pkg.name}-{arch}",
                 )
-                check_elf(pkg, arch, extracted / "usr" / "bin" / expected_binary(pkg))
+                check_copyright(pkg, extracted)
+                for binary in binaries_for_target(pkg.targets[arch]):
+                    check_elf(pkg, arch, extracted / "usr" / "bin" / binary)
+                    findings.append(f"{pkg.name} {arch}: /usr/bin/{binary} is {ELF_MACHINE[arch]}")
                 if pkg.targets[arch].install_tree:
                     deb = pool / deb_filename(pkg, arch, manifest)
                     check_relations(pkg, control_fields(deb))
@@ -83,7 +87,6 @@ def check_pool(manifest: Manifest, pool: Path, arches: tuple[str, ...]) -> list[
                         f"{pkg.name} {arch}: {line}"
                         for line in check_tree_payload(pkg, arch, extracted / "usr")
                     )
-                findings.append(f"{pkg.name} {arch}: binary is {ELF_MACHINE[arch]}")
     return findings
 
 

@@ -4,9 +4,9 @@ The published release, the reprepro indices, the GPG signature, and the pointer
 ordering are all real; only the upstream archive download is stubbed, so the
 test proves the update mechanics rather than GitHub's availability. The
 headline case is the one production will run first: a published two-package
-release meeting the full catalog, which must add three packages, build exactly
-six .deb files, keep the four published ones byte-identical, and publish a
-complete ten-file release.
+release meeting the full catalog, which must add seven packages, build exactly
+fourteen .deb files, keep the four published ones byte-identical, and publish a
+complete eighteen-file release.
 """
 
 import json
@@ -20,12 +20,14 @@ from unittest import mock
 from scripts.manifest import deb_filename, load_manifest
 from scripts.metadata import ARCHES
 from scripts.release_verify import restore_metadata
+from scripts.smoke_package import check_copyright, check_package
 from scripts.restore_packages import restore_pool
 from scripts.storage import MAX_DEB_BYTES, ObjectNotFound
 from scripts.update_build import apply_update
 from scripts.update_plan import build_plan
 from tests.helpers import FakeS3, make_gpg_home_with_key, write_target_archive
 from tests.release_fixtures import (
+    PUBLISHED_NAMES,
     RELEASE_ID,
     build_release_objects,
     published_manifest,
@@ -96,7 +98,7 @@ class UpdateBuildTest(unittest.TestCase):
         store.seed(build_release_objects(work / "published", key_home=key_home, key_id=key_id))
         return store
 
-    def test_the_catalog_addition_builds_six_debs_and_keeps_the_four_published(self) -> None:
+    def test_the_catalog_addition_builds_fourteen_debs_and_keeps_the_four_published(self) -> None:
         tmpdir, home, key_id = make_gpg_home_with_key()
         try:
             with tempfile.TemporaryDirectory() as tmp:
@@ -120,7 +122,8 @@ class UpdateBuildTest(unittest.TestCase):
                     catalog_data=catalog_document(),
                     candidates=_catalog_candidates(),
                 )
-                self.assertEqual(plan.changed, ("git-delta", "neovim", "rustfs-cli", "sccache"))
+                additions = ("bottom", "git-delta", "neovim", "rustfs-cli", "sccache", "uv", "zoxide")
+                self.assertEqual(plan.changed, additions)
 
                 key_file = _export_private_key(home, root / "test-private.asc")
                 with _stub_archive():
@@ -140,19 +143,22 @@ class UpdateBuildTest(unittest.TestCase):
                 self.assertEqual(result.release_id, "catalog-release")
 
                 pool = {p.name: p.read_bytes() for p in (output / "pool").glob("*.deb")}
-                self.assertEqual(len(pool), 12)
-                # Exactly the four added packages were built.
+                self.assertEqual(len(pool), 18)
+                # Exactly the seven added packages were built for both architectures.
                 self.assertEqual(
                     sorted(path.name for path in result.debs),
                     [
-                        "git-delta_0.20.1-1_amd64.deb",
-                        "git-delta_0.20.1-1_arm64.deb",
-                        "neovim_0.12.6-1_amd64.deb",
-                        "neovim_0.12.6-1_arm64.deb",
-                        "rustfs-cli_0.1.36-1_amd64.deb",
-                        "rustfs-cli_0.1.36-1_arm64.deb",
-                        "sccache_0.18.0-1_amd64.deb",
-                        "sccache_0.18.0-1_arm64.deb",
+                        f"{name}_{version}-1_{arch}.deb"
+                        for name, version in (
+                            ("bottom", "0.14.9"),
+                            ("git-delta", "0.20.1"),
+                            ("neovim", "0.12.6"),
+                            ("rustfs-cli", "0.1.36"),
+                            ("sccache", "0.18.0"),
+                            ("uv", "0.13.0"),
+                            ("zoxide", "0.10.0"),
+                        )
+                        for arch in ARCHES
                     ],
                 )
                 # Every published package stays byte-identical.
@@ -164,7 +170,7 @@ class UpdateBuildTest(unittest.TestCase):
                         output / "releases" / "catalog-release" / "dists" / "stable"
                         / "main" / f"binary-{arch}" / "Packages"
                     ).read_text()
-                    self.assertEqual(len(text.strip().split("\n\n")), 6)
+                    self.assertEqual(len(text.strip().split("\n\n")), 9)
                     self.assertIn("Version: 0.20.1-1", text)
                     # The Debian name and the installed command differ for rc.
                     self.assertIn(f"Package: rustfs-cli\n", text)
@@ -179,12 +185,21 @@ class UpdateBuildTest(unittest.TestCase):
                         if s.startswith("Package: git-delta\n") and f"Architecture: {arch}\n" in s
                     )
                     self.assertEqual("Depends:" in delta_stanza, arch == "arm64", msg=arch)
+                    uv = next(pkg for pkg in plan.manifest.packages if pkg.name == "uv")
+                    check_package(uv, arch, manifest=plan.manifest, pool=output / "pool")
+                    uv_root = root / f"uv-{arch}"
+                    extracted = subprocess.run(
+                        ["dpkg-deb", "-x", str(output / "pool" / deb_filename(uv, arch, plan.manifest)), str(uv_root)],
+                        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+                    )
+                    self.assertEqual(extracted.returncode, 0, msg=extracted.stderr)
+                    check_copyright(uv, uv_root)
 
-                # The new release binds the five-package manifest.
+                # The new release binds the complete nine-package manifest.
                 bound = json.loads(
                     (output / "releases" / "catalog-release" / "manifest.json").read_text()
                 )
-                self.assertEqual(len(bound["packages"]), 6)
+                self.assertEqual(len(bound["packages"]), 9)
                 self.assertIn("releases/catalog-release/manifest.json", store.client.puts)
                 # The pointer is the last object written.
                 self.assertEqual(store.client.puts[-1], "current.json")
@@ -222,7 +237,7 @@ class UpdateBuildTest(unittest.TestCase):
                 uploaded_before = list(store.client.puts)
                 follow_up = restore_metadata(store, fingerprint=key_id)
                 self.assertEqual(follow_up.release_id, "catalog-release")
-                self.assertEqual(len(follow_up.manifest.packages), 6)
+                self.assertEqual(len(follow_up.manifest.packages), 9)
                 second = build_plan(
                     baseline_release_id=follow_up.release_id,
                     baseline_data=follow_up.manifest_data,

@@ -121,6 +121,12 @@ class DebTest(unittest.TestCase):
                 first = build_all(manifest, pool_dir=pool, cache_dir=cache)
                 second = build_all(manifest, pool_dir=pool, cache_dir=cache)
                 self.assertEqual(first, second)
+                self.assertEqual(len(first), 18)
+                uv_contents = subprocess.run(
+                    ["dpkg-deb", "-c", str(pool / "uv_0.13.0-1_amd64.deb")],
+                    text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+                )
+                self.assertIn("./usr/bin/uvx", uv_contents.stdout)
             finally:
                 build_module.fetch_verified = original  # type: ignore[assignment]
 

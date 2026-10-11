@@ -10,9 +10,9 @@ or nest the binary under a versioned directory.
 import unittest
 from pathlib import Path
 
-from scripts.catalog import RECIPES, archive_member, asset_name
+from scripts.catalog import RECIPES, archive_member, asset_name, extra_license_paths_for
 from scripts.upstream import HttpError, UrllibClient, discover, latest_stable
-from scripts.upstream_assets import license_url, releases_api_url
+from scripts.upstream_assets import license_url, license_urls_for, releases_api_url
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ZELLIJ = "zellij-org/zellij"
@@ -61,6 +61,27 @@ UPSTREAMS = {
             "arm64": "nvim-linux-arm64.tar.gz",
         },
     ),
+    "bottom": (
+        "ClementTsang/bottom", "0.14.9", "LICENSE",
+        {
+            "amd64": "bottom_x86_64-unknown-linux-gnu.tar.gz",
+            "arm64": "bottom_aarch64-unknown-linux-gnu.tar.gz",
+        },
+    ),
+    "uv": (
+        "astral-sh/uv", "0.13.0", "LICENSE-MIT",
+        {
+            "amd64": "uv-x86_64-unknown-linux-gnu.tar.gz",
+            "arm64": "uv-aarch64-unknown-linux-gnu.tar.gz",
+        },
+    ),
+    "zoxide": (
+        "ajeetdsouza/zoxide", "v0.10.0", "LICENSE",
+        {
+            "amd64": "zoxide-0.10.0-x86_64-unknown-linux-musl.tar.gz",
+            "arm64": "zoxide-0.10.0-aarch64-unknown-linux-musl.tar.gz",
+        },
+    ),
 }
 
 
@@ -96,7 +117,9 @@ def release_payload(
 
 def fixture_payloads(
     package: str, *, tag: str | None = None, digest: str | None = "sha256:" + "ab" * 32,
-    license_bytes: bytes | None = None, payload: dict[str, object] | None = None,
+    license_bytes: bytes | None = None,
+    extra_license_bytes: dict[str, bytes] | None = None,
+    payload: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Serve the latest-release API and the tagged license for one package."""
     repo, default_tag, path, names = UPSTREAMS[package]
@@ -110,12 +133,20 @@ def fixture_payloads(
         ),
         digest=digest,
     )
-    return {
+    responses: dict[str, object] = {
         releases_api_url(repo): body,
         license_url(repo, used_tag, path): (
             license_bytes if license_bytes is not None else vendored(package)
         ),
     }
+    for extra_path in extra_license_paths_for(package):
+        responses[license_url(repo, used_tag, extra_path)] = (
+            (extra_license_bytes or {}).get(
+                extra_path,
+                (REPO_ROOT / "packaging" / "licenses" / package / extra_path).read_bytes(),
+            )
+        )
+    return responses
 
 
 class FakeHttp:
@@ -297,6 +328,25 @@ class DiscoverTest(unittest.TestCase):
                 with self.assertRaises(ValueError) as ctx:
                     discover(client, package, vendored_license=vendored(package))
                 self.assertIn("license bytes changed", str(ctx.exception))
+
+    def test_uv_candidate_keeps_exact_primary_and_supplemental_provenance(self) -> None:
+        client = FakeHttp(fixture_payloads("uv"))
+        candidate = discover(client, "uv", vendored_license=vendored("uv"))
+        urls = license_urls_for("uv", "0.13.0")
+        self.assertEqual(candidate.license_url, urls[0])
+        self.assertEqual(candidate.extra_license_urls, urls[1:])
+        self.assertEqual(
+            [url for url in client.requests if "/LICENSE" in url],
+            list(urls),
+        )
+
+    def test_changed_uv_supplemental_license_stops_discovery(self) -> None:
+        client = FakeHttp(fixture_payloads(
+            "uv", extra_license_bytes={"LICENSE-APACHE": b"changed Apache text"}
+        ))
+        with self.assertRaises(ValueError) as ctx:
+            discover(client, "uv", vendored_license=vendored("uv"))
+        self.assertIn("supplemental license LICENSE-APACHE bytes changed", str(ctx.exception))
 
     def test_a_missing_digest_stops_before_a_candidate_is_built(self) -> None:
         client = FakeHttp(fixture_payloads("sccache", digest=None))

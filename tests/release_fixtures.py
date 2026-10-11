@@ -35,13 +35,15 @@ from tests.helpers import stage_fixture_target
 
 RELEASE_ID = "20260102-030405"
 COMMITTED = load_manifest()
+CATALOG_NAMES = tuple(pkg.name for pkg in COMMITTED.packages)
 
 # What production publishes today: the current release predates the newer
 # catalog entries, so the fixtures below model that two-package baseline rather
 # than assuming the committed catalog was already shipped.
 PUBLISHED_NAMES = ("starship", "zellij")
-# The five packages the release carried before neovim joined the catalog.
+# The five packages carried before neovim joined, and that six-package release.
 FIVE_PUBLISHED_NAMES = ("git-delta", "rustfs-cli", "sccache", "starship", "zellij")
+SIX_PUBLISHED_NAMES = (*FIVE_PUBLISHED_NAMES, "neovim")
 
 
 def published_manifest_data(names: tuple[str, ...] = PUBLISHED_NAMES) -> dict[str, object]:

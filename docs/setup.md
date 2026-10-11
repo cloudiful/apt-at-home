@@ -162,6 +162,11 @@ the exact three steps, reproduced here for operators.
   APT upgrade removes the distribution runtime through the normal solver. Its
   headless check exercises the packaged runtime and the bundled Lua tree-sitter
   parser.
+- The command-line packages are `bottom` (`btm`), `git-delta` (`delta`),
+  `neovim` (`nvim`), `rustfs-cli` (`rc`), `sccache`, `starship`, `uv` (`uv` and
+  `uvx`), `zellij`, and `zoxide`. Zoxide shell initialization is opt-in; users
+  may add `eval "$(zoxide init bash)"` to their own Bash configuration. Package
+  installation never edits shell configuration.
 
 ## 6. WAF, limits, and alerts (limitations)
 

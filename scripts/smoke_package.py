@@ -12,6 +12,8 @@ from pathlib import Path
 
 from .catalog import binary_name, depends_for
 from .manifest import Manifest, Package, deb_filename
+from .package_licenses import copyright_text, read_vendor_licenses
+from .smoke_commands import binaries_for_target
 
 # ELF e_machine values for the two published architectures.
 ELF_MACHINE = {"amd64": "x86-64", "arm64": "aarch64"}
@@ -90,7 +92,8 @@ def check_package(pkg: Package, arch: str, *, manifest: Manifest, pool: Path) ->
             f"expected {declared_depends!r}"
         )
 
-    binary = expected_binary(pkg)
+    expected_binary(pkg)
+    binaries = binaries_for_target(pkg.targets[arch])
     listing = subprocess.run(
         ["dpkg-deb", "-c", str(deb)], text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
@@ -100,16 +103,30 @@ def check_package(pkg: Package, arch: str, *, manifest: Manifest, pool: Path) ->
     installed = {
         line.split()[-1]
         for line in listing.stdout.splitlines()
-        if line.split() and line.split()[-1].startswith("./usr/bin/")
+        if line.split()
+        and line.split()[-1].startswith("./usr/bin/")
+        and not line.split()[-1].endswith("/")
     }
-    if f"./usr/bin/{binary}" not in installed:
+    expected_installed = {f"./usr/bin/{binary}" for binary in binaries}
+    if installed != expected_installed:
         raise SmokeError(
-            f"{deb.name} installs {sorted(installed)}, expected /usr/bin/{binary}"
+            f"{deb.name} installs {sorted(installed)}, expected "
+            f"{sorted(expected_installed)}"
         )
     return [
         f"{deb.name}: {expected_fields['Package']} {expected_fields['Version']} {arch} "
-        f"installs /usr/bin/{binary} as {ELF_MACHINE[arch]}"
+        f"installs {', '.join('/usr/bin/' + binary for binary in binaries)}"
     ]
+
+
+def check_copyright(pkg: Package, package_root: Path) -> None:
+    """Require the packaged copyright file to carry every reviewed license text."""
+    path = package_root / "usr" / "share" / "doc" / pkg.name / "copyright"
+    if not path.is_file():
+        raise SmokeError(f"{pkg.name} package is missing its Debian copyright file")
+    expected = copyright_text(pkg, *read_vendor_licenses(pkg))
+    if path.read_text(encoding="utf-8") != expected:
+        raise SmokeError(f"{pkg.name} Debian copyright does not match reviewed license texts")
 
 
 def check_elf(pkg: Package, arch: str, binary: Path) -> None:

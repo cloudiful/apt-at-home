@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 
+from .download import canonical_member
 from .recipes import RECIPES, Recipe
 
 __all__ = ["ARCHES", "KNOWN_PACKAGES", "RECIPES", "Recipe"]
@@ -89,6 +90,41 @@ def archive_member(package_name: str, version: str, arch: str) -> str:
         if not _SAFE_COMPONENT.match(component):
             raise ValueError(f"{package_name} {arch} archive member is unsafe: {member}")
     return member
+
+
+def additional_binaries_for(package_name: str, version: str, arch: str) -> dict[str, str]:
+    """Return exact reviewed archive members and installed names beyond the primary."""
+    recipe = recipe_for(package_name)
+    prefix = asset_name(package_name, version, arch).removesuffix(".tar.gz")
+    primary = archive_member(package_name, version, arch)
+    members: dict[str, str] = {}
+    names = {recipe.binary}
+    for template, binary in recipe.additional_members.items():
+        member = canonical_member(template.format(
+            prefix=prefix, binary=recipe.binary, upstream=recipe.upstream
+        ))
+        if member == primary or member in members:
+            raise ValueError(f"{package_name} has duplicate reviewed archive member: {member}")
+        if not _SAFE_COMPONENT.match(binary) or binary in names:
+            raise ValueError(f"{package_name} has unsafe or duplicate installed binary: {binary!r}")
+        members[member] = binary
+        names.add(binary)
+    return members
+
+
+def extra_license_paths_for(package_name: str) -> tuple[str, ...]:
+    """Return reviewed extra license filenames under the package license directory."""
+    return recipe_for(package_name).extra_license_paths
+
+
+def extra_license_urls_for(package_name: str, version: str) -> tuple[str, ...]:
+    """Return exact raw-source URLs for the recipe's additional license texts."""
+    recipe = recipe_for(package_name)
+    tag = tag_for(package_name, version)
+    return tuple(
+        f"https://raw.githubusercontent.com/{recipe.repo}/{tag}/{path}"
+        for path in recipe.extra_license_paths
+    )
 
 
 def install_tree_for(package_name: str, version: str, arch: str) -> str:

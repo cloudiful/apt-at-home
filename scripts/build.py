@@ -10,8 +10,9 @@ from .archive_tree import inventory_tree
 from .catalog import required_paths_for
 from .common import sha256_file
 from .deb import build_deb, stage_package
-from .download import fetch_verified, safe_extract_member
+from .download import fetch_verified
 from .manifest import Manifest, Package, deb_filename
+from .package_binaries import extract_binaries
 
 
 def _stage_target(
@@ -28,14 +29,18 @@ def _stage_target(
             stage_root=tmpdir / "stages",
             tree=(archive, inventory, required_paths_for(pkg.name)),
         )
-    binary_src = tmpdir / f"{pkg.name}-{arch}-bin" / target.binary
-    binary_src.parent.mkdir(parents=True, exist_ok=True)
-    safe_extract_member(archive, target.archive_member, binary_src)
+    binary_sources = extract_binaries(
+        archive, target, tmpdir / f"{pkg.name}-{arch}-bin"
+    )
+    additional = {
+        name: source for name, source in binary_sources.items() if name != target.binary
+    }
     return stage_package(
         pkg=pkg,
         arch=arch,
         manifest=manifest,
-        binary_file=binary_src,
+        binary_file=binary_sources[target.binary],
+        additional_binary_files=additional,
         stage_root=tmpdir / "stages",
     )
 

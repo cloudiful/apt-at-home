@@ -16,6 +16,12 @@ from pathlib import Path
 
 from .catalog import smoke_args
 from .manifest import Manifest, Package
+from .smoke_commands import (
+    CommandProbe,
+    binaries_for_target,
+    check_probe_output,
+    extra_command_probes,
+)
 from .smoke_package import SmokeError, check_elf, expected_binary
 
 # A static Lua contract: each step must hold, and any failure exits 1 explicitly
@@ -38,13 +44,17 @@ NEOVIM_ARGS = (
     "-c", f"lua {NEOVIM_LUA_CHECK}", "-c", "qa!",
 )
 RUN_TIMEOUT_SECONDS = 30
-# A runtime probe gets a scrubbed environment: no user config, data, or network.
+# Runtime probes get isolated user directories; uv commands stay offline.
 _ISOLATED_ENV = ("HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME")
 
 
 def _run(binary: Path, args: tuple[str, ...], *, scratch: Path) -> subprocess.CompletedProcess[str]:
     """Execute one installed binary in an isolated home; capture its output."""
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8"}
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "LANG": "C.UTF-8",
+        "UV_OFFLINE": "1",
+    }
     for name in _ISOLATED_ENV:
         env[name] = str(scratch / name.lower())
         (scratch / name.lower()).mkdir(parents=True, exist_ok=True)
@@ -74,19 +84,38 @@ def arguments_for(package_name: str) -> tuple[str, ...]:
     return handler(package_name) if handler else _generic_args(package_name)
 
 
-def run_package(pkg: Package, arch: str, *, prefix: Path, scratch: Path) -> str:
-    """Run one installed package's check; returns one finding line or raises."""
-    binary = prefix / "usr" / "bin" / expected_binary(pkg)
+def _run_probe(
+    pkg: Package, arch: str, probe: CommandProbe, *, prefix: Path, scratch: Path
+) -> str:
+    target = pkg.targets[arch]
+    if probe.binary not in binaries_for_target(target):
+        raise SmokeError(f"{pkg.name} smoke probe names uninstalled command {probe.binary}")
+    binary = prefix / "usr" / "bin" / probe.binary
     check_elf(pkg, arch, binary)
-    args = arguments_for(pkg.name)
-    proc = _run(binary, args, scratch=scratch)
+    proc = _run(binary, probe.args, scratch=scratch)
     if proc.returncode != 0:
         raise SmokeError(
-            f"{binary.name} {' '.join(args[:2])} exited {proc.returncode}: "
+            f"{binary.name} {' '.join(probe.args[:2])} exited {proc.returncode}: "
             f"{proc.stdout.strip()[:400]}"
         )
+    try:
+        check_probe_output(probe, proc.stdout)
+    except ValueError as exc:
+        raise SmokeError(str(exc)) from exc
     first_line = (proc.stdout.strip().splitlines() or [""])[0]
-    return f"{binary} [{arch}] {' '.join(args[:2])} exited 0: {first_line[:120]}"
+    return f"{binary} [{arch}] {' '.join(probe.args[:2])} exited 0: {first_line[:120]}"
+
+
+def run_package(pkg: Package, arch: str, *, prefix: Path, scratch: Path) -> list[str]:
+    """Run every reviewed command check for one installed package."""
+    probes = (
+        CommandProbe(expected_binary(pkg), arguments_for(pkg.name)),
+        *extra_command_probes(pkg.name),
+    )
+    return [
+        _run_probe(pkg, arch, probe, prefix=prefix, scratch=scratch)
+        for probe in probes
+    ]
 
 
 def run_installed(manifest: Manifest, arch: str, prefix: Path = Path("/")) -> list[str]:
@@ -95,5 +124,5 @@ def run_installed(manifest: Manifest, arch: str, prefix: Path = Path("/")) -> li
     scratch = Path(os.environ.get("TMPDIR", "/tmp")) / "apt-smoke-run"
     scratch.mkdir(parents=True, exist_ok=True)
     for pkg in sorted(manifest.packages, key=lambda p: p.name):
-        findings.append(run_package(pkg, arch, prefix=prefix, scratch=scratch))
+        findings.extend(run_package(pkg, arch, prefix=prefix, scratch=scratch))
     return findings
