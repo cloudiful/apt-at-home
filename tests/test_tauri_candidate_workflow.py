@@ -34,11 +34,31 @@ def job_block(job: str) -> str:
     return rest[: match.start() + 1] if match else rest
 
 
+def step_order(job: str) -> list[str]:
+    """The names of a job's steps, in the order the workflow runs them."""
+    block = job_block(job)
+    return re.findall(r"^      - (?:name: (.+)|uses: ([^\s]+))$", block, re.MULTILINE)
+
+
+def installed_packages(job: str) -> list[str]:
+    """Package names from a job's `apt-get install` lines, flags stripped."""
+    packages: list[str] = []
+    for line in job_block(job).splitlines():
+        if "apt-get install" not in line:
+            continue
+        for token in line.split("apt-get install", 1)[1].split():
+            if token.startswith("-") or token == "&&":
+                if token == "&&":
+                    break
+                continue
+            packages.append(token)
+    return packages
+
+
 class CandidateJobsExistTest(unittest.TestCase):
     def test_the_four_candidate_jobs_are_present(self) -> None:
         for job in CANDIDATE_JOBS:
             self.assertIn(f"\n  {job}:", CI, job)
-
     def test_each_candidate_job_builds_on_debian_13(self) -> None:
         for job in CANDIDATE_JOBS:
             self.assertIn("container: debian:13", job_block(job), job)
@@ -235,6 +255,53 @@ class CandidateFenceTest(unittest.TestCase):
         self.assertIn("workflow_dispatch", CI)
         for job in CANDIDATE_JOBS:
             self.assertNotIn("needs: [publish", job_block(job), job)
+
+
+class GitAvailabilityTest(unittest.TestCase):
+    """Real git has to exist before anything claims to verify a git object.
+
+    Two environments decide this: the gate that runs the test suite, which
+    shells out to git, and the ARM job, whose upstream checkout and provenance
+    both go through git. Without it, actions/checkout silently falls back to a
+    REST tarball, and `git rev-parse` later reports that there is no repository.
+    """
+
+    def test_the_python_gate_installs_git(self) -> None:
+        packages = installed_packages("python")
+        self.assertIn("git", packages, packages)
+        self.assertIn("python3", packages, packages)
+
+    def test_the_arm64_job_installs_git_in_its_system_tools(self) -> None:
+        step = job_block("tauri-candidate-arm64").split("- name: Install system tools")[1]
+        step = step.split("- name:")[0]
+        self.assertIn("apt-get install", step)
+        self.assertIn(" git ", f" {step} ")
+
+    def test_the_arm64_job_installs_git_before_every_checkout(self) -> None:
+        block = job_block("tauri-candidate-arm64")
+        install = block.index("- name: Install system tools")
+        first_checkout = block.index("      - uses: actions/checkout@")
+        upstream = block.index("- name: Check out the pinned upstream source")
+        self.assertLess(install, first_checkout)
+        self.assertLess(install, upstream)
+        self.assertLess(first_checkout, upstream)
+
+    def test_the_upstream_checkout_still_asks_for_a_real_repository(self) -> None:
+        block = job_block("tauri-candidate-arm64")
+        upstream = block.split("- name: Check out the pinned upstream source")[1]
+        upstream = upstream.split("- name:")[0]
+        self.assertIn(f"ref: ${{{{ env.UPSTREAM_COMMIT }}}}", upstream)
+        self.assertIn("persist-credentials: false", upstream)
+        self.assertIn("fetch-depth: 1", upstream)
+
+    def test_the_arm64_job_still_proves_the_commit_and_lockfile_with_git(self) -> None:
+        """No fallback that asserts only the pinned commit without checking it."""
+        block = job_block("tauri-candidate-arm64")
+        self.assertIn("python3 -m scripts.tauri_candidate_provenance emit-source-build", block)
+        self.assertIn("--upstream dist/tauri-candidate/upstream", block)
+        for token in ("git init", "git commit", "git clone", "--allow-unverified",
+                      "--skip-verification", "git config"):
+            self.assertNotIn(token, block, token)
 
 
 class ProductionJobsUntouchedTest(unittest.TestCase):

@@ -47,7 +47,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install system tools
-        run: apt-get update && apt-get install -y --no-install-recommends apt file reprepro xz-utils gnupg python3 curl ca-certificates && rm -rf /var/lib/apt/lists/*
+        run: apt-get update && apt-get install -y --no-install-recommends apt file git reprepro xz-utils gnupg python3 curl ca-certificates && rm -rf /var/lib/apt/lists/*
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
       - name: Verify portable public dependency lock
         run: uv lock --check
@@ -272,6 +272,12 @@ jobs:
       RUSTUP_INIT_SHA256: 15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433
       ARTIFACT: dist/tauri-candidate/upstream/target/aarch64-unknown-linux-gnu/release-size-optimized/cargo-tauri
     steps:
+      # git is installed before any checkout: without it actions/checkout cannot
+      # fetch and falls back to a REST tarball, which has no repository at all.
+      # The provenance step below proves the pinned commit and lockfile through
+      # real git, so a tarball checkout would fail there instead of here.
+      - name: Install system tools
+        run: apt-get update && apt-get install -y --no-install-recommends build-essential ca-certificates curl git libgtk-3-dev libssl-dev pkg-config python3 && rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
@@ -283,8 +289,6 @@ jobs:
           path: dist/tauri-candidate/upstream
           persist-credentials: false
           fetch-depth: 1
-      - name: Install system tools
-        run: apt-get update && apt-get install -y --no-install-recommends build-essential ca-certificates curl git libgtk-3-dev libssl-dev pkg-config python3 && rm -rf /var/lib/apt/lists/*
       - name: Install the pinned Rust toolchain
         run: |
           set -euo pipefail
