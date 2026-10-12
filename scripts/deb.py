@@ -42,6 +42,49 @@ def debian_control(pkg: Package, arch: str, manifest: Manifest, installed_size_k
     )
 
 
+def finalize_package_stage(
+    *,
+    stage: Path,
+    pkg: Package,
+    arch: str,
+    manifest: Manifest,
+    license_bodies: tuple[str, ...],
+    keep_executables: bool = False,
+) -> None:
+    """Write the Debian metadata for a staged tree and normalise it.
+
+    This is the second half of staging, split out so a caller that adds its own
+    payload after `stage_package` — the candidate's notice files and its owned
+    `bunx` alias — can call it again and get a correct `Installed-Size`, correct
+    modes, and clamped mtimes over the finished tree. It writes the copyright,
+    the changelog, and the control file, so it is safe to run more than once.
+    """
+    debian_dir = stage / "DEBIAN"
+    doc_dir = stage / "usr" / "share" / "doc" / pkg.name
+    debian_dir.mkdir(parents=True, exist_ok=True)
+    doc_dir.mkdir(parents=True, exist_ok=True)
+
+    (doc_dir / "copyright").write_text(
+        copyright_text(pkg, *license_bodies), encoding="utf-8"
+    )
+    (doc_dir / "changelog.Debian").write_text(
+        f"{pkg.name} ({debian_version(pkg, manifest)}) stable; urgency=low\n\n"
+        f"  * Repackage upstream {pkg.version} {arch} binary.\n\n"
+        f" -- {manifest.maintainer}  Thu, 01 Jan 2026 00:00:00 +0000\n",
+        encoding="utf-8",
+    )
+    installed_kb = max(
+        1,
+        sum(p.stat().st_size for p in stage.rglob("*") if p.is_file() and not p.is_symlink())
+        // 1024,
+    )
+    (debian_dir / "control").write_text(
+        debian_control(pkg, arch, manifest, installed_kb), encoding="utf-8"
+    )
+    _apply_deterministic_modes(stage, keep_executables=keep_executables)
+    _clamp_mtimes(stage, SOURCE_DATE_EPOCH)
+
+
 def stage_package(
     *,
     pkg: Package,
@@ -51,12 +94,17 @@ def stage_package(
     binary_file: Path | None = None,
     tree: tuple[Path, TreeInventory, tuple[str, ...]] | None = None,
     additional_binary_files: Mapping[str, Path] | None = None,
+    license_bodies: tuple[str, ...] | None = None,
 ) -> Path:
     """Create the staging tree; never executes the upstream binary.
 
     Exactly one payload is staged: a flat `binary_file`, or a reviewed `tree` as
     (archive, validated inventory, required paths). Additional flat commands are
     supplied only by the reviewed target mapping.
+
+    `license_bodies` defaults to the reviewed vendor licenses for a catalog
+    package. The candidate passes its own bodies explicitly, because it is not a
+    catalog package and has no entry in the shared license catalog.
     """
     if (binary_file is None) == (tree is None):
         raise ValueError("stage_package needs exactly one of binary_file or tree")
@@ -79,34 +127,18 @@ def stage_package(
         shutil.rmtree(stage)
     usr = stage / "usr"
     bin_dir = usr / "bin"
-    doc_dir = usr / "share" / "doc" / pkg.name
-    debian_dir = stage / "DEBIAN"
     if tree is not None:
         archive, inventory, required = tree
         install_tree(archive, inventory, usr, required=required)
     else:
         assert binary_file is not None
         stage_binaries(bin_dir, binary_name, binary_file, additional)
-    debian_dir.mkdir(parents=True, exist_ok=True)
-    doc_dir.mkdir(parents=True, exist_ok=True)
 
-    license_bodies = read_vendor_licenses(pkg)
-    (doc_dir / "copyright").write_text(
-        copyright_text(pkg, *license_bodies), encoding="utf-8"
+    bodies = read_vendor_licenses(pkg) if license_bodies is None else license_bodies
+    finalize_package_stage(
+        stage=stage, pkg=pkg, arch=arch, manifest=manifest,
+        license_bodies=bodies, keep_executables=tree is not None,
     )
-    (doc_dir / "changelog.Debian").write_text(
-        f"{pkg.name} ({debian_version(pkg, manifest)}) stable; urgency=low\n\n"
-        f"  * Repackage upstream {pkg.version} {arch} binary.\n\n"
-        f" -- {manifest.maintainer}  Thu, 01 Jan 2026 00:00:00 +0000\n",
-        encoding="utf-8",
-    )
-
-    installed_kb = max(1, sum(p.stat().st_size for p in stage.rglob("*") if p.is_file()) // 1024)
-    (debian_dir / "control").write_text(
-        debian_control(pkg, arch, manifest, installed_kb), encoding="utf-8"
-    )
-    _apply_deterministic_modes(stage, keep_executables=tree is not None)
-    _clamp_mtimes(stage, SOURCE_DATE_EPOCH)
     return stage
 
 
@@ -116,12 +148,20 @@ def _apply_deterministic_modes(stage: Path, *, keep_executables: bool) -> None:
     A flat binary is always 0755. A tree keeps the executable bit its validated
     archive member declared (`bin/nvim`, `less.sh`), so the policy is not
     flattened to one mode for the whole package.
+
+    A symlink is never followed: the candidate's owned `bunx` alias points at
+    `bun`, and chmod-ing or stat-ing through it would rewrite the target's mode
+    rather than the link's own entry.
     """
-    for directory in sorted(p for p in stage.rglob("*") if p.is_dir()):
+    for directory in sorted(p for p in stage.rglob("*") if p.is_dir() and not p.is_symlink()):
         directory.chmod(0o755)
     stage.chmod(0o755)
-    for path in sorted(p for p in stage.rglob("*") if p.is_file()):
+    for path in sorted(stage.rglob("*")):
+        if path.is_symlink():
+            continue
         relative = path.relative_to(stage).as_posix()
+        if not path.is_file():
+            continue
         if relative == "DEBIAN/control" or relative.startswith("usr/share/doc/"):
             path.chmod(0o644)
         elif relative.startswith("usr/bin/"):
@@ -134,7 +174,7 @@ def _apply_deterministic_modes(stage: Path, *, keep_executables: bool) -> None:
 
 def _clamp_mtimes(stage: Path, epoch: int) -> None:
     for path in list(stage.rglob("*")) + [stage]:
-        os.utime(path, (epoch, epoch))
+        os.utime(path, (epoch, epoch), follow_symlinks=False)
 
 
 def build_deb(stage: Path, output_deb: Path) -> None:

@@ -1,0 +1,55 @@
+# Bun 1.4.3 — corresponding source
+
+This document records where the source corresponding to the packaged Bun
+candidate came from. It is a factual reference list. It is **not** a statement
+that the corresponding-source obligation is satisfied: this package ships the
+upstream binary and its notices, not the source archives.
+
+## Corresponding upstream source
+
+| Item | Value |
+|---|---|
+| Release tag | `bun-v1.4.3` |
+| Bun source commit | `c6da4a4d3010e5553438c60f6bd76d981976867c` |
+| WebKit / JavaScriptCore commit | `0c06faadf65bf8e8c8ad3a5a8aca83e1e9ed653f` |
+| TinyCC commit | `05f0fafaa3be31e31d7b4b5c17dc60f62c991171` |
+
+Source tree:
+<https://github.com/oven-sh/bun/tree/bun-v1.4.3>
+
+Every reference above is pinned to an exact tag or commit, never to `main` or
+to a branch head.
+
+## Pinned build patch
+
+Bun builds its vendored TinyCC with this reviewed patch applied:
+
+<https://github.com/oven-sh/bun/blob/bun-v1.4.3/patches/tinycc/tcc.h.patch>
+
+## Rebuilding from source
+
+Upstream documents its own local build in the source tree. In short:
+
+1. Clone `oven-sh/bun` at tag `bun-v1.4.3`.
+2. Check out `oven-sh/WebKit` at the commit above into `vendor/WebKit` (upstream
+   provides `bun sync-webkit-source` to do this at the pinned version).
+3. Run `bun run build:local`.
+
+The build fetches the dependencies it pins; it does not use a prebuilt WebKit.
+Upstream pins its own toolchain versions in `scripts/build/ci-images/spec.ts`;
+those pins are upstream's, not Debian's, and no claim is made here about
+whether Debian ships them.
+
+## What this package contains
+
+- The official `bun` executable for each architecture, taken from the pinned
+  GitHub release asset and verified against its published SHA-256 digest.
+- A package-owned `bunx` relative symlink to `bun`. Upstream's own links in the
+  release ZIP are not trusted or copied.
+- `LICENSE.upstream.md`: upstream's `LICENSE.md` at tag `bun-v1.4.3`, byte for
+  byte.
+- `LGPL-2.0.txt` and `LGPL-2.1.txt`: the GNU LGPL texts that apply to the
+  statically linked JavaScriptCore/WebKit and TinyCC sources.
+- A `copyright` file recording this provenance and the licence texts.
+
+No source archives are included in this package.

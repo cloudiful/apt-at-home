@@ -24,3 +24,5 @@ sudo apt install bottom git-delta neovim rustfs-cli sccache starship uv zellij z
 `neovim` 是完整的上游发布目录树（运行时、解析器与手册页）。它会替代发行版的 `neovim-runtime` 包，因此升级时 APT 会移除该包。
 
 网关与存储配置见 [docs/setup.md](docs/setup.md)，发布流程见 [docs/publishing.md](docs/publishing.md)，示例源与鉴权配置见 [client/](client/)。
+
+本地构建的、未签名的 Bun 候选包说明见 [docs/bun-candidate.md](docs/bun-candidate.md)。它尚未发布，也无法从本 APT 仓库安装。

@@ -1,0 +1,42 @@
+{
+  "schema": "apt-at-home/bun-candidate/1",
+  "package": "bun",
+  "version": "1.4.3",
+  "maintainer": "APT At Home <apt-at-home@localhost>",
+  "section": "utils",
+  "priority": "optional",
+  "debian_revision": "-1",
+  "description": "fast all-in-one JavaScript runtime",
+  "homepage": "https://bun.sh",
+  "license": "Bun-upstream",
+  "copyright": "Copyright (c) 2021-2026 Oven LLC and Bun contributors, and the authors of the statically linked libraries listed in packaging/licenses/bun/LICENSE.txt",
+  "license_files": [
+    "LICENSE.txt",
+    "LGPL-2.0.txt",
+    "LGPL-2.1.txt"
+  ],
+  "source": {
+    "url": "https://github.com/oven-sh/bun/tree/bun-v1.4.3",
+    "tag": "bun-v1.4.3",
+    "commit": "c6da4a4d3010e5553438c60f6bd76d981976867c",
+    "webview_commit": "0c06faadf65bf8e8c8ad3a5a8aca83e1e9ed653f",
+    "tinycc_commit": "05f0fafaa3be31e31d7b4b5c17dc60f62c991171",
+    "patch_url": "https://github.com/oven-sh/bun/blob/bun-v1.4.3/patches/tinycc/tcc.h.patch"
+  },
+  "targets": {
+    "amd64": {
+      "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-linux-x64-baseline.zip",
+      "sha256": "1fc2edac843102909e3a1be1d8d9802cc6071cf074e67e88231f4ffe0f8b397b",
+      "size": 42015103,
+      "member": "bun-linux-x64-baseline/bun",
+      "depends": "libc6 (>= 2.17)"
+    },
+    "arm64": {
+      "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-linux-aarch64.zip",
+      "sha256": "efa9813da5ed72423bf847f916e8d2c47c0d776add972354026a75e10da9aa21",
+      "size": 41786424,
+      "member": "bun-linux-aarch64/bun",
+      "depends": "libc6 (>= 2.17)"
+    }
+  }
+}

@@ -147,6 +147,81 @@ jobs:
           python3 -m scripts.smoke --manifest packaging/manifest.json --pool dist/repo/pool
           python3 -m scripts.smoke --manifest packaging/manifest.json --installed --arch arm64
 
+  bun-candidate:
+    name: Bun candidate build (unsigned, not published)
+    runs-on: ubuntu-24.04
+    container: debian:13
+    env:
+      UV_DEFAULT_INDEX: https://pypi.org/simple
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install system tools
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 && rm -rf /var/lib/apt/lists/*
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      - name: Verify portable public dependency lock
+        run: uv lock --check
+      - run: uv sync --frozen
+      - name: Build the candidate from its pinned upstream assets
+        run: uv run --frozen python -m scripts.bun_candidate --output dist/bun-candidate
+      - name: Inspect the candidate control file and payload
+        run: |
+          set -euo pipefail
+          dpkg-deb -I dist/bun-candidate/bun_1.4.3-1_amd64.deb
+          dpkg-deb -c dist/bun-candidate/bun_1.4.3-1_amd64.deb
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bun-candidate
+          path: dist/bun-candidate
+          retention-days: 7
+
+  bun-candidate-smoke-amd64:
+    name: Bun candidate smoke (amd64, native)
+    runs-on: ubuntu-24.04
+    needs: [bun-candidate]
+    container: debian:13
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: bun-candidate
+          path: dist/bun-candidate
+      - name: Install python3 and the candidate amd64 package with apt
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends python3
+          apt-get install -y --no-install-recommends ./dist/bun-candidate/bun_1.4.3-1_amd64.deb
+          rm -rf /var/lib/apt/lists/*
+      - name: Run the installed candidate
+        run: python3 -m scripts.bun_candidate_smoke --installed --arch amd64 --require-native
+
+  bun-candidate-smoke-arm64:
+    name: Bun candidate smoke (arm64, native runner)
+    runs-on: ubuntu-24.04-arm
+    needs: [bun-candidate]
+    container: debian:13
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: bun-candidate
+          path: dist/bun-candidate
+      - name: Install python3 and the candidate arm64 package with apt
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends python3
+          apt-get install -y --no-install-recommends ./dist/bun-candidate/bun_1.4.3-1_arm64.deb
+          rm -rf /var/lib/apt/lists/*
+      - name: Run the installed candidate
+        run: python3 -m scripts.bun_candidate_smoke --installed --arch arm64 --require-native
+
   upgrade-amd64:
     name: Debian 13 APT upgrade from distro neovim (amd64)
     runs-on: ubuntu-24.04

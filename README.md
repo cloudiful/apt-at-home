@@ -32,3 +32,5 @@ replaces the distribution `neovim-runtime` package, so APT removes that package
 during the upgrade.
 
 See [docs/setup.md](docs/setup.md) for gateway and storage setup, [docs/publishing.md](docs/publishing.md) for the release flow, and [client/](client/) for example source and auth config.
+
+A locally built, unsigned Bun candidate package is documented in [docs/bun-candidate.md](docs/bun-candidate.md). It is not published and not installable from this APT repository.

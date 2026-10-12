@@ -6,12 +6,20 @@ staged package also carries the vendored license, so a reviewer can confirm the
 SPDX identifier and the upstream bytes agree.
 """
 
+import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.deb import build_deb, copyright_text, debian_control, stage_package
+from scripts.deb import (
+    SOURCE_DATE_EPOCH,
+    build_deb,
+    copyright_text,
+    debian_control,
+    finalize_package_stage,
+    stage_package,
+)
 from scripts.manifest import deb_filename, load_manifest
 from scripts.package_licenses import read_vendor_licenses
 from tests.helpers import stage_fixture_target
@@ -210,6 +218,115 @@ class StagePackageTest(unittest.TestCase):
             )
             self.assertEqual(contents.returncode, 0)
             self.assertIn("./usr/bin/uvx", contents.stdout)
+
+
+class FinalizePackageStageTest(unittest.TestCase):
+    """The extracted finalizer is reusable, idempotent, and alias-safe.
+
+    `finalize_package_stage` is called by `stage_package` and then called again
+    by the candidate after it adds its own payload, so it must tolerate being
+    run twice over a tree that now contains a symlink this package owns.
+    """
+
+    def setUp(self) -> None:
+        self.manifest = load_manifest()
+        self.pkg = next(pkg for pkg in self.manifest.packages if pkg.name == "uv")
+
+    def _finalize(self, stage: Path) -> None:
+        finalize_package_stage(
+            stage=stage, pkg=self.pkg, arch="amd64", manifest=self.manifest,
+            license_bodies=read_vendor_licenses(self.pkg),
+        )
+
+    def _stage(self, root: Path) -> Path:
+        stage = root / "stage"
+        bin_dir = stage / "usr" / "bin"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "uv").write_bytes(b"fake")
+        (bin_dir / "uv").chmod(0o755)
+        self._finalize(stage)
+        return stage
+
+    def test_is_idempotent_over_its_own_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = self._stage(Path(tmp))
+            first = _snapshot(stage)
+            self._finalize(stage)
+            self.assertEqual(_snapshot(stage), first)
+
+    def test_recounts_installed_size_when_payload_grows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = self._stage(Path(tmp))
+            before = _installed_size_kb(stage)
+            extra = stage / "usr" / "share" / "doc" / "uv" / "README.source"
+            extra.write_bytes(b"x" * 4096)
+            self._finalize(stage)
+            self.assertGreater(_installed_size_kb(stage), before)
+
+    def test_excludes_a_symlinked_binary_from_the_installed_size(self) -> None:
+        """The alias is a link, not a second copy, so it must not be counted."""
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = self._stage(Path(tmp))
+            before = _installed_size_kb(stage)
+            (stage / "usr" / "bin" / "uvx").symlink_to("uv")
+            self._finalize(stage)
+            self.assertEqual(_installed_size_kb(stage), before)
+
+    def test_clamps_the_alias_mtime_without_following_the_link(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = self._stage(Path(tmp))
+            alias = stage / "usr" / "bin" / "uvx"
+            alias.symlink_to("uv")
+            os.utime(alias, (0, 0), follow_symlinks=False)
+            self._finalize(stage)
+            self.assertEqual(alias.lstat().st_mtime, float(SOURCE_DATE_EPOCH))
+            # The link target is untouched by the finalizer's own file policy.
+            self.assertEqual(
+                (stage / "usr" / "bin" / "uv").stat().st_mode & 0o777, 0o755
+            )
+
+    def test_does_not_chmod_the_alias_target(self) -> None:
+        """A doc-mode file behind a link must stay 0644, proving no dereference."""
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = self._stage(Path(tmp))
+            doc = stage / "usr" / "share" / "doc" / "uv" / "copyright"
+            (stage / "usr" / "share" / "doc" / "uv" / "link").symlink_to(doc.name)
+            self._finalize(stage)
+            self.assertEqual(doc.stat().st_mode & 0o777, 0o644)
+
+    def test_uses_the_explicit_license_bodies_it_was_given(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = self._stage(Path(tmp))
+            self._finalize(stage)
+            text = (stage / "usr" / "share" / "doc" / "uv" / "copyright").read_text()
+            self.assertIn("License: MIT OR Apache-2.0", text)
+
+    def test_explicit_bodies_replace_the_catalog_ones(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = Path(tmp) / "stage"
+            (stage / "usr" / "bin").mkdir(parents=True)
+            finalize_package_stage(
+                stage=stage, pkg=self.pkg, arch="amd64", manifest=self.manifest,
+                license_bodies=("CUSTOM BODY",),
+            )
+            text = (stage / "usr" / "share" / "doc" / "uv" / "copyright").read_text()
+            self.assertIn("CUSTOM BODY", text)
+            self.assertNotIn("Apache License", text)
+
+
+def _snapshot(stage: Path) -> list[tuple[str, int, int]]:
+    """Every entry's relative path, mode and mtime, without dereferencing links."""
+    return sorted(
+        (p.relative_to(stage).as_posix(), p.lstat().st_mode & 0o777, int(p.lstat().st_mtime))
+        for p in [stage, *stage.rglob("*")]
+    )
+
+
+def _installed_size_kb(stage: Path) -> int:
+    for line in (stage / "DEBIAN" / "control").read_text().splitlines():
+        if line.startswith("Installed-Size:"):
+            return int(line.split(":", 1)[1])
+    raise AssertionError("control file has no Installed-Size")
 
 
 if __name__ == "__main__":
