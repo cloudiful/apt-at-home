@@ -1,4 +1,4 @@
-"""Reviewed release recipes for the bottom, uv, and zoxide command-line tools."""
+"""Reviewed CLI and Kandev standard-server release recipes."""
 
 from __future__ import annotations
 
@@ -67,5 +67,22 @@ def make_cli_recipes(recipe_type: type[Recipe]) -> dict[str, Recipe]:
             member="{binary}",
             binary="zoxide",
             triples=_MUSL,
+        ),
+        "kandev": recipe_type(
+            name="kandev",
+            upstream="kandev",
+            repo="kdlbs/kandev",
+            tag_prefix="v",
+            license_id="AGPL-3.0-or-later",
+            license_path="LICENSE",
+            asset="{upstream}-linux-{triple}.tar.gz",
+            member="kandev/bin/kandev",
+            binary="kandev",
+            triples=MappingProxyType({"amd64": "x64", "arm64": "arm64"}),
+            depends=MappingProxyType({
+                "amd64": "libc6 (>= 2.34)",
+                "arm64": "libc6 (>= 2.34)",
+            }),
+            bundle_type="kandev-standard",
         ),
     }

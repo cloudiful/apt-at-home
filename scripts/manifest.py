@@ -12,7 +12,9 @@ from types import MappingProxyType
 from .archive_tree import top_root
 from .catalog import (
     KNOWN_PACKAGES,
+    RECIPES,
     additional_binaries_for,
+    archive_member,
     check_known_names,
     check_relations,
     extra_license_urls_for,
@@ -36,6 +38,7 @@ class ArchTarget:
     binary: str
     depends: str = ""
     install_tree: str = ""
+    bundle_type: str = ""
     additional_binaries: Mapping[str, str] = MappingProxyType({})
 
 
@@ -116,24 +119,34 @@ def parse_manifest(raw: object) -> Manifest:
     )
 
 
-def _parse_source(name: str, arch: str, target_raw: dict[str, object]) -> tuple[str, str]:
-    """Return (archive_member, install_tree) with exactly one of the two set."""
+def _parse_source(
+    name: str, version: str, arch: str, target_raw: dict[str, object]
+) -> tuple[str, str, str]:
+    """Return a reviewed flat member, tree root, and closed bundle type."""
     has_member = "archive_member" in target_raw
     has_tree = "install_tree" in target_raw
     if has_member == has_tree:
         raise ValueError(f"{name} {arch} must declare exactly one of archive_member or install_tree")
+    recipe = RECIPES.get(name)
+    bundle_type = recipe.bundle_type if recipe is not None else ""
     if has_tree:
+        if bundle_type:
+            raise ValueError(f"{name} {arch} must use its reviewed {bundle_type} archive member")
         tree = str(target_raw["install_tree"])
         try:
             top_root(tree)
         except ValueError as exc:
             raise ValueError(f"invalid install_tree for {name} {arch}: {exc}") from None
-        return "", tree
+        return "", tree, ""
     try:
         member = canonical_member(str(target_raw["archive_member"]))
     except ValueError as exc:
         raise ValueError(f"invalid archive_member for {name} {arch}: {exc}") from None
-    return member, ""
+    if bundle_type and member != archive_member(name, version, arch):
+        raise ValueError(
+            f"{name} {arch} archive_member does not match the reviewed {bundle_type} recipe"
+        )
+    return member, "", bundle_type
 
 
 def _parse_additional_binaries(
@@ -200,7 +213,7 @@ def parse_package(raw: object) -> Package:
         url = str(target_raw.get("url", ""))
         sha256 = str(target_raw.get("sha256", "")).lower()
         binary = str(target_raw.get("binary", ""))
-        member, install_tree = _parse_source(name, arch, target_raw)
+        member, install_tree, bundle_type = _parse_source(name, version, arch, target_raw)
         depends = check_relations(
             f"depends for {name} {arch}", str(target_raw.get("depends", "") or "")
         )
@@ -215,7 +228,8 @@ def parse_package(raw: object) -> Package:
         )
         targets[arch] = ArchTarget(
             url=url, sha256=sha256, archive_member=member, binary=binary,
-            depends=depends, install_tree=install_tree, additional_binaries=additional,
+            depends=depends, install_tree=install_tree, bundle_type=bundle_type,
+            additional_binaries=additional,
         )
     conflicts = check_relations(f"conflicts for {name}", str(raw.get("conflicts", "") or ""))
     replaces = check_relations(f"replaces for {name}", str(raw.get("replaces", "") or ""))

@@ -47,19 +47,28 @@ class UvUpdateOverlayTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 store = Store(FakeS3())
+                uv_names = tuple(name for name in CATALOG_NAMES if name != "kandev")
                 store.seed(build_release_objects(
-                    root / "published", key_home=home, key_id=key_id, names=CATALOG_NAMES
+                    root / "published", key_home=home, key_id=key_id, names=uv_names
                 ))
                 restored = restore_metadata(store, fingerprint=key_id)
                 published_pool = {
                     path.name: store.get(f"pool/{path.name}", max_bytes=MAX_DEB_BYTES)
                     for path in (root / "published" / "pool").glob("*.deb")
                 }
+                uv_catalog = catalog_document()
+                uv_catalog["packages"] = [
+                    entry for entry in uv_catalog["packages"] if entry["name"] != "kandev"
+                ]
+                uv_candidates = {
+                    name: item for name, item in _catalog_candidates(uv="0.14.0").items()
+                    if name != "kandev"
+                }
                 plan = build_plan(
                     baseline_release_id=restored.release_id,
                     baseline_data=restored.manifest_data,
-                    catalog_data=catalog_document(),
-                    candidates=_catalog_candidates(uv="0.14.0"),
+                    catalog_data=uv_catalog,
+                    candidates=uv_candidates,
                 )
                 self.assertEqual(plan.changed, ("uv",))
                 key_file = _export_private_key(home, root / "test-private.asc")
@@ -100,8 +109,8 @@ class UvUpdateOverlayTest(unittest.TestCase):
                 noop = build_plan(
                     baseline_release_id=follow_up.release_id,
                     baseline_data=follow_up.manifest_data,
-                    catalog_data=catalog_document(),
-                    candidates=_catalog_candidates(uv="0.14.0"),
+                    catalog_data=uv_catalog,
+                    candidates=uv_candidates,
                 )
                 self.assertTrue(noop.is_noop)
                 self.assertEqual(store.client.puts, writes)

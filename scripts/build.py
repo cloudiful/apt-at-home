@@ -7,12 +7,13 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from .archive_tree import inventory_tree
-from .catalog import required_paths_for
+from .catalog import required_paths_for, tag_for
 from .common import sha256_file
 from .deb import build_deb, stage_package
 from .download import fetch_verified
 from .manifest import Manifest, Package, deb_filename
 from .package_binaries import extract_binaries
+from .kandev_bundle import inventory_bundle, stage_kandev_package
 
 
 def _stage_target(
@@ -20,6 +21,15 @@ def _stage_target(
 ) -> Path:
     """Stage one target from its archive: a flat member or a validated upstream tree."""
     target = pkg.targets[arch]
+    if target.bundle_type:
+        inventory = inventory_bundle(
+            archive, expected_version=tag_for(pkg.name, pkg.version), expected_arch=arch,
+            bundle_type=target.bundle_type,
+        )
+        return stage_kandev_package(
+            pkg=pkg, arch=arch, manifest=manifest, archive=archive,
+            inventory=inventory, stage_root=tmpdir / "stages",
+        )
     if target.install_tree:
         inventory = inventory_tree(archive, target.install_tree)
         return stage_package(

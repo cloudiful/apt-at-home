@@ -37,6 +37,7 @@ from .smoke_package import (
 )
 from .smoke_commands import binaries_for_target
 from .smoke_runtime import run_installed
+from .kandev_smoke import check_bundle_payload
 from .smoke_tree import check_relations, check_tree_payload
 from .smoke_upgrade import check_upgraded_state
 
@@ -77,9 +78,12 @@ def check_pool(manifest: Manifest, pool: Path, arches: tuple[str, ...]) -> list[
                     Path(scratch) / f"{pkg.name}-{arch}",
                 )
                 check_copyright(pkg, extracted)
-                for binary in binaries_for_target(pkg.targets[arch]):
-                    check_elf(pkg, arch, extracted / "usr" / "bin" / binary)
-                    findings.append(f"{pkg.name} {arch}: /usr/bin/{binary} is {ELF_MACHINE[arch]}")
+                if pkg.targets[arch].bundle_type:
+                    findings.extend(check_bundle_payload(pkg, arch, extracted))
+                else:
+                    for binary in binaries_for_target(pkg.targets[arch]):
+                        check_elf(pkg, arch, extracted / "usr" / "bin" / binary)
+                        findings.append(f"{pkg.name} {arch}: /usr/bin/{binary} is {ELF_MACHINE[arch]}")
                 if pkg.targets[arch].install_tree:
                     deb = pool / deb_filename(pkg, arch, manifest)
                     check_relations(pkg, control_fields(deb))

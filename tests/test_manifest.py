@@ -54,6 +54,7 @@ class ManifestTest(unittest.TestCase):
                 "bottom": "0.14.9",
                 "uv": "0.13.0",
                 "zoxide": "0.10.0",
+                "kandev": "0.97.0",
             },
         )
 
@@ -76,6 +77,8 @@ class ManifestTest(unittest.TestCase):
             ("uv", "arm64"): "3ccfb6af6e242433eb552f7d9676abd5412c6595c497e990d9c8cb7b5bd4d2c3",
             ("zoxide", "amd64"): "2d93385b99f3e82cf2701609a1bffcad863fbeb75aa3fe7eb6be4d29be68b1ae",
             ("zoxide", "arm64"): "f1f16c5d6298d63dee467eedea1cdcd8490e43e493bea43acd416dc9033ef641",
+            ("kandev", "amd64"): "d15b5ca901fc051dfefbb40a2e0fbec8e92aaf16db8225921f32a6ccdc7d2457",
+            ("kandev", "arm64"): "3bba944aa4f73441864203c1a84a96e09bcdfc18d01c32cfbb8ba664b2c6b823",
         }
         for (name, arch), digest in expected.items():
             self.assertEqual(by_name[name].targets[arch].sha256, digest, msg=f"{name} {arch}")
@@ -107,6 +110,12 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(by_name["sccache"].license, "Apache-2.0")
         self.assertEqual(by_name["git-delta"].license, "MIT")
         self.assertEqual(by_name["rustfs-cli"].license, "MIT")
+        kandev = by_name["kandev"]
+        self.assertEqual(kandev.targets["amd64"].archive_member, "kandev/bin/kandev")
+        self.assertEqual(kandev.targets["arm64"].archive_member, "kandev/bin/kandev")
+        self.assertEqual(kandev.targets["amd64"].bundle_type, "kandev-standard")
+        self.assertEqual(kandev.targets["arm64"].bundle_type, "kandev-standard")
+        self.assertEqual(kandev.license, "AGPL-3.0-or-later")
 
     def test_declares_dependencies_only_where_the_binary_needs_them(self) -> None:
         by_name = {p.name: p for p in load_manifest().packages}
@@ -118,6 +127,8 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(by_name["git-delta"].targets["amd64"].depends, "")
         self.assertEqual(by_name["bottom"].targets["amd64"].depends,
                          "libc6 (>= 2.34), libgcc-s1")
+        self.assertEqual(by_name["kandev"].targets["amd64"].depends, "libc6 (>= 2.34)")
+        self.assertEqual(by_name["kandev"].targets["arm64"].depends, "libc6 (>= 2.34)")
         self.assertEqual(by_name["uv"].targets["amd64"].depends,
                          "libc6 (>= 2.17), libgcc-s1")
         self.assertEqual(by_name["uv"].targets["arm64"].depends,
@@ -244,6 +255,22 @@ class ManifestTest(unittest.TestCase):
                 bad["packages"] = [entry if e["name"] == "neovim" else e for e in bad["packages"]]
                 with self.assertRaises(ValueError):
                     parse_manifest(bad)
+
+    def test_kandev_bundle_source_stays_bound_to_its_reviewed_recipe(self) -> None:
+        for arch in ("amd64", "arm64"):
+            with self.subTest(arch=arch):
+                changed_member = _document()
+                kandev = next(p for p in changed_member["packages"] if p["name"] == "kandev")
+                kandev["targets"][arch]["archive_member"] = "kandev/bin/agentctl"
+                with self.assertRaisesRegex(ValueError, "does not match the reviewed"):
+                    parse_manifest(changed_member)
+
+                changed_source = _document()
+                kandev = next(p for p in changed_source["packages"] if p["name"] == "kandev")
+                del kandev["targets"][arch]["archive_member"]
+                kandev["targets"][arch]["install_tree"] = "kandev"
+                with self.assertRaisesRegex(ValueError, "must use its reviewed"):
+                    parse_manifest(changed_source)
 
     def test_neovim_declares_the_runtime_conflict_and_replacement(self) -> None:
         by_name = {p.name: p for p in load_manifest().packages}

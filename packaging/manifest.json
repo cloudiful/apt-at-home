@@ -231,6 +231,31 @@
           "binary": "zoxide"
         }
       }
+    },
+    {
+      "name": "kandev",
+      "version": "0.97.0",
+      "homepage": "https://github.com/kdlbs/kandev",
+      "description": "Kandev development environment server",
+      "license": "AGPL-3.0-or-later",
+      "copyright": "Copyright Kandev contributors",
+      "license_url": "https://raw.githubusercontent.com/kdlbs/kandev/v0.97.0/LICENSE",
+      "targets": {
+        "amd64": {
+          "url": "https://github.com/kdlbs/kandev/releases/download/v0.97.0/kandev-linux-x64.tar.gz",
+          "sha256": "d15b5ca901fc051dfefbb40a2e0fbec8e92aaf16db8225921f32a6ccdc7d2457",
+          "archive_member": "kandev/bin/kandev",
+          "binary": "kandev",
+          "depends": "libc6 (>= 2.34)"
+        },
+        "arm64": {
+          "url": "https://github.com/kdlbs/kandev/releases/download/v0.97.0/kandev-linux-arm64.tar.gz",
+          "sha256": "3bba944aa4f73441864203c1a84a96e09bcdfc18d01c32cfbb8ba664b2c6b823",
+          "archive_member": "kandev/bin/kandev",
+          "binary": "kandev",
+          "depends": "libc6 (>= 2.34)"
+        }
+      }
     }
   ]
 }

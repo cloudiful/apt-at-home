@@ -332,12 +332,14 @@ class CandidateIsolationTest(unittest.TestCase):
         self.assertNotIn("bun", KNOWN_PACKAGES)
         self.assertNotIn("bun", RECIPES)
 
-    def test_production_manifest_still_declares_nine_packages(self) -> None:
+    def test_production_manifest_declares_ten_packages_without_bun(self) -> None:
         from scripts.manifest import load_manifest
 
         manifest = load_manifest()
-        self.assertNotIn("bun", {pkg.name for pkg in manifest.packages})
-        self.assertEqual(len(manifest.packages), 9)
+        names = {pkg.name for pkg in manifest.packages}
+        self.assertNotIn("bun", names)
+        self.assertIn("kandev", names)
+        self.assertEqual(len(names), 10)
 
     def test_default_path_points_at_the_repo_descriptor(self) -> None:
         self.assertTrue(default_candidate_path().is_file())

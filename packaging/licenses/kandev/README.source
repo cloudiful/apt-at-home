@@ -1,0 +1,21 @@
+# Kandev {version} — corresponding-source references
+
+This Debian package repackages Kandev's upstream standard server bundle. The
+package contains upstream binaries and notices, not source archives. These
+version-pinned references identify the upstream source and build entrypoints;
+they do not assert source closure or make a compliance determination.
+
+## Upstream source
+
+- Release tag: `{tag}`
+- Bundle build commit reported by `remote-helpers.json`: `{commit}`
+- Source tree: <https://github.com/kdlbs/kandev/tree/{tag}>
+- Source archive: <https://github.com/kdlbs/kandev/archive/refs/tags/{tag}.tar.gz>
+
+## Upstream build entrypoints
+
+The backend bundle build is defined in the tagged `apps/backend/Makefile`.
+Its `build-runtime` target builds Kandev, the native `agentctl`, and the remote
+helpers; `build-agentctl-remote` names the helper build targets. Supporting
+source and scripts are in the same tagged tree. This package uses the official
+release assets rather than building them from source.

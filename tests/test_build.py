@@ -6,6 +6,13 @@ from pathlib import Path
 from scripts.deb import build_deb, stage_package
 from scripts.manifest import load_manifest
 from tests.helpers import write_target_archive
+from tests.test_kandev_bundle import write_bundle_archive
+
+
+def _write_build_archive(archive: Path, pkg, arch: str, payload: bytes) -> Path:
+    if pkg.name == "kandev":
+        return write_bundle_archive(archive, version=f"v{pkg.version}", arch=arch)
+    return write_target_archive(archive, pkg, arch, payload)
 
 
 class DebTest(unittest.TestCase):
@@ -107,7 +114,7 @@ class DebTest(unittest.TestCase):
             for pkg in manifest.packages:
                 for arch in ("amd64", "arm64"):
                     archive = cache / f"{pkg.name}-{pkg.version}-{arch}.tar.gz"
-                    write_target_archive(archive, pkg, arch, f"fake-{pkg.name}-{arch}".encode())
+                    _write_build_archive(archive, pkg, arch, f"fake-{pkg.name}-{arch}".encode())
             from scripts import download as download_module
             import scripts.build as build_module
 
@@ -121,7 +128,8 @@ class DebTest(unittest.TestCase):
                 first = build_all(manifest, pool_dir=pool, cache_dir=cache)
                 second = build_all(manifest, pool_dir=pool, cache_dir=cache)
                 self.assertEqual(first, second)
-                self.assertEqual(len(first), 18)
+                self.assertEqual(len(first), len(manifest.packages) * 2)
+                self.assertEqual(len(first), 20)
                 uv_contents = subprocess.run(
                     ["dpkg-deb", "-c", str(pool / "uv_0.13.0-1_amd64.deb")],
                     text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
@@ -144,7 +152,7 @@ class DebTest(unittest.TestCase):
             for pkg in manifest.packages:
                 for arch in ("amd64", "arm64"):
                     archive = cache / f"{pkg.name}-{pkg.version}-{arch}.tar.gz"
-                    write_target_archive(archive, pkg, arch, f"fake-{pkg.name}-{arch}".encode())
+                    _write_build_archive(archive, pkg, arch, f"fake-{pkg.name}-{arch}".encode())
 
             original = build_module.fetch_verified
             build_module.fetch_verified = lambda url, sha, dest: dest  # type: ignore[assignment]

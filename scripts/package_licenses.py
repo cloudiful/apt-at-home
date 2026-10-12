@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from .catalog import extra_license_paths_for
@@ -34,3 +35,19 @@ def copyright_text(pkg: Package, license_body: str, *extra_license_bodies: str) 
         f"License: {pkg.license}\n"
         f"{bodies}\n"
     )
+
+
+def kandev_source_document(version: str, commit: str) -> str:
+    """Render the Kandev source pointer against its exact bundle version."""
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+        raise ValueError(f"invalid Kandev version: {version!r}")
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("invalid Kandev bundle commit")
+    template = (
+        Path(__file__).resolve().parent.parent / "packaging" / "licenses"
+        / "kandev" / "README.source"
+    ).read_text(encoding="utf-8")
+    try:
+        return template.format(version=version, tag=f"v{version}", commit=commit)
+    except (KeyError, ValueError) as exc:
+        raise ValueError(f"invalid Kandev README.source template: {exc}") from None

@@ -23,6 +23,7 @@ from .smoke_commands import (
     extra_command_probes,
 )
 from .smoke_package import SmokeError, check_elf, expected_binary
+from .kandev_smoke import check_bundle_payload, check_version_output
 
 # A static Lua contract: each step must hold, and any failure exits 1 explicitly
 # so a silent error can never report success.
@@ -91,7 +92,10 @@ def _run_probe(
     if probe.binary not in binaries_for_target(target):
         raise SmokeError(f"{pkg.name} smoke probe names uninstalled command {probe.binary}")
     binary = prefix / "usr" / "bin" / probe.binary
-    check_elf(pkg, arch, binary)
+    if target.bundle_type:
+        check_bundle_payload(pkg, arch, prefix)
+    else:
+        check_elf(pkg, arch, binary)
     proc = _run(binary, probe.args, scratch=scratch)
     if proc.returncode != 0:
         raise SmokeError(
@@ -102,6 +106,8 @@ def _run_probe(
         check_probe_output(probe, proc.stdout)
     except ValueError as exc:
         raise SmokeError(str(exc)) from exc
+    if target.bundle_type:
+        check_version_output(pkg, proc.stdout)
     first_line = (proc.stdout.strip().splitlines() or [""])[0]
     return f"{binary} [{arch}] {' '.join(probe.args[:2])} exited 0: {first_line[:120]}"
 

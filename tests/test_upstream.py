@@ -2,9 +2,9 @@
 
 Every case runs against an injected HTTP double, so the network is never
 touched and each rejection is asserted on the response that would cause it. The
-fixtures cover all five reviewed repositories, including the ones whose release
-tags carry no `v` prefix and those whose assets embed the version in their name
-or nest the binary under a versioned directory.
+fixtures cover every reviewed repository, including projects whose release
+tags carry no `v` prefix and assets whose names embed the version or nest the
+binary under a versioned directory.
 """
 
 import unittest
@@ -80,6 +80,13 @@ UPSTREAMS = {
         {
             "amd64": "zoxide-0.10.0-x86_64-unknown-linux-musl.tar.gz",
             "arm64": "zoxide-0.10.0-aarch64-unknown-linux-musl.tar.gz",
+        },
+    ),
+    "kandev": (
+        "kdlbs/kandev", "v0.97.0", "LICENSE",
+        {
+            "amd64": "kandev-linux-x64.tar.gz",
+            "arm64": "kandev-linux-arm64.tar.gz",
         },
     ),
 }
@@ -302,6 +309,14 @@ class RecipeNamingTest(unittest.TestCase):
         self.assertEqual(
             asset_name("rustfs-cli", "0.2.0", "arm64"),
             "rustfs-cli-linux-arm64-v0.2.0.tar.gz",
+        )
+        self.assertEqual(
+            asset_name("kandev", "0.98.0", "amd64"),
+            "kandev-linux-x64.tar.gz",
+        )
+        self.assertEqual(
+            archive_member("kandev", "0.98.0", "arm64"),
+            "kandev/bin/kandev",
         )
 
 

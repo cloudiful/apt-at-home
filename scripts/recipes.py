@@ -54,6 +54,7 @@ class Recipe:
     # top root is `install_tree` filled from `prefix` (the asset stem), and
     # `required` lists package-relative paths that must exist after install.
     install_tree: str = ""
+    bundle_type: str = ""
     required: tuple[str, ...] = ()
     # Tree-sitter parser libraries under lib/nvim/parser, each checked for the
     # package architecture's ELF machine.
