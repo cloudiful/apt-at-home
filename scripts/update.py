@@ -24,6 +24,7 @@ from .release_verify import (
     restore_metadata,
 )
 from .repo import _release_id as new_release_id
+from .repo import _source_artifacts
 from .storage import Source, s3_source
 from .update_build import apply_update
 from .update_plan import UpdatePlan, build_plan
@@ -62,10 +63,29 @@ def _load_baseline(source: Source, *, fingerprint: str) -> tuple[TrustedRelease 
 
 
 def _discover(client) -> dict[str, Candidate]:  # type: ignore[no-untyped-def]
-    """Discover the latest stable release of every reviewed package."""
+    """Discover the latest stable release of every reviewed package.
+
+    For the source-built package the canonical stable CLI version is selected
+    consistently with the producer via `latest_stable_version` (tags list, not
+    repository-wide `releases/latest`); its exact source identity is resolved
+    with `discover_identity` for THAT version and supplied to the existing
+    `discover`/overlay path, which fetches tag-specific release assets. A
+    retagged commit, moved lockfile, or changed compiler still rejects via the
+    immutable same-version checks. The producer's own plan identity is never
+    used as its own expected value. Asset-only packages retain latest-release
+    discovery.
+    """
+    from .catalog import source_arch_for
+    from .tauri_source import discover_identity, latest_stable_version
+
     candidates: dict[str, Candidate] = {}
     for name in sorted(RECIPES):
-        candidates[name] = discover(client, name)
+        if not source_arch_for(name):
+            candidates[name] = discover(client, name)
+            continue
+        version = latest_stable_version(client)
+        identity = discover_identity(client, version, package=name)
+        candidates[name] = discover(client, name, source_identity=identity)
     return candidates
 
 
@@ -95,6 +115,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--publish", action="store_true", help="build, sign, and publish the update")
     parser.add_argument("--signing-key-file", default=None, help="armored private key file (path only)")
     parser.add_argument("--key-id", default=None, help="signing key id (default: APT_SIGNING_KEY_ID)")
+    parser.add_argument("--source-artifacts", action="append", default=None, metavar="DIR",
+                        help="one compiled source-artifact directory; needed only when a "
+                             "source-built target is actually rebuilt")
     return parser
 
 
@@ -146,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
             fingerprint=fingerprint,
             signing_key_file=key_file,
             key_id=args.key_id or os.environ.get("APT_SIGNING_KEY_ID"),
+            source_artifacts=_source_artifacts(args.source_artifacts, plan.manifest_data),
         )
     except Exception as exc:
         print(f"update failed: {exc}", file=sys.stderr)

@@ -14,17 +14,21 @@ import json
 import os
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Protocol
 
-from .catalog import license_path_for, repo_of
+from .catalog import license_path_for, repo_of, source_arch_for
 from .license_sources import check_license_sources, vendor_license_sources
+from .source_build import SourceIdentity
 from .upstream_assets import (
     ARCHES,
     asset_name,
     check_official_asset_url,
     parse_asset_digest,
     parse_stable_tag,
+    release_tag_api_url,
     releases_api_url,
     tag_for,
 )
@@ -99,6 +103,10 @@ class Candidate:
     license_url: str
     targets: dict[str, dict[str, str]]
     extra_license_urls: tuple[str, ...] = ()
+    # The source identity of each source-built architecture, keyed by
+    # architecture. An architecture listed here has no release asset, so it has
+    # no `targets` entry either.
+    sources: Mapping[str, SourceIdentity] = MappingProxyType({})
 
 
 @dataclass(frozen=True)
@@ -108,20 +116,64 @@ class ReleaseAsset:
     sha256: str
 
 
-def latest_stable(client: HttpClient, package_name: str) -> tuple[str, str, dict[str, ReleaseAsset]]:
-    """Return (repo, tag, per-arch assets) for the latest stable release."""
+def latest_stable(
+    client: HttpClient, package_name: str, *, source_identity: SourceIdentity | None = None
+) -> tuple[str, str, dict[str, ReleaseAsset]]:
+    """Return (repo, tag, per-arch assets) for the latest stable release.
+
+    A source-built architecture contributes no asset, so it needs no URL and no
+    digest: it needs an identity that names this very release instead. Leaving
+    that out is a refusal rather than a guess, because the alternative would be
+    inventing an asset that upstream does not publish.
+
+    For source-built packages the release is fetched by its exact reviewed tag
+    (`releases/tags/<tag>`), never by repository-wide `releases/latest`, so a
+    multiproduct repository whose latest release names another product line
+    cannot select the wrong CLI version. The supplied identity's tag is the
+    selection; asset-only packages retain `releases/latest` behavior.
+    """
     repo = repo_of(package_name)
-    payload = client.get_json(releases_api_url(repo))
-    if not isinstance(payload, dict):
-        raise ValueError(f"GitHub release payload for {package_name} is not an object")
-    if payload.get("draft") or payload.get("prerelease"):
-        raise ValueError(f"GitHub returned a draft or prerelease for {package_name}")
-    tag = payload.get("tag_name")
-    # The tag must carry this project's own prefix and be an exact stable
-    # version before any asset name is derived from it.
-    version = parse_stable_tag(package_name, tag)
-    if tag != tag_for(package_name, version):
-        raise ValueError(f"{package_name} release tag {tag!r} is not canonical")
+    source_arch = source_arch_for(package_name)
+    if source_arch:
+        if source_identity is None or not source_identity.tag:
+            raise ValueError(
+                f"{package_name} {source_arch} is built from reviewed source and needs a "
+                f"discovered source identity"
+            )
+        tag = source_identity.tag
+        # The tag must carry this project's own prefix and be an exact stable
+        # version before any asset name is derived from it.
+        version = parse_stable_tag(package_name, tag)
+        if tag != tag_for(package_name, version):
+            raise ValueError(f"{package_name} release tag {tag!r} is not canonical")
+        payload = client.get_json(release_tag_api_url(repo, tag))
+        if not isinstance(payload, dict):
+            raise ValueError(f"GitHub release payload for {package_name} is not an object")
+        if payload.get("draft") or payload.get("prerelease"):
+            raise ValueError(f"GitHub returned a draft or prerelease for {package_name}")
+        payload_tag = payload.get("tag_name")
+        if payload_tag != tag:
+            raise ValueError(
+                f"{package_name} tag-specific release {payload_tag!r} does not match "
+                f"selected {tag!r}"
+            )
+    else:
+        payload = client.get_json(releases_api_url(repo))
+        if not isinstance(payload, dict):
+            raise ValueError(f"GitHub release payload for {package_name} is not an object")
+        if payload.get("draft") or payload.get("prerelease"):
+            raise ValueError(f"GitHub returned a draft or prerelease for {package_name}")
+        tag = payload.get("tag_name")
+        # The tag must carry this project's own prefix and be an exact stable
+        # version before any asset name is derived from it.
+        version = parse_stable_tag(package_name, tag)
+        if tag != tag_for(package_name, version):
+            raise ValueError(f"{package_name} release tag {tag!r} is not canonical")
+    if source_arch and (source_identity is None or source_identity.tag != tag):
+        raise ValueError(
+            f"{package_name} {source_arch} is built from reviewed source and needs a "
+            f"discovered source identity for {tag}"
+        )
     raw_assets = payload.get("assets")
     if not isinstance(raw_assets, list):
         raise ValueError(f"GitHub release for {package_name} carries no asset list")
@@ -129,6 +181,8 @@ def latest_stable(client: HttpClient, package_name: str) -> tuple[str, str, dict
     by_name = {a.get("name"): a for a in raw_assets if isinstance(a, dict)}
     assets: dict[str, ReleaseAsset] = {}
     for arch in ARCHES:
+        if arch == source_arch:
+            continue
         name = asset_name(package_name, version, arch)
         asset = by_name.get(name)
         if asset is None:
@@ -156,10 +210,14 @@ def check_license(
 
 
 def discover(
-    client: HttpClient, package_name: str, *, vendored_license: bytes | None = None
+    client: HttpClient,
+    package_name: str,
+    *,
+    vendored_license: bytes | None = None,
+    source_identity: SourceIdentity | None = None,
 ) -> Candidate:
     """Discover and fully validate the latest stable release of one package."""
-    repo, tag, assets = latest_stable(client, package_name)
+    repo, tag, assets = latest_stable(client, package_name, source_identity=source_identity)
     version = parse_stable_tag(package_name, tag)
     sources = vendor_license_sources(package_name)
     if vendored_license is not None:
@@ -167,13 +225,19 @@ def discover(
     primary_url, extra_urls = check_license_sources(
         client, package_name, tag, vendored=sources
     )
+    source_arch = source_arch_for(package_name)
     targets = {
         arch: {"url": assets[arch].url, "sha256": assets[arch].sha256}
-        for arch in ARCHES
+        for arch in assets
+    }
+    discovered = {
+        arch: source_identity for arch in ARCHES
+        if arch == source_arch and source_identity is not None
     }
     return Candidate(
         name=package_name, repo=repo, tag=tag, version=version,
         license_url=primary_url, targets=targets, extra_license_urls=extra_urls,
+        sources=MappingProxyType(discovered),
     )
 
 

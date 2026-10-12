@@ -38,6 +38,7 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from .bun_candidate_smoke import (
     TIMEOUT_SECONDS,
@@ -50,6 +51,7 @@ from .tauri_candidate_metadata import (
     ARCHES,
     BINARY,
     Candidate,
+    RuntimeLibrary,
     check_source_document,
     license_bodies,
     load_candidate,
@@ -342,7 +344,23 @@ def symbol_floor(names: tuple[str, ...], prefix: str) -> tuple[int, ...] | None:
     return best
 
 
-def check_runtime(binary: Path, arch: str, candidate: Candidate) -> list[str]:
+class RuntimePolicy(Protocol):
+    """The reviewed SONAME mapping a binary's links are measured against.
+
+    The candidate descriptor and a manifest recipe both satisfy this shape, so
+    one implementation of the ABI check serves the candidate build and the
+    production source-artifact consumer.
+    """
+
+    @property
+    def libraries(self) -> tuple[RuntimeLibrary, ...]: ...
+
+    def sonames(self) -> tuple[str, ...]: ...
+
+    def declared_floors(self) -> dict[str, str]: ...
+
+
+def check_runtime(binary: Path, arch: str, policy: RuntimePolicy) -> list[str]:
     """Check the linked libraries and their symbol floors against the mapping.
 
     Three things can go wrong and all of them are refusals: a library the reviewed
@@ -350,7 +368,7 @@ def check_runtime(binary: Path, arch: str, candidate: Candidate) -> list[str]:
     floor the mapping declares for its Debian package, and a version requirement
     that belongs to no library the binary says it links. The second is the one a
     `DT_NEEDED`-only check misses, and it is never resolved by quietly widening a
-    dependency — a floor the candidate cannot justify is a decision for review.
+    dependency — a floor the policy cannot justify is a decision for review.
 
     The requirement records are checked as a whole before anything is filtered to
     the libraries the binary links, so a record whose owner is missing from
@@ -358,7 +376,7 @@ def check_runtime(binary: Path, arch: str, candidate: Candidate) -> list[str]:
     """
     check_elf_arch(binary, arch)
     needed = read_needed(binary)
-    reviewed = candidate.sonames()
+    reviewed = policy.sonames()
     unmapped = sorted(name for name in needed if name not in reviewed)
     if unmapped:
         raise ValueError(
@@ -374,7 +392,7 @@ def check_runtime(binary: Path, arch: str, candidate: Candidate) -> list[str]:
         )
     # The unversioned rule is applied to every requirement the file declares, not to
     # the subset that survives the loop below, so no requirement can escape it.
-    unversioned_sonames = {item.soname for item in candidate.libraries if item.symbols is None}
+    unversioned_sonames = {item.soname for item in policy.libraries if item.symbols is None}
     unversioned_owners = sorted(
         {library for library, _ in required if library in unversioned_sonames}
     )
@@ -392,10 +410,10 @@ def check_runtime(binary: Path, arch: str, candidate: Candidate) -> list[str]:
             f"{binary} requires symbol versions from {unmapped_versions}, which the "
             "reviewed runtime mapping does not cover"
         )
-    declared = candidate.declared_floors()
+    declared = policy.declared_floors()
     measured: dict[str, tuple[int, ...]] = {}
     for library in needed:
-        entry = next(item for item in candidate.libraries if item.soname == library)
+        entry = next(item for item in policy.libraries if item.soname == library)
         if entry.symbols is None:
             # Reviewed as unversioned, so there is no namespace to measure a floor
             # in; any version requirement from it was already refused above.
@@ -566,6 +584,12 @@ def native_checks(
     binary: Path, version: str, home: Path, cargo: str | None, *, require_cargo: bool
 ) -> list[str]:
     """Run the two bounded checks inside `home` and return their result lines."""
+    # Both workflows pass a relative --upstream, so the compiled binary path is
+    # relative too. The probe runs with cwd set to the isolated home, so every
+    # executable path is resolved to absolute first; the proof still runs with
+    # the private HOME/XDG tree.
+    binary = Path(binary).resolve()
+    cargo_path = str(Path(cargo).resolve()) if cargo is not None else None
     expected = version_output(version)
     reported = run_probe([str(binary), "--version"], home)
     if reported != expected:
@@ -573,18 +597,18 @@ def native_checks(
             f"{BINARY} --version printed {reported!r}, expected {expected!r}"
         )
     results = [f"{BINARY} --version -> {reported}"]
-    if cargo is None:
+    if cargo_path is None:
         if require_cargo:
             raise ValueError("the cargo external-subcommand check needs a cargo on PATH")
         results.append("cargo tauri --version skipped: no cargo on PATH")
         return results
-    probe_path = f"{binary.parent}:{Path(cargo).parent}"
+    probe_path = f"{binary.parent}:{Path(cargo_path).parent}"
     resolved = shutil.which(BINARY, path=probe_path)
     if resolved is None or Path(resolved).resolve() != binary.resolve():
         raise ValueError(
             f"cargo would not resolve {BINARY} to the candidate binary (found {resolved!r})"
         )
-    external = run_probe([cargo, "tauri", "--version"], home, path=probe_path)
+    external = run_probe([cargo_path, "tauri", "--version"], home, path=probe_path)
     if external != expected:
         raise ValueError(f"cargo tauri --version printed {external!r}, expected {expected!r}")
     results.append(f"cargo tauri --version -> {external} (cargo external subcommand)")

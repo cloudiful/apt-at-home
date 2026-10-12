@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts.catalog import repo_of, tag_for
+from scripts.catalog import KNOWN_PACKAGES, repo_of, tag_for
 from scripts.manifest import default_manifest_path
 from scripts.metadata import ARCHES
 from scripts.release_manifest import validated_document
@@ -38,10 +38,43 @@ def candidate(name: str, version: str, *, sha: str | None = None) -> Candidate:
 
     By default each architecture keeps the digest the committed manifest already
     pins, which is what an unchanged upstream release looks like; pass `sha` to
-    model a rebuilt archive.
+    model a rebuilt archive. A source-built architecture names no asset: it
+    carries the committed planned identity instead.
     """
+    from scripts.catalog import source_arch_for
+    from scripts.manifest import load_manifest as _load_manifest
+    from scripts.source_build import identity_of as _identity_of
+
     repo = repo_of(name)
     tag = tag_for(name, version)
+    source_arch = source_arch_for(name) if name in KNOWN_PACKAGES else ""
+    # Deferred import to avoid a cycle at module load; only needed for source.
+    if source_arch:
+        committed = next(
+            pkg for pkg in _load_manifest().packages if pkg.name == name
+        )
+        identity = _identity_of(
+            committed.targets[source_arch].source_build  # type: ignore[arg-type]
+        )
+        from types import MappingProxyType as _MP
+
+        return Candidate(
+            name=name,
+            repo=repo,
+            tag=tag,
+            version=version,
+            license_url=license_url(repo, tag, license_path(name)),
+            targets={
+                arch: {
+                    "url": release_download_url(repo, tag, asset_name(name, version, arch)),
+                    "sha256": sha or committed_sha(name, arch),
+                }
+                for arch in ARCHES
+                if arch != source_arch
+            },
+            extra_license_urls=license_urls_for(name, tag)[1:],
+            sources=_MP({source_arch: identity}),
+        )
     return Candidate(
         name=name,
         repo=repo,
@@ -94,7 +127,7 @@ class MergeCatalogTest(unittest.TestCase):
         merged = merge_catalog(baseline_document(), catalog_document())
         self.assertEqual(
             [entry["name"] for entry in merged],
-            ["zellij", "starship", "git-delta", "rustfs-cli", "sccache", "neovim", "bottom", "uv", "zoxide", "kandev"],
+            ["zellij", "starship", "git-delta", "rustfs-cli", "sccache", "neovim", "bottom", "uv", "zoxide", "kandev", "cargo-tauri"],
         )
 
     def test_a_newer_published_version_survives_the_merge(self) -> None:
@@ -105,7 +138,7 @@ class MergeCatalogTest(unittest.TestCase):
         merged = merge_catalog(baseline, catalog_document())
         starship = next(e for e in merged if e["name"] == "starship")
         self.assertEqual(starship["version"], "1.27.0")
-        self.assertEqual(len(merged), 10)
+        self.assertEqual(len(merged), 11)
 
     def test_the_committed_catalog_never_drops_a_published_package(self) -> None:
         """A catalog that lost a name cannot delete what is already published."""
@@ -115,7 +148,7 @@ class MergeCatalogTest(unittest.TestCase):
             if e["name"] != "zellij"
         ]
         merged = merge_catalog(baseline_document(), trimmed)
-        self.assertEqual(len(merged), 10)
+        self.assertEqual(len(merged), 11)
         self.assertIn("zellij", [e["name"] for e in merged])
 
 
@@ -138,16 +171,16 @@ class PlanTest(unittest.TestCase):
             catalog_data=catalog_document(),
             candidates=_catalog_candidates(),
         )
-        # Every package sits at its pinned version, but the eight absent packages
+        # Every package sits at its pinned version, but the nine absent packages
         # still have to be built.
         additions = (
-            "bottom", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "uv", "zoxide",
+            "bottom", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "uv", "zoxide",
         )
         self.assertEqual(plan.changed, additions)
         self.assertEqual(plan.added, additions)
         self.assertEqual(
             sorted(p.name for p in plan.manifest.packages),
-            ["bottom", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "starship", "uv", "zellij", "zoxide"],
+            ["bottom", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "starship", "uv", "zellij", "zoxide"],
         )
         by_name = {p.name: p for p in plan.manifest.packages}
         # An added package keeps its catalog member and dependency profile.
@@ -172,11 +205,11 @@ class PlanTest(unittest.TestCase):
         )
         self.assertEqual(
             plan.changed,
-            ("bottom", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "starship", "uv", "zoxide"),
+            ("bottom", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "starship", "uv", "zoxide"),
         )
         self.assertEqual(
             plan.added,
-            ("bottom", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "uv", "zoxide"),
+            ("bottom", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "uv", "zoxide"),
         )
         by_name = {p.name: p for p in plan.manifest.packages}
         starship = by_name["starship"]
@@ -231,10 +264,10 @@ class PlanTest(unittest.TestCase):
         starship = next(p for p in plan.manifest.packages if p.name == "starship")
         self.assertEqual(starship.version, "1.27.0")
         self.assertNotIn("starship", plan.changed)
-        # Only the eight absent catalog packages remain to be built.
+        # Only the nine absent catalog packages remain to be built.
         self.assertEqual(
             plan.changed,
-            ("bottom", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "uv", "zoxide"),
+            ("bottom", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "uv", "zoxide"),
         )
 
     def test_an_older_candidate_for_a_newer_published_version_is_refused(self) -> None:
@@ -320,6 +353,84 @@ class PlanTest(unittest.TestCase):
         self.assertIn("license", str(ctx.exception))
 
 
+class DiscoverSourceTest(unittest.TestCase):
+    """The updater derives cargo-tauri from the official release, not itself."""
+
+    def test_official_source_identity_supplies_the_expected_candidate(self) -> None:
+        import base64
+
+        from scripts import update as update_module
+        from scripts.catalog import repo_of
+        from scripts.common import sha256_bytes
+        from scripts.tauri_source import git_blob_id
+        from tests.test_source_artifacts import LOCK as _FIXTURE_LOCK
+        from tests.test_tauri_source import COMMIT as _FIXTURE_COMMIT
+
+        repo = repo_of("cargo-tauri")
+        tag = "tauri-cli-v2.12.2"
+        amd_asset = "cargo-tauri-x86_64-unknown-linux-gnu.tgz"
+        amd_sha = "a" * 64
+        license_mit = Path("packaging/licenses/cargo-tauri/LICENSE.txt").read_bytes()
+        license_apache = Path(
+            "packaging/licenses/cargo-tauri/LICENSE-APACHE-2.0"
+        ).read_bytes()
+
+        class FullClient:
+            """Protocol-complete multiproduct client: tags list, tag-specific
+            release, commit, lockfile, and both licenses. Repository-wide
+            latest is deliberately unsupported for the source package."""
+
+            def get_json(self, url: str) -> object:
+                if url.endswith("/releases/latest"):
+                    raise AssertionError(
+                        "canonical CLI discovery must not use repository-wide latest"
+                    )
+                if "/tags?" in url:
+                    return [{"name": "tauri-v2.10.0"}, {"name": tag}]
+                if f"/releases/tags/{tag}" in url:
+                    return {
+                        "tag_name": tag, "draft": False, "prerelease": False,
+                        "assets": [{
+                            "name": amd_asset,
+                            "browser_download_url": (
+                                f"https://github.com/{repo}/releases/download/{tag}/{amd_asset}"
+                            ),
+                            "digest": f"sha256:{amd_sha}",
+                        }],
+                    }
+                if "/git/ref/tags/" in url:
+                    return {"object": {"type": "commit", "sha": _FIXTURE_COMMIT}}
+                if "/contents/" in url:
+                    return {
+                        "type": "file", "sha": git_blob_id(_FIXTURE_LOCK),
+                        "size": len(_FIXTURE_LOCK), "encoding": "base64",
+                        "content": base64.b64encode(_FIXTURE_LOCK).decode("ascii"),
+                    }
+                raise AssertionError(f"unexpected JSON URL: {url}")
+
+            def get_bytes(self, url: str, *, max_bytes: int) -> bytes:
+                if url.endswith("/LICENSE-MIT"):
+                    return license_mit
+                if url.endswith("/LICENSE-APACHE-2.0"):
+                    return license_apache
+                raise AssertionError(f"unexpected bytes URL: {url}")
+
+        with mock.patch.object(
+            update_module, "RECIPES", {"cargo-tauri": object()}
+        ):
+            result = update_module._discover(FullClient())
+        candidate = result["cargo-tauri"]
+        # Derived from the official release (fixture commit/lock), not from the
+        # committed catalog's real 279903-byte pin.
+        self.assertIn("arm64", candidate.sources)
+        identity = candidate.sources["arm64"]
+        self.assertEqual(identity.commit, _FIXTURE_COMMIT)
+        self.assertEqual(identity.lockfile.bytes, len(_FIXTURE_LOCK))
+        self.assertEqual(identity.lockfile.sha256, sha256_bytes(_FIXTURE_LOCK))
+        self.assertEqual(candidate.version, "2.12.2")
+        self.assertIn("amd64", candidate.targets)
+
+
 class CliTest(unittest.TestCase):
     def _run(self, argv: list[str], *, storage, candidates, fingerprint: str = "A" * 40) -> tuple[int, str]:
         from scripts import update as update_module
@@ -360,7 +471,7 @@ class CliTest(unittest.TestCase):
                 storage=storage, candidates=_catalog_candidates(), fingerprint=key_id,
             )
             self.assertEqual(code, 0, msg=output)
-            expected = "bottom, git-delta, kandev, neovim, rustfs-cli, sccache, uv, zoxide"
+            expected = "bottom, cargo-tauri, git-delta, kandev, neovim, rustfs-cli, sccache, uv, zoxide"
             self.assertIn(f"adding to the catalog: {expected}", output)
             self.assertIn(f"would rebuild: {expected}", output)
             self.assertIn("dry run: no key imported", output)

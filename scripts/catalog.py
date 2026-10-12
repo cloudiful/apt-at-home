@@ -14,13 +14,30 @@ import re
 from .download import canonical_member
 from .recipes import RECIPES, Recipe
 
-__all__ = ["ARCHES", "KNOWN_PACKAGES", "RECIPES", "Recipe"]
+__all__ = [
+    "ARCHES",
+    "KNOWN_NAMES",
+    "KNOWN_PACKAGES",
+    "RECIPES",
+    "SOURCE_PACKAGES",
+    "Recipe",
+    "tag_prefix_for",
+]
 
 ARCHES = ("amd64", "arm64")
 
 # Every package name this repository may publish, derived from the recipes so a
 # recipe and the accepted name set can never drift apart.
 KNOWN_PACKAGES: frozenset[str] = frozenset(RECIPES)
+
+# Packages with a reviewed source policy: one architecture of theirs is compiled
+# from upstream source because upstream publishes no release asset for it. The
+# manifest parser accepts a typed source target for these names; discovery,
+# updating, and publication stay with RECIPES, so listing a name here never
+# hands it to the updater or publisher.
+SOURCE_PACKAGES: frozenset[str] = frozenset({"cargo-tauri"})
+
+KNOWN_NAMES: frozenset[str] = KNOWN_PACKAGES | SOURCE_PACKAGES
 
 # One safe POSIX path component: no separator, no dot-prefix, no control byte.
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
@@ -55,9 +72,24 @@ def triple_for(package_name: str, arch: str) -> str:
         ) from None
 
 
+def source_arch_for(package_name: str) -> str:
+    """Return the architecture this package is built from reviewed source, or ''.
+
+    A source-built architecture names no release asset, so every question the
+    catalog answers about an asset — its URL, its archive member, its binary — is
+    a question that must not be asked about it.
+    """
+    return recipe_for(package_name).source_arch
+
+
 def repo_of(package_name: str) -> str:
     """Return the only upstream repository this package may be fetched from."""
     return recipe_for(package_name).repo
+
+
+def tag_prefix_for(package_name: str) -> str:
+    """Return the release-tag prefix this project uses before a version."""
+    return recipe_for(package_name).tag_prefix
 
 
 def tag_for(package_name: str, version: str) -> str:
@@ -186,11 +218,11 @@ def check_known_names(names: list[str]) -> None:
     repeated = sorted({name for name in names if names.count(name) > 1})
     if repeated:
         raise ValueError(f"manifest repeats package name(s): {', '.join(repeated)}")
-    unknown = sorted(set(names) - KNOWN_PACKAGES)
+    unknown = sorted(set(names) - KNOWN_NAMES)
     if unknown:
         raise ValueError(
             f"manifest pins unreviewed package(s): {', '.join(unknown)}; "
-            f"reviewed packages are {', '.join(sorted(KNOWN_PACKAGES))}"
+            f"reviewed packages are {', '.join(sorted(KNOWN_NAMES))}"
         )
 
 

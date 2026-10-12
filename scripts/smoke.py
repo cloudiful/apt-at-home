@@ -29,6 +29,7 @@ from .smoke_package import (
     ELF_MACHINE,
     MAX_BINARY_BYTES,
     SmokeError,
+    check_cargo_tauri_docs,
     check_copyright,
     check_elf,
     check_package,
@@ -78,6 +79,8 @@ def check_pool(manifest: Manifest, pool: Path, arches: tuple[str, ...]) -> list[
                     Path(scratch) / f"{pkg.name}-{arch}",
                 )
                 check_copyright(pkg, extracted)
+                if pkg.name == "cargo-tauri":
+                    findings.append(check_cargo_tauri_docs(pkg, arch, extracted))
                 if pkg.targets[arch].bundle_type:
                     findings.extend(check_bundle_payload(pkg, arch, extracted))
                 else:

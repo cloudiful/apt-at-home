@@ -24,6 +24,12 @@ from .catalog import (
     replaces_for,
 )
 from .manifest import Manifest, parse_manifest
+from .source_build import (
+    SourceIdentity,
+    document,
+    identity_of,
+    parse_source_target,
+)
 from .upstream import Candidate
 from .upstream_assets import ARCHES, version_key
 
@@ -100,8 +106,9 @@ def overlay_package(entry: dict[str, object], candidate: Candidate) -> dict[str,
     The URL, digest, tag-bound license URL, archive member, installed binary, and
     declared dependencies are all recomputed from the reviewed recipe, so a
     nested member moves with the version and an architecture that gains a
-    runtime dependency gains it here too. The result must re-validate through
-    `parse_manifest`.
+    runtime dependency gains it here too. A source-built architecture gets its
+    reviewed identity instead, and never an invented asset URL. The result must
+    re-validate through `parse_manifest`.
     """
     name = str(entry.get("name"))
     license_id = entry.get("license")
@@ -117,6 +124,14 @@ def overlay_package(entry: dict[str, object], candidate: Candidate) -> dict[str,
     relations = {"conflicts": conflicts_for(name), "replaces": replaces_for(name)}
     updated_targets: dict[str, object] = {}
     for arch in ARCHES:
+        source = candidate.sources.get(arch)
+        if source is not None:
+            updated_targets[arch] = {
+                "source_build": document(source),
+                "binary": binary_name(name),
+                "depends": depends_for(name, arch),
+            }
+            continue
         override = candidate.targets.get(arch)
         if override is None:
             raise ValueError(f"{name} has no discovered target for {arch}")
@@ -138,13 +153,41 @@ def overlay_package(entry: dict[str, object], candidate: Candidate) -> dict[str,
     }
 
 
+def _check_same_source_version(
+    name: str, version: str, arch: str, published: dict[str, object], source: SourceIdentity
+) -> None:
+    """Refuse a same-version source target whose identity moved.
+
+    A source-built version is republished the moment upstream moves the commit,
+    the lockfile, the pinned compiler, or the command behind the same tag. The
+    published entry keeps whatever artifact it already carries — an unchanged
+    version never needs a new compilation — but a *different* identity under the
+    same version is a new build claiming an old version number, and it stops the
+    run instead of replacing what clients already installed.
+    """
+    raw = published.get("source_build")
+    if raw is None:
+        raise ValueError(
+            f"{name} {version} {arch} is now built from source, but the published "
+            "release carries an asset target; a published release is immutable"
+        )
+    if identity_of(parse_source_target(raw)) != source:
+        raise ValueError(
+            f"{name} {version} {arch} source identity changed "
+            f"({source.commit[:12]}); a published release is immutable and a moved "
+            "tag or lockfile must not be treated as already up to date"
+        )
+
+
 def check_same_version_immutable(entry: dict[str, object], candidate: Candidate) -> None:
     """Refuse to treat an unchanged version as a no-op when its bytes changed.
 
     A published release is immutable, so a stable version whose upstream asset
     digest moved is not "already up to date": it is a republished tag, and
     rebuilding it would overwrite an existing .deb under a version clients have
-    already installed. The run stops and names the architecture instead.
+    already installed. A source-built version is held to the same rule through its
+    identity rather than through an asset digest. The run stops and names the
+    architecture instead.
     """
     if entry.get("license_url") != candidate.license_url:
         raise ValueError(
@@ -164,11 +207,21 @@ def check_same_version_immutable(entry: dict[str, object], candidate: Candidate)
         published = targets.get(arch)
         if not isinstance(published, dict):
             raise ValueError(f"{candidate.name} baseline has no {arch} target")
+        source = candidate.sources.get(arch)
+        if source is not None:
+            _check_same_source_version(candidate.name, candidate.version, arch, published, source)
+            continue
+        override = candidate.targets.get(arch)
+        if override is None:
+            raise ValueError(
+                f"{candidate.name} {candidate.version} {arch} has no discovered "
+                "upstream release asset"
+            )
         current_digest = str(published.get("sha256", "")).lower()
-        if current_digest != candidate.targets[arch]["sha256"]:
+        if current_digest != override["sha256"]:
             raise ValueError(
                 f"{candidate.name} {candidate.version} {arch} upstream digest changed "
-                f"({current_digest[:12]} -> {candidate.targets[arch]['sha256'][:12]}); "
+                f"({current_digest[:12]} -> {override['sha256'][:12]}); "
                 "a published release is immutable and a republished tag must not be "
                 "silently treated as already up to date"
             )

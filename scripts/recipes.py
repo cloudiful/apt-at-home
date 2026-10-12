@@ -56,6 +56,10 @@ class Recipe:
     install_tree: str = ""
     bundle_type: str = ""
     required: tuple[str, ...] = ()
+    # The one architecture this package is compiled from reviewed upstream source
+    # because upstream publishes no release asset for it. Empty for every package
+    # whose both architectures come from official assets.
+    source_arch: str = ""
     # Tree-sitter parser libraries under lib/nvim/parser, each checked for the
     # package architecture's ELF machine.
     parsers: tuple[str, ...] = ()
@@ -163,6 +167,24 @@ _BASE_RECIPES: dict[str, Recipe] = {
         asset="{upstream}-v{version}-{triple}.tar.gz",
         member="{prefix}/{binary}",
         binary="sccache",
+    ),
+    "cargo-tauri": Recipe(
+        name="cargo-tauri",
+        upstream="cargo-tauri",
+        repo="tauri-apps/tauri",
+        tag_prefix="tauri-cli-v",
+        license_id="MIT OR Apache-2.0",
+        license_path="LICENSE-MIT",
+        asset="{upstream}-{triple}.tgz",
+        member="{binary}",
+        binary="cargo-tauri",
+        triples=MappingProxyType({"amd64": "x86_64-unknown-linux-gnu"}),
+        depends=MappingProxyType({
+            "amd64": "cargo, libbz2-1.0 (>= 1.0.8-6), libc6 (>= 2.39), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)",
+            "arm64": "cargo, libbz2-1.0 (>= 1.0.8-6), libc6 (>= 2.39), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)",
+        }),
+        source_arch="arm64",
+        extra_license_paths=("LICENSE-APACHE-2.0",),
     ),
 }
 

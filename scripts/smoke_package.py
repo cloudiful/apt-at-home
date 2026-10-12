@@ -129,6 +129,52 @@ def check_copyright(pkg: Package, package_root: Path) -> None:
         raise SmokeError(f"{pkg.name} Debian copyright does not match reviewed license texts")
 
 
+def check_cargo_tauri_docs(pkg: Package, arch: str, package_root: Path) -> str:
+    """Require the production `cargo-tauri` source record and notices.
+
+    Both architectures install the rendered `README.source` from the validated
+    package itself; its version, commit, and official asset digest must match
+    the package, so stale docs fail. Notices use the reviewed production names
+    (`LICENSE.txt`, `LICENSE-APACHE-2.0`) with no mapping layer. ARM additionally
+    carries the realized `build-provenance.json`; AMD never invents an ARM
+    asset URL.
+    """
+    from .package_licenses import cargo_tauri_source_document
+    from .source_build import SOURCE_PROVENANCE_NAME, identity_of
+
+    if pkg.name != "cargo-tauri":
+        raise SmokeError(f"cargo-tauri docs check needs cargo-tauri, got {pkg.name!r}")
+    doc_dir = package_root / "usr" / "share" / "doc" / pkg.name
+    readme = doc_dir / "README.source"
+    if not readme.is_file():
+        raise SmokeError(f"{pkg.name} {arch} is missing its README.source")
+    expected_readme = cargo_tauri_source_document(pkg)
+    if readme.read_text(encoding="utf-8") != expected_readme:
+        raise SmokeError(
+            f"{pkg.name} {arch} README.source does not match its version/commit/asset pins"
+        )
+    text = readme.read_text(encoding="utf-8")
+    arm_identity = identity_of(pkg.targets["arm64"].source_build)  # type: ignore[arg-type]
+    for needle, label in (
+        (pkg.version, "version"),
+        (arm_identity.commit, "commit"),
+        (pkg.targets["amd64"].url, "official asset URL"),
+        (pkg.targets["amd64"].sha256, "official asset digest"),
+    ):
+        if needle not in text:
+            raise SmokeError(f"{pkg.name} {arch} README.source misses its {label}")
+    for name in ("LICENSE.txt", "LICENSE-APACHE-2.0"):
+        if not (doc_dir / name).is_file():
+            raise SmokeError(f"{pkg.name} {arch} is missing installed notice {name}")
+        if not (doc_dir / name).read_text(encoding="utf-8").strip():
+            raise SmokeError(f"{pkg.name} {arch} installed notice {name} is empty")
+    if arch == "arm64":
+        provenance = doc_dir / SOURCE_PROVENANCE_NAME
+        if not provenance.is_file():
+            raise SmokeError(f"{pkg.name} {arch} is missing its {SOURCE_PROVENANCE_NAME}")
+    return f"{pkg.name} {arch}: README.source states {pkg.version}/{arm_identity.commit[:12]}"
+
+
 def check_elf(pkg: Package, arch: str, binary: Path) -> None:
     """Require a binary to be a real ELF file for the given architecture."""
     if not binary.is_file():

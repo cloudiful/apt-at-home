@@ -12,6 +12,7 @@ from scripts.manifest import (
 )
 from scripts.release_manifest import load_manifest_data
 from scripts.manifest import default_manifest_path
+from tests.test_source_build import identity_document, source_manifest_document
 
 TARGET = {
     "url": "https://github.com/example/example/releases/download/v1.0.0/x.tar.gz",
@@ -25,6 +26,23 @@ def _document() -> dict:
     return copy.deepcopy(load_manifest_data(default_manifest_path()))
 
 
+def _with_reviewed_extra(document: dict) -> dict:
+    """Return a source fixture as a valid production document.
+
+    P1/P2 helpers predate the production recipe and carry no
+    `extra_license_urls` and a placeholder `license_url`; production parsing
+    requires the reviewed tag-bound dual-license URLs, so tests that exercise
+    source-target validation add them here rather than weakening the validator.
+    """
+    document["packages"][0]["license_url"] = (  # type: ignore[index]
+        "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.2/LICENSE-MIT"
+    )
+    document["packages"][0]["extra_license_urls"] = [  # type: ignore[index]
+        "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.2/LICENSE-APACHE-2.0"
+    ]
+    return document
+
+
 class ManifestTest(unittest.TestCase):
     def test_pins_the_reviewed_catalog_with_both_architectures(self) -> None:
         manifest = load_manifest()
@@ -36,6 +54,9 @@ class ManifestTest(unittest.TestCase):
         for pkg in manifest.packages:
             self.assertSetEqual(set(pkg.targets), {"amd64", "arm64"})
             for arch, target in pkg.targets.items():
+                if target.is_source_target:
+                    self.assertEqual((target.url, target.sha256, target.archive_member), ("", "", ""))
+                    continue
                 self.assertTrue(target.url.startswith("https://github.com/"))
                 self.assertRegex(target.sha256, r"^[0-9a-f]{64}$")
                 self.assertNotIn("latest", target.url)
@@ -55,6 +76,7 @@ class ManifestTest(unittest.TestCase):
                 "uv": "0.13.0",
                 "zoxide": "0.10.0",
                 "kandev": "0.97.0",
+                "cargo-tauri": "2.12.2",
             },
         )
 
@@ -79,6 +101,7 @@ class ManifestTest(unittest.TestCase):
             ("zoxide", "arm64"): "f1f16c5d6298d63dee467eedea1cdcd8490e43e493bea43acd416dc9033ef641",
             ("kandev", "amd64"): "d15b5ca901fc051dfefbb40a2e0fbec8e92aaf16db8225921f32a6ccdc7d2457",
             ("kandev", "arm64"): "3bba944aa4f73441864203c1a84a96e09bcdfc18d01c32cfbb8ba664b2c6b823",
+            ("cargo-tauri", "amd64"): "35c7b50266256cb6d5f757608d7097a59a5faeb0c75879ee1f504652a9b6087e",
         }
         for (name, arch), digest in expected.items():
             self.assertEqual(by_name[name].targets[arch].sha256, digest, msg=f"{name} {arch}")
@@ -116,6 +139,14 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(kandev.targets["amd64"].bundle_type, "kandev-standard")
         self.assertEqual(kandev.targets["arm64"].bundle_type, "kandev-standard")
         self.assertEqual(kandev.license, "AGPL-3.0-or-later")
+        cargo = by_name["cargo-tauri"]
+        self.assertEqual(cargo.targets["amd64"].archive_member, "cargo-tauri")
+        self.assertEqual(cargo.targets["amd64"].binary, "cargo-tauri")
+        self.assertEqual(cargo.license, "MIT OR Apache-2.0")
+        self.assertEqual(
+            cargo.extra_license_urls,
+            ("https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.2/LICENSE-APACHE-2.0",),
+        )
 
     def test_declares_dependencies_only_where_the_binary_needs_them(self) -> None:
         by_name = {p.name: p for p in load_manifest().packages}
@@ -133,6 +164,12 @@ class ManifestTest(unittest.TestCase):
                          "libc6 (>= 2.17), libgcc-s1")
         self.assertEqual(by_name["uv"].targets["arm64"].depends,
                          "libc6 (>= 2.28), libgcc-s1")
+        cargo_depends = (
+            "cargo, libbz2-1.0 (>= 1.0.8-6), libc6 (>= 2.39), "
+            "libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)"
+        )
+        self.assertEqual(by_name["cargo-tauri"].targets["amd64"].depends, cargo_depends)
+        self.assertEqual(by_name["cargo-tauri"].targets["arm64"].depends, cargo_depends)
         for name in ("sccache", "rustfs-cli", "zellij", "starship", "zoxide"):
             for arch in ("amd64", "arm64"):
                 self.assertEqual(by_name[name].targets[arch].depends, "", msg=f"{name} {arch}")
@@ -279,6 +316,62 @@ class ManifestTest(unittest.TestCase):
         for name in ("zellij", "starship", "git-delta", "rustfs-cli", "sccache"):
             self.assertEqual(by_name[name].conflicts, "", msg=name)
             self.assertEqual(by_name[name].replaces, "", msg=name)
+
+    def test_a_source_target_declares_no_asset_fields(self) -> None:
+        """A source-built target names no asset, so it must carry no asset fields."""
+        manifest = parse_manifest(_with_reviewed_extra(source_manifest_document()))
+        target = manifest.packages[0].targets["arm64"]
+        self.assertTrue(target.is_source_target)
+        self.assertEqual((target.url, target.sha256, target.archive_member), ("", "", ""))
+        for field in ("url", "sha256", "archive_member", "install_tree"):
+            with self.subTest(field=field):
+                document = _with_reviewed_extra(source_manifest_document())
+                document["packages"][0]["targets"]["arm64"][field] = "x"  # type: ignore[index]
+                with self.assertRaisesRegex(ValueError, "built from source and must not declare"):
+                    parse_manifest(document)
+
+    def test_a_source_target_names_no_additional_archive_members(self) -> None:
+        document = _with_reviewed_extra(source_manifest_document())
+        document["packages"][0]["targets"]["arm64"]["additional_binaries"] = {  # type: ignore[index]
+            "vendor/uv": "uv"
+        }
+        with self.assertRaisesRegex(ValueError, "names no additional archive members"):
+            parse_manifest(document)
+
+    def test_a_source_target_is_closed(self) -> None:
+        document = _with_reviewed_extra(source_manifest_document())
+        document["packages"][0]["targets"]["arm64"]["payload_url"] = (  # type: ignore[index]
+            "https://example.invalid/cargo-tauri"
+        )
+        with self.assertRaisesRegex(ValueError, "unknown keys"):
+            parse_manifest(document)
+
+    def test_a_source_target_must_name_the_reviewed_pair(self) -> None:
+        """Only the reviewed source-built package/architecture may declare one."""
+        document = source_manifest_document()
+        entry = document["packages"][0]
+        entry["name"] = "zellij"  # type: ignore[index]
+        # zellij has no extra licenses; keep the fixture otherwise valid so the
+        # refusal names the source pair rather than the license provenance.
+        entry["extra_license_urls"] = []  # type: ignore[index]
+        asset = {
+            "source_build": identity_document(),
+            "binary": "zellij",
+        }
+        entry["targets"] = {"amd64": asset, "arm64": dict(asset)}  # type: ignore[index]
+        with self.assertRaisesRegex(ValueError, "may not be built from source"):
+            parse_manifest(document)
+
+    def test_every_committed_target_is_still_an_asset_target(self) -> None:
+        """The ten reviewed asset packages stay asset targets; cargo-tauri adds one source."""
+        for package in load_manifest().packages:
+            for arch, target in package.targets.items():
+                if (package.name, arch) == ("cargo-tauri", "arm64"):
+                    self.assertIsNotNone(target.source_build, msg=f"{package.name} {arch}")
+                    self.assertTrue(target.is_source_target, msg=f"{package.name} {arch}")
+                    continue
+                self.assertIsNone(target.source_build, msg=f"{package.name} {arch}")
+                self.assertFalse(target.is_source_target, msg=f"{package.name} {arch}")
 
     def test_reviewed_extra_metadata_is_required_and_closed(self) -> None:
         data = _document()

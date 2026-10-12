@@ -169,8 +169,15 @@ class WorkflowStructureTest(unittest.TestCase):
         import_step = text.split("Import signing key")[1].split("- name:")[0]
         self.assertIn('chmod 600 "$RUNNER_TEMP/release-private.asc"', import_step)
         self.assertIn("gpg --batch --import", import_step)
-        # The key is never an artifact and never echoed.
-        self.assertNotIn("upload-artifact", text)
+        # The key is never an artifact and never echoed. The producer job uploads
+        # its own compilation, so the rule is scoped to the job that holds the key.
+        publish = job_block(text, "publish")
+        self.assertNotIn("upload-artifact", publish)
+        for path in (
+            "release-private.asc", "$GNUPGHOME", "APT_RELEASE_SIGNING_KEY",
+            "APT_SIGNING_KEY_FILE",
+        ):
+            self.assertNotIn(path, job_block(text, "source-producer"), path)
         cleanup = text.split("Scrub isolated key material")[1]
         self.assertIn("if: always()", cleanup)
         self.assertIn("$RUNNER_TEMP/release-private.asc", cleanup)

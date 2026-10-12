@@ -4,9 +4,9 @@ The published release, the reprepro indices, the GPG signature, and the pointer
 ordering are all real; only the upstream archive download is stubbed, so the
 test proves the update mechanics rather than GitHub's availability. The
 headline case is the one production will run first: a published two-package
-release meeting the full catalog, which must add eight packages, build exactly
-sixteen .deb files, keep the four published ones byte-identical, and publish a
-complete twenty-file release.
+release meeting the full catalog, which must add nine packages, build exactly
+eighteen .deb files, keep the four published ones byte-identical, and publish a
+complete twenty-two-file release.
 """
 
 import json
@@ -35,6 +35,52 @@ from tests.release_fixtures import (
     published_manifest_data,
 )
 from tests.test_update import _catalog_candidates, candidate, catalog_document
+
+
+def _fixture_catalog() -> dict:
+    """Full catalog with the fixture source identity for hermetic local builds."""
+    import copy as _copy
+
+    data = _copy.deepcopy(catalog_document())
+    from tests.test_source_artifacts import source_identity as _fixture_identity
+    from scripts.source_build import document as _document_of
+
+    fixture_doc = _document_of(_fixture_identity())
+    for entry in data["packages"]:  # type: ignore[index]
+        if entry["name"] == "cargo-tauri":  # type: ignore[index]
+            entry["targets"]["arm64"]["source_build"] = fixture_doc  # type: ignore[index]
+    return data
+
+
+def _fixture_candidates() -> dict:
+    """Candidates matching `_fixture_catalog`, with the fixture source identity."""
+    from types import MappingProxyType as _MP
+
+    from tests.test_source_artifacts import source_identity as _fixture_identity
+
+    candidates = _catalog_candidates()
+    cargo = candidates["cargo-tauri"]
+    candidates["cargo-tauri"] = cargo.__class__(
+        name=cargo.name,
+        repo=cargo.repo,
+        tag=cargo.tag,
+        version=cargo.version,
+        license_url=cargo.license_url,
+        targets=cargo.targets,
+        extra_license_urls=cargo.extra_license_urls,
+        sources=_MP({"arm64": _fixture_identity()}),
+    )
+    return candidates
+
+
+def _fixture_artifacts(root: Path):
+    from scripts.source_artifacts import index_source_artifacts, load_source_artifacts
+    from tests.test_source_artifacts import artifact_directory, pinned
+
+    artifacts_dir, identity = artifact_directory(root / "source-artifacts")
+    return index_source_artifacts(
+        [load_source_artifacts(artifacts_dir, expected=pinned(identity))]
+    )
 
 
 class Store:
@@ -102,7 +148,7 @@ class UpdateBuildTest(unittest.TestCase):
         store.seed(build_release_objects(work / "published", key_home=key_home, key_id=key_id))
         return store
 
-    def test_the_catalog_addition_builds_sixteen_debs_and_keeps_the_four_published(self) -> None:
+    def test_the_catalog_addition_builds_eighteen_debs_and_keeps_the_four_published(self) -> None:
         tmpdir, home, key_id = make_gpg_home_with_key()
         try:
             with tempfile.TemporaryDirectory() as tmp:
@@ -123,15 +169,16 @@ class UpdateBuildTest(unittest.TestCase):
                 plan = build_plan(
                     baseline_release_id=restored.release_id,
                     baseline_data=restored.manifest_data,
-                    catalog_data=catalog_document(),
-                    candidates=_catalog_candidates(),
+                    catalog_data=_fixture_catalog(),
+                    candidates=_fixture_candidates(),
                 )
                 additions = (
-                    "bottom", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "uv", "zoxide",
+                    "bottom", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "uv", "zoxide",
                 )
                 self.assertEqual(plan.changed, additions)
 
                 key_file = _export_private_key(home, root / "test-private.asc")
+                artifacts = _fixture_artifacts(root)
                 with _stub_archive():
                     result = apply_update(
                         plan=plan,
@@ -145,18 +192,20 @@ class UpdateBuildTest(unittest.TestCase):
                         signing_key_file=key_file,
                         key_id=key_id,
                         client=store.client,
+                        source_artifacts=artifacts,
                     )
                 self.assertEqual(result.release_id, "catalog-release")
 
                 pool = {p.name: p.read_bytes() for p in (output / "pool").glob("*.deb")}
-                self.assertEqual(len(pool), 20)
-                # Exactly the eight added packages were built for both architectures.
+                self.assertEqual(len(pool), 22)
+                # Exactly the nine added packages were built for both architectures.
                 self.assertEqual(
                     sorted(path.name for path in result.debs),
                     [
                         f"{name}_{version}-1_{arch}.deb"
                         for name, version in (
                             ("bottom", "0.14.9"),
+                            ("cargo-tauri", "2.12.2"),
                             ("git-delta", "0.20.1"),
                             ("kandev", "0.97.0"),
                             ("neovim", "0.12.6"),
@@ -177,7 +226,7 @@ class UpdateBuildTest(unittest.TestCase):
                         output / "releases" / "catalog-release" / "dists" / "stable"
                         / "main" / f"binary-{arch}" / "Packages"
                     ).read_text()
-                    self.assertEqual(len(text.strip().split("\n\n")), 10)
+                    self.assertEqual(len(text.strip().split("\n\n")), 11)
                     self.assertIn("Version: 0.20.1-1", text)
                     # The Debian name and the installed command differ for rc.
                     self.assertIn(f"Package: rustfs-cli\n", text)
@@ -204,11 +253,11 @@ class UpdateBuildTest(unittest.TestCase):
                     self.assertEqual(extracted.returncode, 0, msg=extracted.stderr)
                     check_copyright(uv, uv_root)
 
-                # The new release binds the complete ten-package manifest.
+                # The new release binds the complete eleven-package manifest.
                 bound = json.loads(
                     (output / "releases" / "catalog-release" / "manifest.json").read_text()
                 )
-                self.assertEqual(len(bound["packages"]), 10)
+                self.assertEqual(len(bound["packages"]), 11)
                 self.assertIn("releases/catalog-release/manifest.json", store.client.puts)
                 # The pointer is the last object written.
                 self.assertEqual(store.client.puts[-1], "current.json")
@@ -230,28 +279,29 @@ class UpdateBuildTest(unittest.TestCase):
                 plan = build_plan(
                     baseline_release_id=restored.release_id,
                     baseline_data=restored.manifest_data,
-                    catalog_data=catalog_document(),
-                    candidates=_catalog_candidates(),
+                    catalog_data=_fixture_catalog(),
+                    candidates=_fixture_candidates(),
                 )
                 key_file = _export_private_key(home, root / "test-private.asc")
+                artifacts = _fixture_artifacts(root)
                 with _stub_archive():
                     apply_update(
                         plan=plan, release=restored, source=store, output_root=output,
                         cache_dir=output.parent / "cache" / "upstream",
                         release_id="catalog-release", bucket=Store.bucket,
                         fingerprint=key_id, signing_key_file=key_file, key_id=key_id,
-                        client=store.client,
+                        client=store.client, source_artifacts=artifacts,
                     )
 
                 uploaded_before = list(store.client.puts)
                 follow_up = restore_metadata(store, fingerprint=key_id)
                 self.assertEqual(follow_up.release_id, "catalog-release")
-                self.assertEqual(len(follow_up.manifest.packages), 10)
+                self.assertEqual(len(follow_up.manifest.packages), 11)
                 second = build_plan(
                     baseline_release_id=follow_up.release_id,
                     baseline_data=follow_up.manifest_data,
-                    catalog_data=catalog_document(),
-                    candidates=_catalog_candidates(),
+                    catalog_data=_fixture_catalog(),
+                    candidates=_fixture_candidates(),
                 )
                 self.assertTrue(second.is_noop)
                 self.assertEqual(store.client.puts, uploaded_before)

@@ -1,4 +1,13 @@
-"""Load and validate the pinned upstream manifest."""
+"""Load and validate the pinned upstream manifest.
+
+A target names exactly one kind of input, and the two are mutually exclusive. An
+asset target pins an official download URL with its digest and the reviewed archive
+member inside it. A source target pins a reviewed source identity instead — the
+repository, tag, commit, lockfile object, toolchain channel, and cargo command —
+and carries no URL and no digest at all, because upstream publishes no asset to
+name. An invented `https://` URL for a compiled binary would be a false claim
+about where its bytes came from, so the absence is enforced rather than tolerated.
+"""
 
 from __future__ import annotations
 
@@ -18,8 +27,16 @@ from .catalog import (
     check_known_names,
     check_relations,
     extra_license_urls_for,
+    tag_prefix_for,
 )
 from .download import canonical_member
+from .source_build import (
+    RealizedSource,
+    SourceIdentity,
+    check_source_target,
+    check_tag_version,
+    parse_source_target,
+)
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _ARCHES = ("amd64", "arm64")
@@ -27,10 +44,21 @@ _VERSION = re.compile(r"^[0-9][A-Za-z0-9.+~:-]*$")
 _BINARY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 _URL = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/[^ ]+$")
 
+# The fields a source-built target may declare, and the asset fields it must not:
+# it names no download, so there is no archive to extract a member from and
+# nothing to hash.
+_SOURCE_FIELDS = frozenset({"source_build", "binary", "depends"})
+_ASSET_FIELDS = frozenset({"url", "sha256", "archive_member", "install_tree"})
+
 
 @dataclass(frozen=True)
 class ArchTarget:
-    """One architecture's pinned asset: a flat member or a tree root, never both."""
+    """One architecture's input: a pinned asset, or a pinned source build.
+
+    `source_build` is None for every asset target, and either a planned
+    `SourceIdentity` or a `RealizedSource` for a source-built one. It is the last
+    field so an existing caller that names the other fields keeps working.
+    """
 
     url: str
     sha256: str
@@ -40,6 +68,12 @@ class ArchTarget:
     install_tree: str = ""
     bundle_type: str = ""
     additional_binaries: Mapping[str, str] = MappingProxyType({})
+    source_build: SourceIdentity | RealizedSource | None = None
+
+    @property
+    def is_source_target(self) -> bool:
+        """Whether this target is built from reviewed source instead of an asset."""
+        return self.source_build is not None
 
 
 @dataclass(frozen=True)
@@ -183,6 +217,11 @@ def _parse_additional_binaries(
     return MappingProxyType(parsed)
 
 
+def _source_tag(value: SourceIdentity | RealizedSource) -> str:
+    """Return the release tag of either source shape."""
+    return value.identity.tag if isinstance(value, RealizedSource) else value.tag
+
+
 def parse_package(raw: object) -> Package:
     if not isinstance(raw, dict):
         raise ValueError("package entry must be an object")
@@ -213,23 +252,49 @@ def parse_package(raw: object) -> Package:
         url = str(target_raw.get("url", ""))
         sha256 = str(target_raw.get("sha256", "")).lower()
         binary = str(target_raw.get("binary", ""))
-        member, install_tree, bundle_type = _parse_source(name, version, arch, target_raw)
-        depends = check_relations(
-            f"depends for {name} {arch}", str(target_raw.get("depends", "") or "")
-        )
-        if not _URL.match(url):
-            raise ValueError(f"invalid pinned URL for {name} {arch}: {url}")
-        if not _SHA256.match(sha256):
-            raise ValueError(f"invalid sha256 for {name} {arch}")
+        source_build: SourceIdentity | RealizedSource | None = None
+        member = install_tree = bundle_type = ""
+        additional: Mapping[str, str] = MappingProxyType({})
+        if "source_build" in target_raw:
+            check_source_target(name, arch)
+            forbidden = sorted(set(target_raw) & _ASSET_FIELDS)
+            if forbidden:
+                raise ValueError(
+                    f"{name} {arch} is built from source and must not declare "
+                    f"{', '.join(forbidden)}"
+                )
+            if "additional_binaries" in target_raw:
+                raise ValueError(
+                    f"{name} {arch} is built from source and names no additional archive members"
+                )
+            unknown = sorted(set(target_raw) - _SOURCE_FIELDS)
+            if unknown:
+                raise ValueError(
+                    f"{name} {arch} source target has unknown keys: {', '.join(unknown)}"
+                )
+            source_build = parse_source_target(target_raw["source_build"])
+            check_tag_version(
+                version, _source_tag(source_build),
+                prefix=tag_prefix_for(name),
+            )
+        else:
+            member, install_tree, bundle_type = _parse_source(name, version, arch, target_raw)
+            if not _URL.match(url):
+                raise ValueError(f"invalid pinned URL for {name} {arch}: {url}")
+            if not _SHA256.match(sha256):
+                raise ValueError(f"invalid sha256 for {name} {arch}")
+            additional = _parse_additional_binaries(
+                name, version, arch, target_raw, member, binary, install_tree
+            )
         if not _BINARY.fullmatch(binary):
             raise ValueError(f"invalid binary name for {name} {arch}")
-        additional = _parse_additional_binaries(
-            name, version, arch, target_raw, member, binary, install_tree
+        depends = check_relations(
+            f"depends for {name} {arch}", str(target_raw.get("depends", "") or "")
         )
         targets[arch] = ArchTarget(
             url=url, sha256=sha256, archive_member=member, binary=binary,
             depends=depends, install_tree=install_tree, bundle_type=bundle_type,
-            additional_binaries=additional,
+            additional_binaries=additional, source_build=source_build,
         )
     conflicts = check_relations(f"conflicts for {name}", str(raw.get("conflicts", "") or ""))
     replaces = check_relations(f"replaces for {name}", str(raw.get("replaces", "") or ""))

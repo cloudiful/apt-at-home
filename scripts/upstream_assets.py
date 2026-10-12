@@ -28,11 +28,59 @@ RAW_BASE = "https://raw.githubusercontent.com"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 # Latest stable only: an exact <prefix>N.N.N with no prerelease or build part.
 _STABLE_TAG = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+_REPOSITORY = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$")
 
 
 def releases_api_url(repo: str) -> str:
     """Return the fixed API endpoint for one repository's latest release."""
     return f"{API_BASE}/repos/{repo}/releases/latest"
+
+
+def release_tag_api_url(repo: str, tag: str) -> str:
+    """Return the fixed API endpoint for one repository's release by exact tag.
+
+    A multiproduct repository's `releases/latest` may name another product
+    line; the canonical CLI release is fetched by its exact reviewed tag so
+    producer and consumer select the same CLI version.
+    """
+    return f"{API_BASE}/repos/{repo}/releases/tags/{tag}"
+
+
+def repo_slug(repository: str) -> str:
+    """Return the `owner/name` slug of an official GitHub repository URL.
+
+    The slug is derived from a reviewed URL, never assembled from a response, so
+    no endpoint this module builds can be pointed at another host.
+    """
+    match = _REPOSITORY.match(repository)
+    if match is None:
+        raise ValueError(f"not an official GitHub repository URL: {repository!r}")
+    return f"{match.group(1)}/{match.group(2)}"
+
+
+def git_ref_api_url(repo: str, tag: str) -> str:
+    """Return the API endpoint that resolves one exact tag reference."""
+    return f"{API_BASE}/repos/{repo}/git/ref/tags/{tag}"
+
+
+def tags_api_url(repo: str, per_page: int = 100) -> str:
+    """Return the API endpoint listing one repository's tags, newest first.
+
+    A bounded `per_page` keeps discovery to a single request: a source target
+    whose reviewed tag prefix is stable resolves inside the first page, and a
+    prefix with nothing there is a refusal rather than a deeper crawl.
+    """
+    return f"{API_BASE}/repos/{repo}/tags?per_page={per_page}"
+
+
+def git_tag_api_url(repo: str, sha: str) -> str:
+    """Return the API endpoint for one annotated tag object."""
+    return f"{API_BASE}/repos/{repo}/git/tags/{sha}"
+
+
+def contents_api_url(repo: str, path: str, ref: str) -> str:
+    """Return the API endpoint for one file at one exact commit."""
+    return f"{API_BASE}/repos/{repo}/contents/{path}?ref={ref}"
 
 
 def license_path(package_name: str) -> str:
@@ -109,13 +157,19 @@ __all__ = [
     "WEB_BASE",
     "asset_name",
     "check_official_asset_url",
+    "contents_api_url",
+    "git_ref_api_url",
+    "git_tag_api_url",
     "license_path",
     "license_url",
     "license_urls_for",
     "parse_asset_digest",
     "parse_stable_tag",
     "release_download_url",
+    "release_tag_api_url",
     "releases_api_url",
+    "repo_slug",
     "tag_for",
+    "tags_api_url",
     "version_key",
 ]

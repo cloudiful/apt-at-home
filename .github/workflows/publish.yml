@@ -45,6 +45,8 @@ jobs:
     # Production publication runs from the default branch only. A manual run on
     # any other ref stops here rather than publishing from unreviewed code.
     if: github.ref == 'refs/heads/main'
+    # The artifact this job consumes is produced by the producer in this same run.
+    needs: [source-producer]
     runs-on: ubuntu-24.04
     container: debian:13
     # A container job defaults to `sh`, but the routing steps use Bash arrays.
@@ -73,6 +75,29 @@ jobs:
         run: uv lock --check
       - run: uv sync --frozen
       - run: uv run python -m unittest discover -s tests
+      # No run id and no artifact id: the name resolves inside this run only, so a
+      # consumer cannot be handed an artifact from another one.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: source-artifacts
+          path: dist/source-artifacts
+      - name: Resolve the same-run source artifact routing
+        run: |
+          set -euo pipefail
+          # One decision, taken from this run's producer upload: a compiled
+          # artifact this build validates, the published deb this build carries
+          # over, or neither when no source target is declared at all. The build
+          # steps below may not choose anything else, and a plan that says the
+          # version is already published is the only thing that opens the reuse
+          # path — reusing is never inferred from a missing artifact.
+          if [ -f dist/source-artifacts/build-provenance.json ]; then
+            echo "SOURCE_ROUTING=artifact" >>"$GITHUB_ENV"
+          elif [ "$(uv run python -m scripts.source_plan published \
+            --plan dist/source-artifacts/source-plan.json)" = "true" ]; then
+            echo "SOURCE_ROUTING=reuse" >>"$GITHUB_ENV"
+          else
+            echo "SOURCE_ROUTING=none" >>"$GITHUB_ENV"
+          fi
       - name: Resolve the effective publication mode
         run: |
           set -euo pipefail
@@ -156,6 +181,17 @@ jobs:
           if [ -n "$RELEASE_ID_INPUT" ]; then
             args+=(--release-id "$RELEASE_ID_INPUT")
           fi
+          # The producer's record is what says this run compiled something, and
+          # the plan is what says the published deb may be carried over. An
+          # absent artifact is a no-op: an unchanged source target keeps its
+          # published .deb, and the build still refuses a source target it has
+          # neither an artifact nor a verified baseline for.
+          case "${SOURCE_ROUTING:-none}" in
+            artifact) args+=(--source-artifacts dist/source-artifacts) ;;
+            reuse) args+=(--reuse-published-source) ;;
+            none) ;;
+            *) echo "invalid source routing: $SOURCE_ROUTING" >&2; exit 1 ;;
+          esac
           uv run "${args[@]}"
         env:
           RELEASE_ID_INPUT: ${{ inputs.release_id }}
@@ -167,6 +203,12 @@ jobs:
           if [ -n "$RELEASE_ID_INPUT" ]; then
             args+=(--release-id "$RELEASE_ID_INPUT")
           fi
+          case "${SOURCE_ROUTING:-none}" in
+            artifact) args+=(--source-artifacts dist/source-artifacts) ;;
+            reuse) args+=(--reuse-published-source) ;;
+            none) ;;
+            *) echo "invalid source routing: $SOURCE_ROUTING" >&2; exit 1 ;;
+          esac
           uv run "${args[@]}"
           uv run python -m scripts.smoke --manifest packaging/manifest.json --pool dist/repo/pool
         env:
@@ -179,6 +221,12 @@ jobs:
           if [ -n "$RELEASE_ID_INPUT" ]; then
             args+=(--release-id "$RELEASE_ID_INPUT")
           fi
+          case "${SOURCE_ROUTING:-none}" in
+            artifact) args+=(--source-artifacts dist/source-artifacts) ;;
+            reuse) args+=(--reuse-published-source) ;;
+            none) ;;
+            *) echo "invalid source routing: $SOURCE_ROUTING" >&2; exit 1 ;;
+          esac
           uv run "${args[@]}"
           uv run python -m scripts.repo verify --output dist/repo
           test "$(find dist/repo/pool -maxdepth 1 -name '*.deb' | wc -l)" \
@@ -194,3 +242,129 @@ jobs:
       - name: Scrub isolated key material
         if: always()
         run: rm -rf "${GNUPGHOME:-/nonexistent}" "$RUNNER_TEMP/release-private.asc" || true
+
+  source-producer:
+    name: Plan and compile the reviewed source target (no production secrets)
+    # Compiling for an unreviewed ref would spend an ARM runner on code no
+    # publisher will consume, so the producer runs where publication runs.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    container: debian:13
+    timeout-minutes: 45
+    # No environment and no secret of any kind, not even the repository token:
+    # the plan is built from public metadata alone, so this job has nothing to
+    # authenticate with and nothing to leak.
+    env:
+      UV_DEFAULT_INDEX: https://pypi.org/simple
+      # The public gateway root, and the public signing fingerprint it must serve.
+      # The fingerprint is the repository's published trust anchor, not a secret,
+      # and it is written here because this job may not read a secret. An
+      # authorized rotation moves the pin in `prod` and here; until both move,
+      # the plan fails with a clear mismatch instead of trusting the served key.
+      SOURCE_BASE_URL: https://apt.example.com/
+      SOURCE_TRUST_FINGERPRINT: 94D49782052D6521E0249E4178C3D292443558E2
+      # The mode this run plans from, taken from the same inputs the publisher
+      # resolves its own mode from: a scheduled run is always an upstream publish
+      # and ignores any dispatch input, and a manual run may choose either. The
+      # planner validates the value and refuses anything else.
+      PRODUCER_MODE: ${{ github.event_name == 'schedule' && 'upstream' || inputs.source }}
+      # Whether this run may compile at all. A manual manifest preview still
+      # verifies the plan and uploads it, and it compiles when the plan says a
+      # build is needed, but it never signs or publishes. Only a manual
+      # upstream dry run is plan-only and suppresses Cargo.
+      PRODUCER_COMPILE: ${{ github.event_name == 'schedule' && 'true' || inputs.source == 'manifest' && 'true' || inputs.dry_run == 'false' }}
+      # One artifact root: the plan, and whatever the compile adds to it. The
+      # upstream checkout is a sibling directory so it can never be uploaded.
+      ARTIFACTS: dist/source-artifacts
+      UPSTREAM_CHECKOUT: dist/source-artifacts-upstream
+      RUST_TOOLCHAIN: 1.99.0
+      # rustup-init for aarch64-unknown-linux-gnu, digest measured 2026-10-12.
+      RUSTUP_INIT_SHA256: 15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433
+    steps:
+      # git is installed before any checkout: without it actions/checkout cannot
+      # fetch and falls back to a REST tarball, which has no repository at all.
+      # The provenance step proves the pinned commit and lockfile through real
+      # git, so a tarball checkout would fail there instead of here.
+      - name: Install system tools
+        run: apt-get update && apt-get install -y --no-install-recommends apt build-essential ca-certificates curl file git gnupg libgtk-3-dev libssl-dev pkg-config python3 && rm -rf /var/lib/apt/lists/*
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      - name: Verify portable public dependency lock
+        run: uv lock --check
+      - run: uv sync --frozen
+      - name: Install the pinned Rust toolchain
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$RUNNER_TEMP/rustup-init" \
+            https://static.rust-lang.org/rustup/dist/aarch64-unknown-linux-gnu/rustup-init
+          echo "${RUSTUP_INIT_SHA256}  $RUNNER_TEMP/rustup-init" | sha256sum -c -
+          chmod 0755 "$RUNNER_TEMP/rustup-init"
+          export CARGO_HOME="$RUNNER_TEMP/cargo-home" RUSTUP_HOME="$RUNNER_TEMP/rustup-home"
+          "$RUNNER_TEMP/rustup-init" -y --no-modify-path --profile minimal \
+            --default-toolchain "$RUST_TOOLCHAIN"
+          # --no-modify-path leaves this shell's PATH untouched, and GITHUB_PATH
+          # only reaches later steps, so the tools are put on PATH here as well.
+          export PATH="$CARGO_HOME/bin:$PATH"
+          echo "CARGO_HOME=$CARGO_HOME" >>"$GITHUB_ENV"
+          echo "RUSTUP_HOME=$RUSTUP_HOME" >>"$GITHUB_ENV"
+          echo "$CARGO_HOME/bin" >>"$GITHUB_PATH"
+          rustc -Vv
+          cargo -V
+      - name: Check free disk space before the compile
+        run: |
+          set -euo pipefail
+          free_kib=$(df -Pk / | awk 'NR == 2 {print $4}')
+          test "$free_kib" -ge 15728640 \
+            || { echo "need at least 15GiB free, found $((free_kib / 1024 / 1024))GiB"; exit 1; }
+      - name: Plan the source build against the public repository
+        run: |
+          set -euo pipefail
+          # The planner verifies the served key against the pin, both signatures
+          # over Release, and the signed index hash, then writes the decision.
+          # It reads no private object, so there is nothing here to authorize.
+          needed="$(uv run python -m scripts.source_plan plan \
+            --mode "$PRODUCER_MODE" \
+            --base-url "$SOURCE_BASE_URL" \
+            --fingerprint "$SOURCE_TRUST_FINGERPRINT" \
+            --output "$ARTIFACTS/source-plan.json")"
+          case "$needed" in
+            true|false) ;;
+            *) echo "the planner returned no decision: $needed" >&2; exit 1 ;;
+          esac
+          # Only this job's own verified boolean reaches an output; no upstream
+          # value, URL, or digest is written anywhere a later step could read.
+          # Step outputs do not populate env context, so the boolean is also
+          # written to GITHUB_ENV where the compile gate reads it.
+          echo "BUILD_NEEDED=$needed" >>"$GITHUB_OUTPUT"
+          echo "BUILD_NEEDED=$needed" >>"$GITHUB_ENV"
+      - name: Check out and compile the planned source identity
+        if: env.BUILD_NEEDED == 'true' && env.PRODUCER_COMPILE == 'true'
+        run: |
+          set -euo pipefail
+          # Both steps read the same plan: the repository, tag, and commit come
+          # from the validated identity, never from a workflow input, and the
+          # build re-proves the checkout and the lockfile before it compiles.
+          uv run python -m scripts.tauri_source checkout \
+            --identity "$ARTIFACTS/source-plan.json" --into "$UPSTREAM_CHECKOUT"
+          uv run python -m scripts.tauri_source build \
+            --identity "$ARTIFACTS/source-plan.json" \
+            --upstream "$UPSTREAM_CHECKOUT" \
+            --notices packaging/licenses/cargo-tauri \
+            --output "$ARTIFACTS"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: source-artifacts
+          # One run, one named artifact, one root: the plan, and whatever the
+          # compile measured. Never the upstream checkout, the Cargo target
+          # directory, a toolchain, or any cache. A run that compiled nothing
+          # uploads the plan alone, which is not an error.
+          if-no-files-found: ignore
+          path: |
+            dist/source-artifacts/source-plan.json
+            dist/source-artifacts/cargo-tauri
+            dist/source-artifacts/build-provenance.json
+            dist/source-artifacts/LICENSE.txt
+            dist/source-artifacts/LICENSE-APACHE-2.0
+          retention-days: 7

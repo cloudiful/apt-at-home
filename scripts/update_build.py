@@ -3,12 +3,15 @@
 Unchanged packages are restored byte-for-byte and never rebuilt, so a run that
 adds three catalog packages builds exactly six new .deb files while the four
 already published stay identical, and a later run that touches one package
-produces two. The result is verified as a complete manifest-derived index
+produces two. A source-built target is part of that: when its version is
+unchanged its published .deb is restored like any other, and no compilation is
+needed for it at all. The result is verified as a complete manifest-derived index
 before anything is uploaded, and the pointer still moves last.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,6 +22,7 @@ from .publish import publish_tree
 from .release_build import build_release
 from .release_verify import TrustedRelease
 from .restore_packages import restore_pool
+from .source_artifacts import SourceArtifacts
 from .storage import Source
 from .update_plan import UpdatePlan
 from .verify import verify_tree
@@ -69,6 +73,7 @@ def apply_update(
     signing_key_file: Path | None = None,
     key_id: str | None = None,
     client: Any | None = None,
+    source_artifacts: Mapping[tuple[str, str], SourceArtifacts] | None = None,
 ) -> UpdateResult:
     """Restore, rebuild the changed packages, verify, then publish pointer last.
 
@@ -76,7 +81,8 @@ def apply_update(
     only the superseded ones are dropped, so unchanged entries stay
     byte-identical. A package the plan adds has no published predecessor, so
     nothing is removed for it. Fresh storage has no pool to keep and builds
-    every package.
+    every package. `source_artifacts` supplies the compilations for any
+    source-built target in the plan that has to be built.
     """
     if plan.is_bootstrap:
         if release is not None:
@@ -97,6 +103,7 @@ def apply_update(
         packages=selection,
         signing_key_file=signing_key_file,
         key_id=key_id,
+        source_artifacts=source_artifacts,
     )
     verify_tree(output_root, expected_fingerprint=fingerprint)
     uploaded = publish_tree(

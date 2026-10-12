@@ -47,7 +47,11 @@ class UvUpdateOverlayTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 store = Store(FakeS3())
-                uv_names = tuple(name for name in CATALOG_NAMES if name != "kandev")
+                # Focused uv overlay: exclude the source-built package so this
+                # asset-only upgrade stays hermetic without a producer artifact.
+                # Full-catalog source builds are covered by the incremental and
+                # update-build suites with fixture artifacts.
+                uv_names = tuple(name for name in CATALOG_NAMES if name not in ("kandev", "cargo-tauri"))
                 store.seed(build_release_objects(
                     root / "published", key_home=home, key_id=key_id, names=uv_names
                 ))
@@ -58,11 +62,11 @@ class UvUpdateOverlayTest(unittest.TestCase):
                 }
                 uv_catalog = catalog_document()
                 uv_catalog["packages"] = [
-                    entry for entry in uv_catalog["packages"] if entry["name"] != "kandev"
+                    entry for entry in uv_catalog["packages"] if entry["name"] not in ("kandev", "cargo-tauri")
                 ]
                 uv_candidates = {
                     name: item for name, item in _catalog_candidates(uv="0.14.0").items()
-                    if name != "kandev"
+                    if name not in ("kandev", "cargo-tauri")
                 }
                 plan = build_plan(
                     baseline_release_id=restored.release_id,

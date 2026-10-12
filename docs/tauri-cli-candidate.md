@@ -1,5 +1,10 @@
 # Tauri CLI candidate
 
+> Promotion note: `cargo-tauri` 2.12.2 is now production package eleven (official
+> amd64 asset plus native arm64 source build, 22 `.deb` files). This page keeps
+> the fixed-version candidate evidence; the production catalog entry in
+> `packaging/manifest.json` is the authority for what APT installs.
+
 A locally built, unsigned `.deb` for the [Tauri CLI](https://tauri.app) 2.12.2,
 installing `cargo-tauri`.
 
@@ -190,8 +195,9 @@ The descriptor pins the exact upstream provenance. See
 
 ## Promotion
 
-Publishing this candidate would be a separate decision with separate
+Publishing this candidate was a separate decision with separate
 requirements: signing, a catalog entry, a runtime dependency review for whatever
 the arm64 build actually links, and whatever the corresponding-source obligation
-turns out to require for the binary-only amd64 package. None of that is implied
-by this candidate, and none of it has been decided here.
+turns out to require for the binary-only amd64 package. That promotion has now
+landed as production package eleven; the candidate checks below remain as
+independent fixed-version evidence.

@@ -385,6 +385,76 @@ class DiscoverTest(unittest.TestCase):
             self.assertRegex(candidate.targets[arch]["sha256"], r"^[0-9a-f]{64}$")
 
 
+class CargoTauriTagSpecificTest(unittest.TestCase):
+    """Multiproduct tags never select another product's latest release."""
+
+    def _client(self, *, tag_payload: dict | None = None) -> FakeHttp:
+        import base64
+
+        from scripts.tauri_source import git_blob_id
+        from tests.test_source_artifacts import COMMIT, LOCK
+
+        repo = "tauri-apps/tauri"
+        tag = "tauri-cli-v2.12.2"
+        name = "cargo-tauri-x86_64-unknown-linux-gnu.tgz"
+        release = tag_payload if tag_payload is not None else {
+            "tag_name": tag, "draft": False, "prerelease": False,
+            "assets": [{
+                "name": name,
+                "browser_download_url": (
+                    f"https://github.com/{repo}/releases/download/{tag}/{name}"
+                ),
+                "digest": "sha256:" + "ab" * 32,
+            }],
+        }
+        vendor = REPO_ROOT / "packaging" / "licenses" / "cargo-tauri"
+        from scripts.upstream_assets import release_tag_api_url
+
+        return FakeHttp({
+            release_tag_api_url(repo, tag): release,
+            license_url(repo, tag, "LICENSE-MIT"): (vendor / "LICENSE.txt").read_bytes(),
+            license_url(repo, tag, "LICENSE-APACHE-2.0"): (
+                vendor / "LICENSE-APACHE-2.0"
+            ).read_bytes(),
+        })
+
+    def _identity(self):  # type: ignore[no-untyped-def]
+        from tests.test_source_artifacts import source_identity
+
+        return source_identity()
+
+    def test_tag_specific_release_supplies_amd64_without_repo_wide_latest(self) -> None:
+        from scripts.upstream import latest_stable
+
+        repo, tag, assets = latest_stable(
+            self._client(), "cargo-tauri", source_identity=self._identity()
+        )
+        self.assertEqual((repo, tag), ("tauri-apps/tauri", "tauri-cli-v2.12.2"))
+        self.assertEqual(sorted(assets), ["amd64"])
+
+    def test_mismatched_draft_or_missing_asset_fails_closed(self) -> None:
+        from scripts.upstream import latest_stable
+
+        tag = "tauri-cli-v2.12.2"
+        mismatched = dict(
+            self._client().payloads[
+                f"https://api.github.com/repos/tauri-apps/tauri/releases/tags/{tag}"
+            ]  # type: ignore[index]
+        )
+        mismatched = {**mismatched, "tag_name": "tauri-cli-v2.12.3"}
+        with self.assertRaisesRegex(ValueError, "does not match selected"):
+            latest_stable(
+                self._client(tag_payload=mismatched), "cargo-tauri",
+                source_identity=self._identity(),
+            )
+        draft = {**mismatched, "tag_name": tag, "draft": True}
+        with self.assertRaisesRegex(ValueError, "draft or prerelease"):
+            latest_stable(
+                self._client(tag_payload=draft), "cargo-tauri",
+                source_identity=self._identity(),
+            )
+
+
 class UrllibClientTest(unittest.TestCase):
     def test_reads_are_bounded_and_timeouts_are_set(self) -> None:
         client = UrllibClient(timeout=1)

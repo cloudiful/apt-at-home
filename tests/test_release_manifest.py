@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 
 from scripts.common import sha256_bytes
+from scripts.manifest import default_manifest_path
+from scripts.release_build import build_release
 from scripts.release_manifest import (
     MANIFEST_NAME,
     SHA256_FIELD,
@@ -20,8 +22,84 @@ from scripts.release_manifest import (
     write_manifest_artifact,
     write_manifest_document,
 )
+from scripts.source_build import (
+    ArtifactProvenance,
+    check_realized_document,
+    realize_document,
+)
+from tests.test_source_build import identity_document, source_manifest_document
 
 SOURCE = Path(__file__).resolve().parent.parent / "packaging" / "manifest.json"
+
+
+class SourceRealizationTest(unittest.TestCase):
+    """The signed manifest describes a realized build, never a plan.
+
+    The Release binds these bytes by digest and size, so a source target that
+    still carries only an identity would be published without any provenance for
+    the binary it was built from. The build therefore refuses before it signs,
+    and what it does sign is the document with the measurement merged in.
+    """
+
+    def _document(self, source: dict[str, object]) -> dict[str, object]:
+        from copy import deepcopy as _deepcopy
+
+        document = source_manifest_document(source)
+        # P1/P2 helper predates the production recipe and carries no
+        # `extra_license_urls` and a placeholder `license_url`; production
+        # parsing requires the reviewed tag-bound dual-license URLs, so add
+        # them here rather than weakening the validator.
+        document["packages"][0]["license_url"] = (  # type: ignore[index]
+            "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.2/LICENSE-MIT"
+        )
+        document["packages"][0]["extra_license_urls"] = [  # type: ignore[index]
+            "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.2/LICENSE-APACHE-2.0"
+        ]
+        return document
+
+    def test_a_planned_source_target_is_refused_before_anything_is_signed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(ValueError, "must be realized before it is signed"):
+                build_release(
+                    output_root=root / "out",
+                    release_id="planned",
+                    cache_dir=root / "cache",
+                    manifest_document=self._document(identity_document()),
+                    # Nothing is selected, so this reaches the realization check
+                    # without a compiler, an artifact, or a single .deb.
+                    packages=(),
+                )
+            self.assertFalse((root / "out" / "releases").exists())
+
+    def test_a_measured_artifact_is_merged_into_the_bound_artifact(self) -> None:
+        measured = ArtifactProvenance("c" * 64, 8192, 183)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # A manifest with no source target is unaffected by the merge.
+            from tests.release_fixtures import published_manifest_data as _published_data
+
+            asset_only = _published_data()
+            self.assertEqual(
+                realize_document(asset_only, {("cargo-tauri", "arm64"): measured}), asset_only
+            )
+            check_realized_document(asset_only)
+
+            realized = realize_document(
+                self._document(identity_document()),
+                {("cargo-tauri", "arm64"): measured},
+            )
+            check_realized_document(realized)
+            artifact = write_manifest_document(
+                data=realized, destination=root / "manifest.json"
+            )
+            fields = dict(manifest_binding_fields(artifact))
+            self.assertEqual(fields[SHA256_FIELD], sha256_bytes(artifact.read_bytes()))
+            bound_back = json.loads(artifact.read_text(encoding="utf-8"))
+            self.assertEqual(
+                bound_back["packages"][0]["targets"]["arm64"]["source_build"]["artifact"],
+                measured.document(),
+            )
 
 
 class CanonicalManifestTest(unittest.TestCase):
@@ -147,7 +225,7 @@ class RemoteBindingTest(unittest.TestCase):
         self.assertEqual(data, json.loads(SOURCE.read_text(encoding="utf-8")))
         self.assertEqual(
             sorted(p.name for p in manifest.packages),
-            ["bottom", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "starship", "uv", "zellij", "zoxide"],
+            ["bottom", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "starship", "uv", "zellij", "zoxide"],
         )
         self.assertEqual(canonical_bytes(data), canonical_bytes(load_manifest_data(SOURCE)))
 

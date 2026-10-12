@@ -135,17 +135,17 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   `Packages` hashes, and the manifest bound by `X-Manifest-SHA256` /
   `X-Manifest-Size`) before it reads a single package byte, then compares that
   signed baseline against the latest stable upstream release of every package
-  in the catalog: bottom, git-delta, kandev, neovim, rustfs-cli, sccache,
-  starship, uv, zellij, and zoxide.
+  in the catalog: bottom, cargo-tauri, git-delta, kandev, neovim, rustfs-cli,
+  sccache, starship, uv, zellij, and zoxide.
 - Each package has one reviewed recipe: the official repository, the release
   tag prefix, asset names, archive members, installed commands, dependencies,
   and SPDX license sources. Version bumps recompute member paths from the new
   version, preserving uvx and uv's supplemental Apache provenance without
   trusting release metadata to choose files.
 - A package the published release does not carry yet is added from the catalog
-  rather than replacing anything. With the ten-package catalog, a two-package
-  baseline adds eight packages (16 `.deb` files), a six-package baseline adds
-  four (8 `.deb` files), and a five-package baseline adds five (10 `.deb` files);
+  rather than replacing anything. With the eleven-package catalog, a two-package
+  baseline adds nine packages (18 `.deb` files), a six-package baseline adds
+  five (10 `.deb` files), and a five-package baseline adds six (12 `.deb` files);
   every existing package stays byte-identical. The final indices list every
   package the new bound manifest declares. The published version is authoritative,
   so a catalog that pins an older version never overwrites a newer published one.
