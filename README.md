@@ -37,3 +37,5 @@ during the upgrade.
 See [docs/setup.md](docs/setup.md) for gateway and storage setup, [docs/publishing.md](docs/publishing.md) for the release flow, and [client/](client/) for example source and auth config.
 
 A locally built, unsigned Bun candidate package is documented in [docs/bun-candidate.md](docs/bun-candidate.md). It is not published and not installable from this APT repository.
+
+A locally built, unsigned Tauri CLI candidate package — the official amd64 release asset and an arm64 package compiled from pinned source — is documented in [docs/tauri-cli-candidate.md](docs/tauri-cli-candidate.md). It is not published and not installable from this APT repository.

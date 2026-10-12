@@ -222,6 +222,188 @@ jobs:
       - name: Run the installed candidate
         run: python3 -m scripts.bun_candidate_smoke --installed --arch arm64 --require-native
 
+  tauri-candidate-amd64:
+    name: Tauri CLI candidate build (amd64 official asset, unsigned)
+    runs-on: ubuntu-24.04
+    container: debian:13
+    env:
+      UV_DEFAULT_INDEX: https://pypi.org/simple
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install system tools
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 && rm -rf /var/lib/apt/lists/*
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      - name: Verify portable public dependency lock
+        run: uv lock --check
+      - run: uv sync --frozen
+      - name: Build the amd64 candidate from the pinned official asset
+        run: uv run --frozen python -m scripts.tauri_candidate --arch amd64 --output dist/tauri-candidate
+      - name: Package the same pinned binary twice and require identical bytes
+        run: |
+          set -euo pipefail
+          uv run --frozen python -m scripts.tauri_candidate --arch amd64 --output dist/tauri-candidate-rebuild >/dev/null
+          test "$(sha256sum <dist/tauri-candidate/cargo-tauri_2.12.2-1_amd64.deb)" \
+            = "$(sha256sum <dist/tauri-candidate-rebuild/cargo-tauri_2.12.2-1_amd64.deb)"
+          sha256sum dist/tauri-candidate/cargo-tauri_2.12.2-1_amd64.deb
+      - name: Inspect the candidate control file and payload
+        run: |
+          set -euo pipefail
+          dpkg-deb -I dist/tauri-candidate/cargo-tauri_2.12.2-1_amd64.deb
+          dpkg-deb -c dist/tauri-candidate/cargo-tauri_2.12.2-1_amd64.deb
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tauri-candidate-amd64
+          path: dist/tauri-candidate
+          retention-days: 7
+
+  tauri-candidate-arm64:
+    name: Tauri CLI candidate build (arm64 native source build, unsigned)
+    runs-on: ubuntu-24.04-arm
+    container: debian:13
+    timeout-minutes: 45
+    env:
+      # Upstream publishes no Linux arm64 release asset, so this job compiles the
+      # pinned commit natively on an ARM runner and packages the result.
+      UPSTREAM_COMMIT: 5b23c82ea5ba6b9aec420dd71f60493edc486aa9
+      RUST_TOOLCHAIN: 1.99.0
+      # rustup-init for aarch64-unknown-linux-gnu, digest measured 2026-10-12.
+      RUSTUP_INIT_SHA256: 15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433
+      ARTIFACT: dist/tauri-candidate/upstream/target/aarch64-unknown-linux-gnu/release-size-optimized/cargo-tauri
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check out the pinned upstream source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: tauri-apps/tauri
+          ref: ${{ env.UPSTREAM_COMMIT }}
+          path: dist/tauri-candidate/upstream
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Install system tools
+        run: apt-get update && apt-get install -y --no-install-recommends build-essential ca-certificates curl git libgtk-3-dev libssl-dev pkg-config python3 && rm -rf /var/lib/apt/lists/*
+      - name: Install the pinned Rust toolchain
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$RUNNER_TEMP/rustup-init" \
+            https://static.rust-lang.org/rustup/dist/aarch64-unknown-linux-gnu/rustup-init
+          echo "${RUSTUP_INIT_SHA256}  $RUNNER_TEMP/rustup-init" | sha256sum -c -
+          chmod 0755 "$RUNNER_TEMP/rustup-init"
+          export CARGO_HOME="$RUNNER_TEMP/cargo-home" RUSTUP_HOME="$RUNNER_TEMP/rustup-home"
+          "$RUNNER_TEMP/rustup-init" -y --no-modify-path --profile minimal \
+            --default-toolchain "$RUST_TOOLCHAIN"
+          # --no-modify-path leaves this shell's PATH untouched, and GITHUB_PATH
+          # only reaches later steps, so the tools are put on PATH here as well.
+          export PATH="$CARGO_HOME/bin:$PATH"
+          echo "CARGO_HOME=$CARGO_HOME" >>"$GITHUB_ENV"
+          echo "RUSTUP_HOME=$RUSTUP_HOME" >>"$GITHUB_ENV"
+          echo "$CARGO_HOME/bin" >>"$GITHUB_PATH"
+          rustc -Vv
+          cargo -V
+      - name: Check free disk space before the compile
+        run: |
+          set -euo pipefail
+          free_kib=$(df -Pk / | awk 'NR == 2 {print $4}')
+          test "$free_kib" -ge 15728640 \
+            || { echo "need at least 15GiB free, found $((free_kib / 1024 / 1024))GiB"; exit 1; }
+      - name: Compile cargo-tauri from the pinned commit
+        run: |
+          set -euo pipefail
+          cd dist/tauri-candidate/upstream
+          timeout 45m cargo build --locked --manifest-path crates/tauri-cli/Cargo.toml \
+            --target aarch64-unknown-linux-gnu --profile release-size-optimized --bin cargo-tauri
+      - name: Measure the build and write its provenance record
+        run: |
+          set -euo pipefail
+          python3 -m scripts.tauri_candidate_provenance emit-source-build \
+            --upstream dist/tauri-candidate/upstream \
+            --binary "$ARTIFACT" \
+            --rustc "$(rustc -Vv)" --cargo "$(cargo -V)" \
+            --output dist/tauri-candidate/build-provenance.json
+      - name: Package the arm64 candidate twice and require identical bytes
+        run: |
+          set -euo pipefail
+          python3 -m scripts.tauri_candidate --arch arm64 --output dist/tauri-candidate \
+            --binary "$ARTIFACT" --provenance dist/tauri-candidate/build-provenance.json
+          python3 -m scripts.tauri_candidate --arch arm64 --output dist/tauri-candidate-rebuild \
+            --binary "$ARTIFACT" --provenance dist/tauri-candidate/build-provenance.json
+          test "$(sha256sum <dist/tauri-candidate/cargo-tauri_2.12.2-1_arm64.deb)" \
+            = "$(sha256sum <dist/tauri-candidate-rebuild/cargo-tauri_2.12.2-1_arm64.deb)"
+          dpkg-deb -I dist/tauri-candidate/cargo-tauri_2.12.2-1_arm64.deb
+          dpkg-deb -c dist/tauri-candidate/cargo-tauri_2.12.2-1_arm64.deb
+      - name: Stage the artifact directory
+        run: |
+          set -euo pipefail
+          # upload-artifact roots multiple search paths at their least common
+          # ancestor, so every uploaded file lives under one directory: the
+          # smoke job then finds the deb exactly where apt installs it.
+          mkdir -p dist/tauri-candidate/licenses/tauri-cli
+          cp packaging/licenses/tauri-cli/LICENSE-MIT.txt \
+            packaging/licenses/tauri-cli/LICENSE-APACHE-2.0.txt \
+            dist/tauri-candidate/licenses/tauri-cli/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tauri-candidate-arm64
+          # Only the package, its provenance record, and the reviewed licence
+          # texts: never the upstream checkout, the Cargo cache, or toolchains.
+          path: |
+            dist/tauri-candidate/cargo-tauri_2.12.2-1_arm64.deb
+            dist/tauri-candidate/build-provenance.json
+            dist/tauri-candidate/licenses/tauri-cli/LICENSE-MIT.txt
+            dist/tauri-candidate/licenses/tauri-cli/LICENSE-APACHE-2.0.txt
+          retention-days: 7
+
+  tauri-candidate-smoke-amd64:
+    name: Tauri CLI candidate smoke (amd64, native)
+    runs-on: ubuntu-24.04
+    needs: [tauri-candidate-amd64]
+    container: debian:13
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: tauri-candidate-amd64
+          path: dist/tauri-candidate
+      - name: Install python3 and the candidate amd64 package with apt
+        run: |
+          set -euo pipefail
+          apt-get update
+          # cargo arrives as the package's own dependency, which the smoke needs
+          # for the `cargo tauri` external-subcommand check.
+          apt-get install -y --no-install-recommends python3
+          apt-get install -y --no-install-recommends ./dist/tauri-candidate/cargo-tauri_2.12.2-1_amd64.deb
+          rm -rf /var/lib/apt/lists/*
+      - name: Run the installed candidate
+        run: python3 -m scripts.tauri_candidate_smoke --installed --arch amd64 --require-native --require-cargo
+
+  tauri-candidate-smoke-arm64:
+    name: Tauri CLI candidate smoke (arm64, native runner)
+    runs-on: ubuntu-24.04-arm
+    needs: [tauri-candidate-arm64]
+    container: debian:13
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: tauri-candidate-arm64
+          path: dist/tauri-candidate
+      - name: Install python3 and the candidate arm64 package with apt
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends python3
+          apt-get install -y --no-install-recommends ./dist/tauri-candidate/cargo-tauri_2.12.2-1_arm64.deb
+          rm -rf /var/lib/apt/lists/*
+      - name: Run the installed candidate
+        run: python3 -m scripts.tauri_candidate_smoke --installed --arch arm64 --require-native --require-cargo
+
   upgrade-amd64:
     name: Debian 13 APT upgrade from distro neovim (amd64)
     runs-on: ubuntu-24.04

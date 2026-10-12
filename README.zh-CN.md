@@ -29,3 +29,5 @@ sudo apt install bottom git-delta kandev neovim rustfs-cli sccache starship uv z
 网关与存储配置见 [docs/setup.md](docs/setup.md)，发布流程见 [docs/publishing.md](docs/publishing.md)，示例源与鉴权配置见 [client/](client/)。
 
 本地构建的、未签名的 Bun 候选包说明见 [docs/bun-candidate.md](docs/bun-candidate.md)。它尚未发布，也无法从本 APT 仓库安装。
+
+本地构建的、未签名的 Tauri CLI 候选包说明见 [docs/tauri-cli-candidate.md](docs/tauri-cli-candidate.md)：amd64 使用官方发布二进制，arm64 由固定源码在本机编译。它尚未发布，也无法从本 APT 仓库安装。

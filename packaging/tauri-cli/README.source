@@ -1,0 +1,80 @@
+# cargo-tauri 2.12.2 — corresponding source
+
+This document records where the source corresponding to the packaged Tauri CLI
+candidate came from, and how each architecture's binary was produced. It is a
+factual record of one candidate build, not a statement that the corresponding
+source obligation is satisfied: the arm64 package was compiled from the upstream
+sources named below, and the package carries the sources' licence texts.
+
+## What each architecture contains
+
+| Architecture | Binary | Provenance |
+|---|---|---|
+| `amd64` | `/usr/bin/cargo-tauri` | the official upstream release asset for `tauri-cli-v2.12.2`, downloaded and verified against its SHA-256 digest |
+| `arm64` | `/usr/bin/cargo-tauri` | compiled from the source below by the native ARM CI job; there is no official Linux arm64 release asset |
+
+The two packages are built from the same upstream version and tag, but only the
+amd64 one is an official upstream binary. The arm64 package is a source build and
+states so in `build-provenance.json`; the amd64 package states its asset digest
+in `official-asset.json`.
+
+## Corresponding upstream source
+
+| Item | Value |
+|---|---|
+| Release tag | `tauri-cli-v2.12.2` |
+| Source commit | `5b23c82ea5ba6b9aec420dd71f60493edc486aa9` |
+| Crate manifest | `crates/tauri-cli/Cargo.toml` |
+| `Cargo.lock` git blob | `6b052c58398b8d6ec246d77f65a748448cd4c859` |
+| Rust toolchain | `1.99.0` |
+| Target triple | `aarch64-unknown-linux-gnu` |
+| Cargo profile | `release-size-optimized` |
+
+Source tree:
+<https://github.com/tauri-apps/tauri/tree/tauri-cli-v2.12.2>
+
+Every reference above is pinned to an exact tag or commit, never to `main` or to
+a branch head. The build runs `cargo build --locked`, so the lockfile at that
+commit is the one the compiler used; its git object id is recorded above, and the
+SHA-256 of the exact bytes the build read is recorded in `build-provenance.json`.
+
+## Rebuilding from source
+
+The arm64 package is compiled on a native ARM64 Linux machine from that pinned
+commit, with the reviewed command:
+
+```sh
+cargo build --locked --manifest-path crates/tauri-cli/Cargo.toml --target aarch64-unknown-linux-gnu --profile release-size-optimized --bin cargo-tauri
+```
+
+The compiler is the Rust `1.99.0` stable toolchain, whose `rustc -Vv` and
+`cargo -V` output is recorded in `build-provenance.json`. Dependencies are
+resolved from crates.io against the upstream lockfile; nothing is vendored,
+mirrored, or built offline, and no private registry or mirror is configured.
+
+The build needs a C toolchain and the GTK and OpenSSL development headers that
+upstream's build scripts probe for. Those are build-time tools on the ephemeral
+CI machine: the installed package depends only on the libraries the finished
+binary actually links, which `build-provenance.json` and the package's `Depends`
+field state.
+
+Upstream ships this crate as `tauri-cli` with the binary named `cargo-tauri`, so
+`cargo tauri ...` invokes it as a Cargo external subcommand.
+
+## Official release asset
+
+The amd64 package's binary is the official upstream release asset:
+
+<https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.2/cargo-tauri-x86_64-unknown-linux-gnu.tgz>
+
+Its SHA-256 digest is
+`35c7b50266256cb6d5f757608d7097a59a5faeb0c75879ee1f504652a9b6087e`. The two
+licence files installed here are the `LICENSE-MIT` and `LICENSE-APACHE-2.0`
+members of that asset, byte for byte identical to the same files at the commit
+above.
+
+## Licensing
+
+Upstream is dual licensed: `MIT OR Apache-2.0`. Both licence texts are installed
+in this package as `LICENSE-MIT.txt` and `LICENSE-APACHE-2.0.txt`, and both are
+quoted in the `copyright` file.
