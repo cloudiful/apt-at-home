@@ -345,11 +345,16 @@ def symbol_floor(names: tuple[str, ...], prefix: str) -> tuple[int, ...] | None:
 def check_runtime(binary: Path, arch: str, candidate: Candidate) -> list[str]:
     """Check the linked libraries and their symbol floors against the mapping.
 
-    Two things can go wrong and both are refusals: a library the reviewed mapping
-    does not cover, and a library whose required symbol versions exceed the floor
-    the mapping declares for its Debian package. The second is the one a
+    Three things can go wrong and all of them are refusals: a library the reviewed
+    mapping does not cover, a library whose required symbol versions exceed the
+    floor the mapping declares for its Debian package, and a version requirement
+    that belongs to no library the binary says it links. The second is the one a
     `DT_NEEDED`-only check misses, and it is never resolved by quietly widening a
     dependency — a floor the candidate cannot justify is a decision for review.
+
+    The requirement records are checked as a whole before anything is filtered to
+    the libraries the binary links, so a record whose owner is missing from
+    `DT_NEEDED` cannot slip past the measurement that follows.
     """
     check_elf_arch(binary, arch)
     needed = read_needed(binary)
@@ -361,6 +366,24 @@ def check_runtime(binary: Path, arch: str, candidate: Candidate) -> list[str]:
             "not cover; the mapping needs reviewed evidence before it can be used"
         )
     required = read_symbol_versions(binary)
+    orphans = sorted({library for library, _ in required} - set(needed))
+    if orphans:
+        raise ValueError(
+            f"{binary} requires symbol versions from {orphans}, which it does not list "
+            "as a linked library; a version requirement must belong to a DT_NEEDED entry"
+        )
+    # The unversioned rule is applied to every requirement the file declares, not to
+    # the subset that survives the loop below, so no requirement can escape it.
+    unversioned_sonames = {item.soname for item in candidate.libraries if item.symbols is None}
+    unversioned_owners = sorted(
+        {library for library, _ in required if library in unversioned_sonames}
+    )
+    if unversioned_owners:
+        raise ValueError(
+            f"{binary} requires symbol versions from {unversioned_owners}, but the "
+            "reviewed mapping records that library as unversioned; the mapping needs "
+            "reviewed evidence"
+        )
     unmapped_versions = sorted(
         {library for library, _ in required if library not in reviewed}
     )
@@ -372,12 +395,16 @@ def check_runtime(binary: Path, arch: str, candidate: Candidate) -> list[str]:
     declared = candidate.declared_floors()
     measured: dict[str, tuple[int, ...]] = {}
     for library in needed:
-        namespace = next(item.symbols for item in candidate.libraries if item.soname == library)
+        entry = next(item for item in candidate.libraries if item.soname == library)
+        if entry.symbols is None:
+            # Reviewed as unversioned, so there is no namespace to measure a floor
+            # in; any version requirement from it was already refused above.
+            continue
         names = tuple(name for owner, name in required if owner == library)
-        floor = symbol_floor(names, namespace)
+        floor = symbol_floor(names, entry.symbols)
         if floor is None:
             continue
-        package = next(item.package for item in candidate.libraries if item.soname == library)
+        package = entry.package
         if floor > (measured.get(package) or ()):
             measured[package] = floor
     for package, floor in sorted(measured.items()):
@@ -401,6 +428,13 @@ def check_runtime(binary: Path, arch: str, candidate: Candidate) -> list[str]:
                 f" (declared >= {declared[package]})"
                 for package, floor in sorted(measured.items())
             )
+        )
+    unversioned = sorted(
+        soname for soname in unversioned_sonames if soname in needed
+    )
+    if unversioned:
+        results.append(
+            f"{BINARY}: {', '.join(unversioned)} declares no symbol versions, as reviewed"
         )
     unused = sorted(name for name in reviewed if name not in needed)
     if unused:

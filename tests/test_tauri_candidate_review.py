@@ -182,3 +182,62 @@ class CandidateRoundTwoReviewTest(unittest.TestCase):
             with mock.patch.object(Path, "open", new=guarded_open):
                 with self.assertRaises(ValueError):
                     smoke.read_symbol_versions(path)
+
+
+class CandidateRuntimeEvidenceReviewTest(unittest.TestCase):
+    """The native ARM build needs libbz2; the mapping must say so honestly.
+
+    Debian's libbz2 ships no symbol versions, so there is no namespace to measure a
+    floor in and inventing one would be a fiction. The mapping therefore records
+    the library as unversioned, and a binary that claims versions from it is
+    refused rather than quietly accepted on an unchecked rule.
+    """
+
+    def versioned(self, root, sonames, versions):
+        from tests.test_tauri_candidate_smoke import write_versioned_elf
+        return write_versioned_elf(root / BINARY, ELF_MACHINE["arm64"], sonames, versions)
+
+    def test_the_mapping_declares_libbz2_without_an_invented_namespace(self):
+        candidate = load_candidate()
+        entry = next(item for item in candidate.libraries if item.soname == "libbz2.so.1.0")
+        self.assertEqual((entry.package, entry.version, entry.symbols),
+                         ("libbz2-1.0", "1.0.8-6", None))
+        self.assertIn("libbz2-1.0 (>= 1.0.8-6)", candidate.depends())
+        self.assertFalse([item for item in candidate.libraries if item.symbols == "BZIP2_"])
+
+    def test_unversioned_mapping_rejects_a_consumer_verneed(self):
+        from scripts import tauri_candidate_smoke as smoke
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.versioned(
+                Path(tmp), ("libbz2.so.1.0",), (("libbz2.so.1.0", ("BZ2_1.0",)),),
+            )
+            with self.assertRaises(ValueError):
+                smoke.check_runtime(path, "arm64", load_candidate())
+
+    def test_unversioned_mapping_accepts_a_binary_that_requires_no_versions(self):
+        from scripts import tauri_candidate_smoke as smoke
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.versioned(
+                Path(tmp), ("libbz2.so.1.0", "libc.so.6"),
+                (("libc.so.6", ("GLIBC_2.34",)),),
+            )
+            smoke.check_runtime(path, "arm64", load_candidate())
+
+    def test_unversioned_mapping_rejects_verneed_even_if_owner_is_not_needed(self):
+        from scripts import tauri_candidate_smoke as smoke
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.versioned(
+                Path(tmp), ("libbz2.so.1.0", "libc.so.6"),
+                (("libbz2.so.1.0", ("BZ2_1.0",)), ("libc.so.6", ("GLIBC_2.34",))),
+            )
+            data = bytearray(path.read_bytes())
+            dynamic_offset = 64 + 2 * 56
+            # Replace the libbz2 DT_NEEDED entry with a duplicate libc entry;
+            # keep the declared libbz2 version-requirement record intact.
+            libc_offset = struct.unpack_from("<Q", data, dynamic_offset + 16 + 8)[0]
+            struct.pack_into("<Q", data, dynamic_offset + 8, libc_offset)
+            path.write_bytes(data)
+            self.assertEqual(smoke.read_needed(path), ("libc.so.6",))
+            self.assertIn(("libbz2.so.1.0", "BZ2_1.0"), smoke.read_symbol_versions(path))
+            with self.assertRaises(ValueError):
+                smoke.check_runtime(path, "arm64", load_candidate())

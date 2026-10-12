@@ -92,7 +92,8 @@ class ShippedDescriptorTest(DescriptorTest):
         candidate = load_candidate()
         self.assertEqual(
             candidate.depends(),
-            "cargo, libc6 (>= 2.34), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)",
+            "cargo, libbz2-1.0 (>= 1.0.8-6), libc6 (>= 2.34), libgcc-s1 (>= 14.2.0), "
+            "liblzma5 (>= 5.8.1)",
         )
         self.assertEqual(candidate.package.targets["arm64"].depends, candidate.depends())
 
@@ -110,7 +111,12 @@ class ShippedDescriptorTest(DescriptorTest):
     def test_the_declared_floor_per_package_is_the_highest_reviewed_one(self) -> None:
         self.assertEqual(
             load_candidate().declared_floors(),
-            {"libc6": "2.34", "libgcc-s1": "14.2.0", "liblzma5": "5.8.1"},
+            {
+                "libbz2-1.0": "1.0.8-6",
+                "libc6": "2.34",
+                "libgcc-s1": "14.2.0",
+                "liblzma5": "5.8.1",
+            },
         )
 
     def test_the_descriptor_runtime_matches_the_reviewed_mapping(self) -> None:
@@ -299,6 +305,49 @@ class RefusedRuntimeTest(DescriptorTest):
     def test_relation_shaped_extra_depends_refused(self) -> None:
         self.refused(lambda raw: raw["runtime"].update(extra_depends="cargo; rm -rf /"),
                      "invalid candidate runtime extra_depends")
+
+
+class UnversionedRuntimeTest(DescriptorTest):
+    """`symbols: null` is a reviewed value: an unversioned library, not a gap."""
+
+    def entry(self, mutate) -> None:
+        def apply(raw):
+            for item in raw["runtime"]["libraries"]:
+                if item["soname"] == "libbz2.so.1.0":
+                    mutate(item)
+        self.refused(apply, "must be exactly")
+
+    def test_the_unversioned_library_is_reviewed(self) -> None:
+        candidate = load_candidate()
+        library = next(
+            item for item in candidate.libraries if item.soname == "libbz2.so.1.0"
+        )
+        self.assertEqual(library.package, "libbz2-1.0")
+        self.assertEqual(library.version, "1.0.8-6")
+        self.assertIsNone(library.symbols)
+
+    def test_a_null_namespace_on_a_versioned_library_is_refused(self) -> None:
+        self.entry(lambda item: item.update(symbols=None, soname="libc.so.6"))
+
+    def test_an_invented_namespace_for_the_unversioned_library_is_refused(self) -> None:
+        self.entry(lambda item: item.update(symbols="BZIP2_"))
+
+    def test_a_wider_floor_for_the_unversioned_library_is_refused(self) -> None:
+        self.entry(lambda item: item.update(version="1.0.9"))
+
+    def test_depends_includes_the_unversioned_library(self) -> None:
+        candidate = load_candidate()
+        self.assertIn("libbz2-1.0 (>= 1.0.8-6)", candidate.depends())
+
+    def test_the_shipped_descriptor_records_the_unversioned_library(self) -> None:
+        raw = json.loads(descriptor_path().read_text(encoding="utf-8"))
+        entry = next(
+            item for item in raw["runtime"]["libraries"] if item["soname"] == "libbz2.so.1.0"
+        )
+        self.assertEqual(entry, {
+            "soname": "libbz2.so.1.0", "package": "libbz2-1.0",
+            "version": "1.0.8-6", "symbols": None,
+        })
 
 
 class SourceDocumentTest(DescriptorTest):

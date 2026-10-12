@@ -83,10 +83,15 @@ REVIEWED_BUILD_COMMAND = (
 
 # The closed runtime mapping: every shared library the reviewed binaries may link,
 # the Debian package that carries it, the minimum version this candidate declares,
-# and the symbol-version namespace that version is measured in. The mapping is
-# pinned in code as well as in the descriptor so a floor cannot be widened by
-# editing JSON alone; a wider floor needs both a descriptor and a code change.
+# and the symbol-version namespace that version is measured in. `None` marks a
+# library that upstream ships without symbol versions: its version is still
+# declared, but it is justified by the package that ships it rather than by a
+# symbol namespace, and a binary that claims versions from it is refused.
+# The mapping is pinned in code as well as in the descriptor so a floor cannot be
+# widened by editing JSON alone; a wider floor needs both a descriptor and a code
+# change.
 REVIEWED_RUNTIME = {
+    "libbz2.so.1.0": ("libbz2-1.0", "1.0.8-6", None),
     "libc.so.6": ("libc6", "2.34", "GLIBC_"),
     "libgcc_s.so.1": ("libgcc-s1", "14.2.0", "GCC_"),
     "liblzma.so.5": ("liblzma5", "5.8.1", "XZ_"),
@@ -141,12 +146,17 @@ class SourceBuild:
 
 @dataclass(frozen=True)
 class RuntimeLibrary:
-    """One closed SONAME to Debian package mapping, with its reviewed minimum."""
+    """One closed SONAME to Debian package mapping, with its reviewed minimum.
+
+    `symbols` is the namespace its floor is measured in, or `None` for a library
+    upstream ships unversioned — a declared version with no symbol namespace to
+    check it against.
+    """
 
     soname: str
     package: str
     version: str
-    symbols: str
+    symbols: str | None
 
 
 @dataclass(frozen=True)
@@ -398,7 +408,8 @@ def _parse_runtime(raw: object) -> tuple[tuple[RuntimeLibrary, ...], str]:
     Each entry must equal the reviewed triple exactly. Reading `DT_NEEDED` alone
     would not be enough to justify a dependency floor — a binary can link a
     library whose *symbol versions* the declared minimum does not provide — so the
-    mapping also pins the symbol namespace each floor is measured in.
+    mapping also pins the symbol namespace each floor is measured in, or records
+    that the library is unversioned.
     """
     if not isinstance(raw, dict):
         raise ValueError("candidate runtime must be an object")
@@ -419,7 +430,11 @@ def _parse_runtime(raw: object) -> tuple[tuple[RuntimeLibrary, ...], str]:
         reviewed = REVIEWED_RUNTIME.get(soname)
         if reviewed is None:
             raise ValueError(f"candidate runtime library {soname!r} is not reviewed")
-        package, version, symbols = str(entry["package"]), str(entry["version"]), str(entry["symbols"])
+        package, version = str(entry["package"]), str(entry["version"])
+        namespace = entry["symbols"]
+        # `null` is a reviewed value, not a missing one: it marks a library whose
+        # exports carry no symbol versions.
+        symbols = None if namespace is None else str(namespace)
         if (package, version, symbols) != reviewed:
             raise ValueError(
                 f"candidate runtime {soname} must be exactly {reviewed}, got "

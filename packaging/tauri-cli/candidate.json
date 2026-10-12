@@ -67,6 +67,12 @@
     "extra_depends": "cargo",
     "libraries": [
       {
+        "soname": "libbz2.so.1.0",
+        "package": "libbz2-1.0",
+        "version": "1.0.8-6",
+        "symbols": null
+      },
+      {
         "soname": "libc.so.6",
         "package": "libc6",
         "version": "2.34",

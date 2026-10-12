@@ -140,19 +140,29 @@ build therefore reads the symbol-version requirements out of the ELF and refuses
 to package a binary whose requirements exceed the declared floor, rather than
 claiming a dependency the build has not earned.
 
-The amd64 binary at this release requires `GLIBC_2.34`, `GCC_4.2.0`, and
-`XZ_5.0`, which maps to:
+Not every library offers a namespace to measure that way. Debian's `libbz2`
+exports no symbol versions at all, so its entry records the library as
+unversioned and its floor comes from the reviewed package version instead. A
+binary that claimed symbol versions from it would be describing a different
+library, and the build refuses it rather than accepting it on an unchecked
+rule.
 
 ```
-Depends: cargo, libc6 (>= 2.34), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)
+Depends: cargo, libbz2-1.0 (>= 1.0.8-6), libc6 (>= 2.34), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)
 ```
+
+Both architectures declare that same list, because both are built from the one
+mapping. It is a superset of what either binary needs: the amd64 binary at this
+release requires `GLIBC_2.34`, `GCC_4.2.0`, and `XZ_5.0` from `libc.so.6`,
+`libgcc_s.so.1`, and `liblzma.so.5`, and does not link libbz2 at all — the smoke
+checker says so on every run rather than leaving it implied. Deriving the list
+per architecture is production packaging work, not candidate work.
 
 `cargo` is a real dependency rather than a recommendation: `cargo tauri` is a
 Cargo external subcommand, so the package is only usable the way users invoke it
-when Cargo is present. The arm64 package declares the same dependencies, and the
-ARM build is held to the same mapping — if the compiled binary needs a newer
-library than this declares, the build fails and the mapping is reviewed before it
-changes.
+when Cargo is present. The ARM build is held to the same mapping — if the
+compiled binary needs a newer library than this declares, the build fails and the
+mapping is reviewed before it changes.
 
 ## Licensing
 

@@ -319,6 +319,15 @@ jobs:
           cd dist/tauri-candidate/upstream
           timeout 45m cargo build --locked --manifest-path crates/tauri-cli/Cargo.toml \
             --target aarch64-unknown-linux-gnu --profile release-size-optimized --bin cargo-tauri
+      - name: Report the compiled binary's real dynamic requirements
+        run: |
+          set -euo pipefail
+          # binutils is already installed by build-essential. This is a diagnostic,
+          # not a gate: it prints the linked libraries and the symbol versions the
+          # binary really requires, so a refused dependency or ABI floor comes back
+          # as data for the next decision instead of a bare failure.
+          readelf -d "$ARTIFACT" | grep -E 'NEEDED|SONAME' || true
+          readelf --version-info "$ARTIFACT" || true
       - name: Measure the build and write its provenance record
         run: |
           set -euo pipefail

@@ -103,17 +103,24 @@ def write_fake_cli(path: Path, output: str = FAKE_OUTPUT) -> Path:
 def write_versioned_elf(
     path: Path, machine: int, sonames: tuple[str, ...],
     versions: tuple[tuple[str, tuple[str, ...]], ...],
+    needed: tuple[str, ...] | None = None,
 ) -> Path:
     """An ELF that links `sonames` and requires the given symbol versions.
 
     `versions` maps a library name to the version names it must provide, written
-    as the version-requirement records a real toolchain emits.
+    as the version-requirement records a real toolchain emits. `needed` overrides
+    which libraries the dynamic section actually lists, so a fixture can require
+    versions from a library it does not declare as linked.
     """
     header_size, phentsize, phnum = 64, 56, 2
     dyn_offset = header_size + phentsize * phnum
     strtab = b""
     offsets: dict[str, int] = {}
-    for name in (*sonames, *(name for _, names in versions for name in names)):
+    for name in (
+        *sonames,
+        *(library for library, _ in versions),
+        *(name for _, names in versions for name in names),
+    ):
         if name not in offsets:
             offsets[name] = len(strtab)
             strtab += name.encode("latin-1") + b"\0"
@@ -132,7 +139,10 @@ def write_versioned_elf(
         struct.pack_into("<I", verneed, offset + 12,
                          0 if index + 1 == len(records) else records[index + 1][0] - offset)
     verneed = bytes(verneed)
-    dynamic = b"".join(struct.pack("<qQ", 1, offsets[name]) for name in sonames)
+    dynamic = b"".join(
+        struct.pack("<qQ", 1, offsets[name])
+        for name in (sonames if needed is None else needed)
+    )
     strtab_offset = dyn_offset + len(dynamic) + 80
     dynamic += struct.pack("<qQ", 5, strtab_offset)
     dynamic += struct.pack("<qQ", 10, len(strtab))
@@ -442,6 +452,103 @@ class VersionChainTest(unittest.TestCase):
 
 
 _MAX = smoke._MAX_VERSION_RECORDS
+
+
+class UnversionedLibraryTest(unittest.TestCase):
+    """A library reviewed as unversioned: no namespace, but not an unchecked pass."""
+
+    def setUp(self) -> None:
+        self.candidate = load_candidate()
+
+    def test_an_unversioned_library_without_versions_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_versioned_elf(
+                Path(tmp) / BINARY, ELF_MACHINE["arm64"],
+                ("libbz2.so.1.0", "libc.so.6"),
+                (("libc.so.6", ("GLIBC_2.34",)),),
+            )
+            lines = smoke.check_runtime(path, "arm64", self.candidate)
+            self.assertTrue(any("declares no symbol versions" in line for line in lines))
+
+    def test_a_version_claimed_from_an_unversioned_library_is_refused(self) -> None:
+        """The mapping names a library that exports no versions; this is another."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_versioned_elf(
+                Path(tmp) / BINARY, ELF_MACHINE["arm64"], ("libbz2.so.1.0",),
+                (("libbz2.so.1.0", ("BZ2_1.0",)),),
+            )
+            with self.assertRaisesRegex(ValueError, "records that library as unversioned"):
+                smoke.check_runtime(path, "arm64", self.candidate)
+
+    def test_a_versioned_library_still_requires_its_namespace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_versioned_elf(
+                Path(tmp) / BINARY, ELF_MACHINE["amd64"], ("libc.so.6",),
+                (("libc.so.6", ("BZ2_1.0",)),),
+            )
+            with self.assertRaisesRegex(ValueError, "outside the reviewed GLIBC_ namespace"):
+                smoke.check_runtime(path, "amd64", self.candidate)
+
+    def test_an_unreviewed_library_is_still_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_versioned_elf(
+                Path(tmp) / BINARY, ELF_MACHINE["amd64"], ("libz.so.1",),
+                (),
+            )
+            with self.assertRaisesRegex(ValueError, "does not cover"):
+                smoke.check_runtime(path, "amd64", self.candidate)
+
+
+class VerneedOwnerTest(unittest.TestCase):
+    """A version requirement must belong to a library the binary says it links.
+
+    An orphan record is the shape that used to pass: its owner never entered the
+    measurement loop, so a requirement nobody inspected slipped past every rule.
+    """
+
+    def setUp(self) -> None:
+        self.candidate = load_candidate()
+
+    def orphan(self, tmp: str, versions, needed=("libc.so.6",)) -> Path:
+        return write_versioned_elf(
+            Path(tmp) / BINARY, ELF_MACHINE["amd64"], ("libc.so.6",), versions, needed=needed,
+        )
+
+    def test_a_requirement_from_an_undeclared_library_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.orphan(
+                tmp, (("liblzma.so.5", ("XZ_5.0",)), ("libc.so.6", ("GLIBC_2.34",))),
+            )
+            self.assertEqual(smoke.read_needed(path), ("libc.so.6",))
+            self.assertIn(("liblzma.so.5", "XZ_5.0"), smoke.read_symbol_versions(path))
+            with self.assertRaisesRegex(ValueError, "does not list"):
+                smoke.check_runtime(path, "amd64", self.candidate)
+
+    def test_a_requirement_from_an_undeclared_unversioned_library_is_refused(self) -> None:
+        """The reviewed mapping covers libbz2; that does not excuse a lost NEEDED."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.orphan(
+                tmp, (("libbz2.so.1.0", ("BZ2_1.0",)), ("libc.so.6", ("GLIBC_2.34",))),
+            )
+            with self.assertRaises(ValueError):
+                smoke.check_runtime(path, "amd64", self.candidate)
+
+    def test_the_owner_check_runs_before_the_unreviewed_library_check(self) -> None:
+        """An orphan the mapping has never seen is still reported as an orphan."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.orphan(
+                tmp, (("libz.so.1", ("ZLIB_1.2.9",)), ("libc.so.6", ("GLIBC_2.34",))),
+            )
+            with self.assertRaisesRegex(ValueError, "does not list"):
+                smoke.check_runtime(path, "amd64", self.candidate)
+
+    def test_a_declared_library_is_still_measured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.orphan(
+                tmp, (("libc.so.6", ("GLIBC_2.34",)),), needed=("libc.so.6", "libc.so.6"),
+            )
+            lines = smoke.check_runtime(path, "amd64", self.candidate)
+            self.assertTrue(any("libc6 2.34" in line for line in lines))
 
 
 class PayloadTest(unittest.TestCase):
