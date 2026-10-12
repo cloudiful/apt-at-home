@@ -148,15 +148,19 @@ library, and the build refuses it rather than accepting it on an unchecked
 rule.
 
 ```
-Depends: cargo, libbz2-1.0 (>= 1.0.8-6), libc6 (>= 2.34), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)
+Depends: cargo, libbz2-1.0 (>= 1.0.8-6), libc6 (>= 2.39), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)
 ```
 
 Both architectures declare that same list, because both are built from the one
-mapping. It is a superset of what either binary needs: the amd64 binary at this
-release requires `GLIBC_2.34`, `GCC_4.2.0`, and `XZ_5.0` from `libc.so.6`,
-`libgcc_s.so.1`, and `liblzma.so.5`, and does not link libbz2 at all — the smoke
-checker says so on every run rather than leaving it implied. Deriving the list
-per architecture is production packaging work, not candidate work.
+mapping. The arm64 build requires `GLIBC_2.39` from `libc.so.6`, `GLIBC_2.29`
+from `libm.so.6`, `GCC_4.2.0`, and `XZ_5.0`, and it links libbz2, which requires
+no version at all. The amd64 binary at this release needs less of the same
+libraries — `GLIBC_2.34` from glibc, the same `GCC_4.2.0` and `XZ_5.0` — and does
+not link libbz2. The `libc6` floor is the higher of the two measured
+requirements, which Debian 13 satisfies; it is conservative for amd64, and every
+smoke run prints the measured floor beside the declared one so the difference is
+reported rather than implied. Deriving the list per architecture is production
+packaging work, not candidate work.
 
 `cargo` is a real dependency rather than a recommendation: `cargo tauri` is a
 Cargo external subcommand, so the package is only usable the way users invoke it

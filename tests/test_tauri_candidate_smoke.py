@@ -303,13 +303,31 @@ class SymbolVersionTest(unittest.TestCase):
             smoke.symbol_floor(("GLIBC_tip",), "GLIBC_")
 
     def test_a_floor_at_or_below_the_mapping_is_accepted(self) -> None:
+        """The amd64 asset's own floor sits below the shared declared one."""
         with tempfile.TemporaryDirectory() as tmp:
             path = write_versioned_elf(
                 Path(tmp) / BINARY, ELF_MACHINE["arm64"], ("libc.so.6", "libm.so.6"),
                 (("libc.so.6", ("GLIBC_2.34",)), ("libm.so.6", ("GLIBC_2.29",))),
             )
             lines = smoke.check_runtime(path, "arm64", self.candidate)
-            self.assertTrue(any("libc6 2.34 (declared >= 2.34)" in line for line in lines))
+            self.assertTrue(any("libc6 2.34 (declared >= 2.39)" in line for line in lines))
+
+    def test_the_measured_arm_floor_is_accepted(self) -> None:
+        """The native ARM build's requirements are what the shared floor was set to."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_versioned_elf(
+                Path(tmp) / BINARY, ELF_MACHINE["arm64"],
+                ("libbz2.so.1.0", "liblzma.so.5", "libgcc_s.so.1", "libm.so.6", "libc.so.6"),
+                (
+                    ("libc.so.6", ("GLIBC_2.39",)),
+                    ("libm.so.6", ("GLIBC_2.29",)),
+                    ("libgcc_s.so.1", ("GCC_4.2.0",)),
+                    ("liblzma.so.5", ("XZ_5.0",)),
+                ),
+            )
+            lines = smoke.check_runtime(path, "arm64", self.candidate)
+            self.assertTrue(any("libc6 2.39 (declared >= 2.39)" in line for line in lines))
+            self.assertTrue(any("declares no symbol versions" in line for line in lines))
 
     def test_a_floor_above_the_declared_mapping_is_refused(self) -> None:
         """A newer glibc than the candidate declares is never widened silently."""

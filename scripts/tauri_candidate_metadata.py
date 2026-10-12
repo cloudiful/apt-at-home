@@ -89,13 +89,16 @@ REVIEWED_BUILD_COMMAND = (
 # symbol namespace, and a binary that claims versions from it is refused.
 # The mapping is pinned in code as well as in the descriptor so a floor cannot be
 # widened by editing JSON alone; a wider floor needs both a descriptor and a code
-# change.
+# change. One floor serves both architectures: the libc6 floor is the highest one
+# either reviewed binary needs, measured from the native ARM build (GLIBC_2.39)
+# and therefore above what the amd64 asset requires (GLIBC_2.34). Debian 13 ships
+# 2.41, and the candidate targets Debian 13 only.
 REVIEWED_RUNTIME = {
     "libbz2.so.1.0": ("libbz2-1.0", "1.0.8-6", None),
-    "libc.so.6": ("libc6", "2.34", "GLIBC_"),
+    "libc.so.6": ("libc6", "2.39", "GLIBC_"),
     "libgcc_s.so.1": ("libgcc-s1", "14.2.0", "GCC_"),
     "liblzma.so.5": ("liblzma5", "5.8.1", "XZ_"),
-    "libm.so.6": ("libc6", "2.34", "GLIBC_"),
+    "libm.so.6": ("libc6", "2.39", "GLIBC_"),
 }
 
 _ALLOWED_KEYS = {

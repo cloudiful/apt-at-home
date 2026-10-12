@@ -75,7 +75,7 @@
       {
         "soname": "libc.so.6",
         "package": "libc6",
-        "version": "2.34",
+        "version": "2.39",
         "symbols": "GLIBC_"
       },
       {
@@ -93,7 +93,7 @@
       {
         "soname": "libm.so.6",
         "package": "libc6",
-        "version": "2.34",
+        "version": "2.39",
         "symbols": "GLIBC_"
       }
     ]

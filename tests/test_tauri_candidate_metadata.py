@@ -92,10 +92,21 @@ class ShippedDescriptorTest(DescriptorTest):
         candidate = load_candidate()
         self.assertEqual(
             candidate.depends(),
-            "cargo, libbz2-1.0 (>= 1.0.8-6), libc6 (>= 2.34), libgcc-s1 (>= 14.2.0), "
+            "cargo, libbz2-1.0 (>= 1.0.8-6), libc6 (>= 2.39), libgcc-s1 (>= 14.2.0), "
             "liblzma5 (>= 5.8.1)",
         )
         self.assertEqual(candidate.package.targets["arm64"].depends, candidate.depends())
+
+    def test_both_glibc_sonames_declare_the_measured_floor(self) -> None:
+        """One shared floor: the ARM build's 2.39, above the amd64 binary's 2.34."""
+        candidate = load_candidate()
+        glibc = {
+            item.soname: item for item in candidate.libraries
+            if item.package == "libc6"
+        }
+        self.assertEqual(set(glibc), {"libc.so.6", "libm.so.6"})
+        for soname, item in glibc.items():
+            self.assertEqual((item.version, item.symbols), ("2.39", "GLIBC_"), soname)
 
     def test_two_sonames_in_one_package_keep_the_higher_floor(self) -> None:
         libraries = (
@@ -113,7 +124,7 @@ class ShippedDescriptorTest(DescriptorTest):
             load_candidate().declared_floors(),
             {
                 "libbz2-1.0": "1.0.8-6",
-                "libc6": "2.34",
+                "libc6": "2.39",
                 "libgcc-s1": "14.2.0",
                 "liblzma5": "5.8.1",
             },
