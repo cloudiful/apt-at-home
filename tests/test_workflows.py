@@ -5,6 +5,7 @@ cloud access for the two published entrypoints (``ci.yml`` and ``publish.yml``).
 """
 
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -52,6 +53,134 @@ def step_order(job: str) -> list[str]:
         if body.startswith("uses:") or body.startswith("name:"):
             steps.append(body)
     return steps
+
+
+# Bash array syntax that a POSIX `sh` cannot parse.
+BASH_ARRAY = re.compile(r"args=\(|\$\{args\[@\]\}")
+
+
+def uses_bash_arrays(job: str) -> bool:
+    return BASH_ARRAY.search(job) is not None
+
+
+class BashArrayShellTest(unittest.TestCase):
+    """A Bash array under the default `sh` is a syntax error, not a build.
+
+    A container job runs `run` steps with `sh` unless it says otherwise, so an
+    array like `args=(...)` fails before the command it was assembling ever
+    starts. Every job that uses one must therefore have an effective Bash shell,
+    declared on the job or on the step.
+    """
+
+    def build_step_body(self) -> str:
+        """The Python job's repository-build run body, exactly as committed."""
+        job = job_block(read_workflow("ci.yml"), "python")
+        bodies = [b for b in run_bodies(job) if "scripts.repo build" in b]
+        self.assertEqual(len(bodies), 1, "the Python job builds the repository once")
+        return bodies[0]
+
+    def run_build_step_under_bash(self, *, with_artifact: bool) -> list[str]:
+        """Execute the real step body in Bash with `uv` replaced by a recorder."""
+        import os
+        import subprocess
+        import tempfile
+
+        body = self.build_step_body()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifacts = root / "dist" / "source-artifacts"
+            artifacts.mkdir(parents=True)
+            if with_artifact:
+                # The producer's record is what says this run compiled something.
+                (artifacts / "build-provenance.json").write_text("{}", encoding="utf-8")
+            recorder = root / "uv"
+            recorder.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" >>\"$ARGV_LOG\"\n", encoding="utf-8"
+            )
+            recorder.chmod(0o755)
+            log = root / "argv.log"
+            script = root / "step.sh"
+            script.write_text(body, encoding="utf-8")
+            environment = {
+                **os.environ,
+                "PATH": f"{root}:{os.environ['PATH']}",
+                "ARGV_LOG": str(log),
+            }
+            completed = subprocess.run(
+                ["bash", str(script)],
+                cwd=root, env=environment, capture_output=True, text=True,
+            )
+            self.assertEqual(
+                completed.returncode, 0,
+                f"the step must run under Bash: {completed.stderr}",
+            )
+            self.assertTrue(log.is_file(), "uv was never invoked")
+            return log.read_text(encoding="utf-8").splitlines()
+
+    def test_the_build_step_runs_under_bash_not_a_posix_shell(self) -> None:
+        """The committed body is a syntax error for `sh`, and valid for Bash."""
+        body = self.build_step_body()
+        posix = subprocess.run(
+            ["sh", "-n", "-c", body], capture_output=True, text=True
+        )
+        self.assertNotEqual(
+            posix.returncode, 0,
+            "the guard is only meaningful while `sh` still rejects this body",
+        )
+        self.assertEqual(
+            subprocess.run(["bash", "-n", "-c", body], capture_output=True).returncode, 0
+        )
+
+    def test_the_no_artifact_branch_invokes_the_plain_build(self) -> None:
+        argv = self.run_build_step_under_bash(with_artifact=False)
+        self.assertEqual(argv, ["run", "python", "-m", "scripts.repo",
+                                "build", "--output", "dist/repo"])
+        self.assertNotIn("--source-artifacts", argv)
+
+    def test_the_artifact_branch_appends_the_same_run_artifact(self) -> None:
+        argv = self.run_build_step_under_bash(with_artifact=True)
+        self.assertEqual(argv, ["run", "python", "-m", "scripts.repo",
+                                "build", "--output", "dist/repo",
+                                "--source-artifacts", "dist/source-artifacts"])
+
+    def array_jobs(self) -> list[tuple[str, str, str]]:
+        found: list[tuple[str, str, str]] = []
+        for workflow in ("ci.yml", "publish.yml"):
+            text = read_workflow(workflow)
+            for name in re.findall(r"\n  ([A-Za-z0-9_-]+):", text):
+                job = job_block(text, name)
+                if uses_bash_arrays(job):
+                    found.append((workflow, name, job))
+        return found
+
+    def test_every_array_job_has_an_effective_bash_shell(self) -> None:
+        jobs = self.array_jobs()
+        self.assertTrue(jobs, "expected at least one array-using job")
+        for workflow, name, job in jobs:
+            with self.subTest(workflow=workflow, job=name):
+                self.assertTrue(
+                    re.search(r"defaults:\s*\n\s*run:\s*\n\s*shell:\s*bash", job),
+                    "the job needs defaults.run.shell: bash",
+                )
+
+    def test_the_array_step_is_not_left_to_the_container_default(self) -> None:
+        """The array step itself must be Bash, or inherit a Bash job default."""
+        for workflow, name, job in self.array_jobs():
+            with self.subTest(workflow=workflow, job=name):
+                self.assertIn("shell: bash", job)
+
+    def test_the_repair_is_scoped_to_the_python_job_only(self) -> None:
+        """No workflow-wide default shell, and no unrelated job gains one."""
+        ci = read_workflow("ci.yml")
+        self.assertEqual(ci.count("shell: bash"), 1, "only the python job declares it")
+        text = ci
+        for name in re.findall(r"\n  ([A-Za-z0-9_-]+):", text):
+            job = job_block(text, name)
+            if name == "python":
+                continue
+            with self.subTest(job=name):
+                self.assertNotIn("shell: bash", job)
+                self.assertNotIn("defaults:", job)
 
 
 # The two jobs that run the complete Python suite. They compare this build against

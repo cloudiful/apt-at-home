@@ -155,6 +155,12 @@ jobs:
     container: debian:13
     # The source-built architecture is compiled by the producer in this same run.
     needs: [source-producer]
+    # A container job defaults to `sh`, and the build step routes its arguments
+    # through a Bash array. Without this the array syntax is a shell syntax error
+    # and the build never starts.
+    defaults:
+      run:
+        shell: bash
     env:
       UV_DEFAULT_INDEX: https://pypi.org/simple
     steps:
