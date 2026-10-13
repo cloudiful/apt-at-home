@@ -104,41 +104,18 @@ class DebTest(unittest.TestCase):
 
     def test_rebuild_into_same_output_is_idempotent(self) -> None:
         from scripts.build import build_all
-        from scripts.manifest import parse_manifest
-        from scripts.release_manifest import load_manifest_data
-        from scripts.manifest import default_manifest_path
 
-        import copy as _copy
-
-        data = _copy.deepcopy(load_manifest_data(default_manifest_path()))
-        from tests.test_source_artifacts import source_identity as _fixture_identity
-        from scripts.source_build import document as _document_of
-
-        fixture_doc = _document_of(_fixture_identity())
-        for entry in data["packages"]:  # type: ignore[index]
-            if entry["name"] == "cargo-tauri":  # type: ignore[index]
-                entry["targets"]["arm64"]["source_build"] = fixture_doc  # type: ignore[index]
-        manifest = parse_manifest(data)
+        manifest = load_manifest()
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             pool = tmpdir / "pool"
             cache = tmpdir / "upstream"
             cache.mkdir(parents=True, exist_ok=True)
             for pkg in manifest.packages:
-                for arch in ("amd64", "arm64"):
-                    if pkg.name == "cargo-tauri" and arch == "arm64":
-                        continue
+                for arch in sorted(pkg.targets):
                     archive = cache / f"{pkg.name}-{pkg.version}-{arch}.tar.gz"
                     _write_build_archive(archive, pkg, arch, f"fake-{pkg.name}-{arch}".encode())
-            from scripts import download as download_module
-            import scripts.build as build_module
-            from scripts.source_artifacts import index_source_artifacts, load_source_artifacts
-            from tests.test_source_artifacts import artifact_directory, pinned
-
-            directory, identity = artifact_directory(tmpdir / "artifacts")
-            artifacts = index_source_artifacts(
-                [load_source_artifacts(directory, expected=pinned(identity))]
-            )
+            from scripts import build as build_module
 
             original = build_module.fetch_verified
 
@@ -147,13 +124,10 @@ class DebTest(unittest.TestCase):
 
             build_module.fetch_verified = fake_fetch  # type: ignore[assignment]
             try:
-                first = build_all(manifest, pool_dir=pool, cache_dir=cache,
-                                  source_artifacts=artifacts)
-                second = build_all(manifest, pool_dir=pool, cache_dir=cache,
-                                   source_artifacts=artifacts)
+                first = build_all(manifest, pool_dir=pool, cache_dir=cache)
+                second = build_all(manifest, pool_dir=pool, cache_dir=cache)
                 self.assertEqual(first, second)
-                self.assertEqual(len(first), len(manifest.packages) * 2)
-                self.assertEqual(len(first), 22)
+                self.assertEqual(len(first), 21)
                 uv_contents = subprocess.run(
                     ["dpkg-deb", "-c", str(pool / "uv_0.13.0-1_amd64.deb")],
                     text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
@@ -166,46 +140,23 @@ class DebTest(unittest.TestCase):
     def test_selection_builds_only_the_named_packages(self) -> None:
         from scripts.build import build_all
         from scripts import build as build_module
-        from scripts.manifest import parse_manifest
-        from scripts.release_manifest import load_manifest_data
-        from scripts.manifest import default_manifest_path
 
-        import copy as _copy
-
-        _data = _copy.deepcopy(load_manifest_data(default_manifest_path()))
-        from tests.test_source_artifacts import source_identity as _fixture_identity
-        from scripts.source_build import document as _document_of
-
-        _fixture_doc = _document_of(_fixture_identity())
-        for entry in _data["packages"]:  # type: ignore[index]
-            if entry["name"] == "cargo-tauri":  # type: ignore[index]
-                entry["targets"]["arm64"]["source_build"] = _fixture_doc  # type: ignore[index]
-        manifest = parse_manifest(_data)
+        manifest = load_manifest()
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             pool = tmpdir / "pool"
             cache = tmpdir / "upstream"
             cache.mkdir(parents=True, exist_ok=True)
             for pkg in manifest.packages:
-                for arch in ("amd64", "arm64"):
-                    if pkg.name == "cargo-tauri" and arch == "arm64":
-                        continue
+                for arch in sorted(pkg.targets):
                     archive = cache / f"{pkg.name}-{pkg.version}-{arch}.tar.gz"
                     _write_build_archive(archive, pkg, arch, f"fake-{pkg.name}-{arch}".encode())
 
             original = build_module.fetch_verified
             build_module.fetch_verified = lambda url, sha, dest: dest  # type: ignore[assignment]
             try:
-                from scripts.source_artifacts import index_source_artifacts, load_source_artifacts
-                from tests.test_source_artifacts import artifact_directory, pinned
-
-                directory, identity = artifact_directory(tmpdir / "artifacts")
-                artifacts = index_source_artifacts(
-                    [load_source_artifacts(directory, expected=pinned(identity))]
-                )
-                every = build_all(manifest, pool_dir=pool, cache_dir=cache,
-                                  source_artifacts=artifacts)
-                self.assertEqual(len(every), len(manifest.packages) * 2)
+                every = build_all(manifest, pool_dir=pool, cache_dir=cache)
+                self.assertEqual(len(every), 21)
                 fresh = tmpdir / "pool-selected"
                 selected = build_all(
                     manifest, pool_dir=fresh, cache_dir=cache, packages=["zellij"]
@@ -251,92 +202,6 @@ class DebTest(unittest.TestCase):
                 self.assertIn("refusing to overwrite", str(ctx.exception))
             finally:
                 build_module.fetch_verified = original  # type: ignore[assignment]
-
-
-class SourceTargetBuildTest(unittest.TestCase):
-    """A source-built target is assembled from an already validated compilation.
-
-    The build path copies the producer's bytes, installs the reviewed notices and
-    the provenance record beside them, and never compiles. A fixed binary and a
-    fixed record therefore produce a byte-identical deb on every run, which is
-    what lets an unchanged release be restored instead of rebuilt.
-    """
-
-    def _staged(self, root: Path, tmpdir: Path):
-        from scripts.build import _stage_source_target
-        from scripts.manifest import parse_manifest
-        from scripts.source_artifacts import (
-            index_source_artifacts,
-            load_source_artifacts,
-        )
-        from tests.test_source_artifacts import artifact_directory, pinned
-        from tests.test_source_build import source_manifest_document as _source_doc
-
-        directory, identity = artifact_directory(root)
-        artifacts = index_source_artifacts(
-            [load_source_artifacts(directory, expected=pinned(identity))]
-        )
-        document = _source_doc(identity.document())
-        # P1/P2 helper predates the production recipe and carries no
-        # `extra_license_urls` and a placeholder `license_url`; production
-        # parsing requires the reviewed tag-bound dual-license URLs, so add
-        # them here rather than weakening the validator.
-        document["packages"][0]["license_url"] = (  # type: ignore[index]
-            "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.2/LICENSE-MIT"
-        )
-        document["packages"][0]["extra_license_urls"] = [  # type: ignore[index]
-            "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.2/LICENSE-APACHE-2.0"
-        ]
-        manifest = parse_manifest(document)
-        package = manifest.packages[0]
-        stage = _stage_source_target(
-            package, "arm64", manifest,
-            artifacts[("cargo-tauri", "arm64")], tmpdir,
-        )
-        return stage, manifest, package, artifacts[("cargo-tauri", "arm64")]
-
-    def test_the_package_carries_the_binary_notices_and_provenance(self) -> None:
-        import hashlib
-
-        from scripts.source_build import SOURCE_PROVENANCE_NAME
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            stage, manifest, package, artifacts = self._staged(root, root / "stages")
-            installed = stage / "usr" / "bin" / "cargo-tauri"
-            self.assertEqual(
-                installed.read_bytes(), artifacts.binary.read_bytes()
-            )
-            self.assertEqual(installed.stat().st_mode & 0o777, 0o755)
-            doc = stage / "usr" / "share" / "doc" / "cargo-tauri"
-            for name in (*self._notice_names(), SOURCE_PROVENANCE_NAME):
-                self.assertTrue((doc / name).is_file(), msg=name)
-                self.assertEqual((doc / name).stat().st_mode & 0o111, 0, msg=name)
-            self.assertEqual(
-                (doc / SOURCE_PROVENANCE_NAME).read_text(encoding="utf-8"),
-                artifacts.record.read_text(encoding="utf-8"),
-            )
-            copyright = (doc / "copyright").read_text(encoding="utf-8")
-            self.assertIn("MIT OR Apache-2.0", copyright)
-            for name in self._notice_names():
-                self.assertIn((doc / name).read_text(encoding="utf-8").strip(), copyright)
-
-            digests = []
-            for attempt in ("first", "second"):
-                output = root / "pool" / attempt / "cargo-tauri_2.12.2-1_arm64.deb"
-                build_deb(stage, output)
-                digests.append(hashlib.sha256(output.read_bytes()).hexdigest())
-            self.assertEqual(digests[0], digests[1])
-            self.assertEqual(
-                deb_filename(package, "arm64", manifest),
-                "cargo-tauri_2.12.2-1_arm64.deb",
-            )
-
-    @staticmethod
-    def _notice_names() -> tuple[str, ...]:
-        from scripts.source_artifacts import NOTICE_FILES
-
-        return NOTICE_FILES
 
 
 if __name__ == "__main__":

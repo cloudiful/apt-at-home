@@ -5,8 +5,8 @@ ordering are all real; only the upstream archive download is stubbed, so the
 test proves the update mechanics rather than GitHub's availability. The
 headline case is the one production will run first: a published two-package
 release meeting the full catalog, which must add nine packages, build exactly
-eighteen .deb files, keep the four published ones byte-identical, and publish a
-complete twenty-two-file release.
+seventeen .deb files (cargo-tauri is AMD-only), keep the four published ones
+byte-identical, and publish a complete twenty-one-file release.
 """
 
 import json
@@ -38,49 +38,15 @@ from tests.test_update import _catalog_candidates, candidate, catalog_document
 
 
 def _fixture_catalog() -> dict:
-    """Full catalog with the fixture source identity for hermetic local builds."""
+    """The committed catalog as ordinary asset-only documents."""
     import copy as _copy
 
-    data = _copy.deepcopy(catalog_document())
-    from tests.test_source_artifacts import source_identity as _fixture_identity
-    from scripts.source_build import document as _document_of
-
-    fixture_doc = _document_of(_fixture_identity())
-    for entry in data["packages"]:  # type: ignore[index]
-        if entry["name"] == "cargo-tauri":  # type: ignore[index]
-            entry["targets"]["arm64"]["source_build"] = fixture_doc  # type: ignore[index]
-    return data
+    return _copy.deepcopy(catalog_document())
 
 
 def _fixture_candidates() -> dict:
-    """Candidates matching `_fixture_catalog`, with the fixture source identity."""
-    from types import MappingProxyType as _MP
-
-    from tests.test_source_artifacts import source_identity as _fixture_identity
-
-    candidates = _catalog_candidates()
-    cargo = candidates["cargo-tauri"]
-    candidates["cargo-tauri"] = cargo.__class__(
-        name=cargo.name,
-        repo=cargo.repo,
-        tag=cargo.tag,
-        version=cargo.version,
-        license_url=cargo.license_url,
-        targets=cargo.targets,
-        extra_license_urls=cargo.extra_license_urls,
-        sources=_MP({"arm64": _fixture_identity()}),
-    )
-    return candidates
-
-
-def _fixture_artifacts(root: Path):
-    from scripts.source_artifacts import index_source_artifacts, load_source_artifacts
-    from tests.test_source_artifacts import artifact_directory, pinned
-
-    artifacts_dir, identity = artifact_directory(root / "source-artifacts")
-    return index_source_artifacts(
-        [load_source_artifacts(artifacts_dir, expected=pinned(identity))]
-    )
+    """Candidates matching the committed catalog's pinned versions."""
+    return _catalog_candidates()
 
 
 class Store:
@@ -178,7 +144,6 @@ class UpdateBuildTest(unittest.TestCase):
                 self.assertEqual(plan.changed, additions)
 
                 key_file = _export_private_key(home, root / "test-private.asc")
-                artifacts = _fixture_artifacts(root)
                 with _stub_archive():
                     result = apply_update(
                         plan=plan,
@@ -192,31 +157,23 @@ class UpdateBuildTest(unittest.TestCase):
                         signing_key_file=key_file,
                         key_id=key_id,
                         client=store.client,
-                        source_artifacts=artifacts,
                     )
                 self.assertEqual(result.release_id, "catalog-release")
 
                 pool = {p.name: p.read_bytes() for p in (output / "pool").glob("*.deb")}
-                self.assertEqual(len(pool), 22)
-                # Exactly the nine added packages were built for both architectures.
+                self.assertEqual(len(pool), 21)
+                # Exactly the nine added packages were built for their reviewed
+                # architectures: cargo-tauri contributes only its AMD target.
                 self.assertEqual(
                     sorted(path.name for path in result.debs),
-                    [
-                        f"{name}_{version}-1_{arch}.deb"
-                        for name, version in (
-                            ("bottom", "0.14.9"),
-                            ("cargo-tauri", "2.12.2"),
-                            ("git-delta", "0.20.1"),
-                            ("kandev", "0.97.0"),
-                            ("neovim", "0.12.6"),
-                            ("rustfs-cli", "0.1.36"),
-                            ("sccache", "0.18.0"),
-                            ("uv", "0.13.0"),
-                            ("zoxide", "0.10.0"),
-                        )
-                        for arch in ARCHES
-                    ],
+                    sorted(
+                        deb_filename(pkg, arch, plan.manifest)
+                        for pkg in plan.manifest.packages
+                        if pkg.name in additions
+                        for arch in sorted(pkg.targets)
+                    ),
                 )
+                self.assertEqual(len(result.debs), 17)
                 # Every published package stays byte-identical.
                 for name, payload in published_pool.items():
                     self.assertEqual(pool[name], payload, msg=name)
@@ -226,7 +183,8 @@ class UpdateBuildTest(unittest.TestCase):
                         output / "releases" / "catalog-release" / "dists" / "stable"
                         / "main" / f"binary-{arch}" / "Packages"
                     ).read_text()
-                    self.assertEqual(len(text.strip().split("\n\n")), 11)
+                    expected_count = 11 if arch == "amd64" else 10
+                    self.assertEqual(len(text.strip().split("\n\n")), expected_count, msg=arch)
                     self.assertIn("Version: 0.20.1-1", text)
                     # The Debian name and the installed command differ for rc.
                     self.assertIn(f"Package: rustfs-cli\n", text)
@@ -283,14 +241,13 @@ class UpdateBuildTest(unittest.TestCase):
                     candidates=_fixture_candidates(),
                 )
                 key_file = _export_private_key(home, root / "test-private.asc")
-                artifacts = _fixture_artifacts(root)
                 with _stub_archive():
                     apply_update(
                         plan=plan, release=restored, source=store, output_root=output,
                         cache_dir=output.parent / "cache" / "upstream",
                         release_id="catalog-release", bucket=Store.bucket,
                         fingerprint=key_id, signing_key_file=key_file, key_id=key_id,
-                        client=store.client, source_artifacts=artifacts,
+                        client=store.client,
                     )
 
                 uploaded_before = list(store.client.puts)

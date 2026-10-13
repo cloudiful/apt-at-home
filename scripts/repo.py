@@ -15,15 +15,6 @@ from .publish import publish_tree
 from .publish_guard import guard_publish
 from .release_build import build_release
 from .release_manifest import MANIFEST_NAME, load_manifest_data, validated_document
-from .source_artifacts import (
-    ReusedSource,
-    SourceArtifacts,
-    expected_source_identities,
-    index_source_artifacts,
-    load_source_artifacts,
-    production_reviewed_notices,
-    reuse_published_source,
-)
 from .storage import s3_source
 from .verify import verify_tree
 
@@ -44,67 +35,6 @@ def _key_material_from_env() -> tuple[Path | None, str | None]:
     return (Path(key_file) if key_file else None, key_id)
 
 
-def _source_artifacts(
-    directories: list[str], document: dict[str, object]
-) -> dict[tuple[str, str], SourceArtifacts]:
-    """Validate every supplied artifact directory before the build consumes it.
-
-    Each directory is a producer's own upload: one compiled binary, its provenance
-    record, and its notices. The manifest decides which identities are acceptable,
-    so a directory is accepted only for a target the document actually pins and
-    only when its record describes exactly that identity. Notice bytes are always
-    compared against the trusted vendored production notices; untrusted records
-    never authenticate their own notices.
-    """
-    expected = expected_source_identities(document)
-    trusted = production_reviewed_notices()
-    return index_source_artifacts(
-        [
-            load_source_artifacts(
-                Path(directory), expected=expected, reviewed_notices=trusted
-            )
-            for directory in directories or []
-        ]
-    )
-
-
-def _reused_sources(
-    document: dict[str, object], *, bucket: str, endpoint: str | None, destination: Path
-) -> dict[tuple[str, str], ReusedSource]:
-    """Return the published deb for a source target whose version has not changed.
-
-    This is the one place a build is allowed to reach the published release, and it
-    only does so when it is told to: nothing here runs during a CI or local build.
-    The reuse needs three things to be true, and each of them is a refusal when it
-    is not — a source target in this manifest, a bucket to read, and the pinned
-    fingerprint that makes the read trustworthy. There is no path from here to an
-    unverified `.deb`.
-    """
-    targets = sorted(expected_source_identities(document))
-    if not targets:
-        raise ValueError(
-            "--reuse-published-source needs a source-built target in this manifest"
-        )
-    if len(targets) != 1:
-        raise ValueError(
-            f"--reuse-published-source covers one source target, but this manifest "
-            f"declares {len(targets)}"
-        )
-    if not bucket:
-        raise ValueError("--reuse-published-source needs --bucket or APT_S3_BUCKET")
-    fingerprint = expected_fingerprint_from_env()
-    package, arch = targets[0]
-    entry = reuse_published_source(
-        source=s3_source(bucket, endpoint=endpoint or None),
-        fingerprint=fingerprint,
-        document=document,
-        package=package,
-        arch=arch,
-        destination=destination,
-    )
-    return {targets[0]: entry}
-
-
 def cmd_build(args: argparse.Namespace) -> int:
     output: Path = Path(args.output)
     env_key_file, env_key_id = _key_material_from_env()
@@ -117,16 +47,6 @@ def cmd_build(args: argparse.Namespace) -> int:
     cache_dir = Path(args.cache_dir) if args.cache_dir else output.parent / "cache" / "upstream"
     manifest_path = Path(args.manifest) if args.manifest else None
     try:
-        declared = validated_document(
-            manifest_path or default_manifest_path()
-        )[0]
-        reused: dict[tuple[str, str], ReusedSource] = {}
-        if args.reuse_published_source:
-            bucket = args.bucket or os.environ.get("APT_S3_BUCKET", "")
-            reused = _reused_sources(
-                declared, bucket=bucket, endpoint=args.endpoint,
-                destination=Path(args.cache_dir) if args.cache_dir else output.parent / "cache" / "reuse",
-            )
         debs = build_release(
             output_root=output,
             release_id=release_id,
@@ -134,8 +54,6 @@ def cmd_build(args: argparse.Namespace) -> int:
             manifest_path=manifest_path,
             signing_key_file=signing_key,
             key_id=key_id,
-            source_artifacts=_source_artifacts(args.source_artifacts, declared),
-            reused_sources=reused,
         )
     except Exception as exc:
         print(f"build failed: {exc}", file=sys.stderr)
@@ -229,17 +147,6 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--cache-dir", default=None)
     build.add_argument("--signing-key-file", default=None, help="armored private key file (path only)")
     build.add_argument("--key-id", default=None)
-    build.add_argument("--source-artifacts", action="append", default=None, metavar="DIR",
-                        help="one compiled source-artifact directory; repeat per architecture")
-    build.add_argument("--bucket", default=None,
-                       help="bucket to read for --reuse-published-source (default: APT_S3_BUCKET)")
-    build.add_argument("--endpoint", default=None,
-                       help="S3-compatible endpoint for --reuse-published-source")
-    build.add_argument("--reuse-published-source", action="store_true",
-                       help=(
-                           "build a source target from the verified published deb instead "
-                           "of compiling it again; needs APT_SIGNING_FINGERPRINT and a bucket"
-                       ))
     build.set_defaults(func=cmd_build)
 
     verify = sub.add_parser("verify", help="verify hashes and signatures of a built tree")

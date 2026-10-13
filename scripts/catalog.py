@@ -19,8 +19,9 @@ __all__ = [
     "KNOWN_NAMES",
     "KNOWN_PACKAGES",
     "RECIPES",
-    "SOURCE_PACKAGES",
     "Recipe",
+    "arches_for",
+    "exact_tag_release_for",
     "tag_prefix_for",
 ]
 
@@ -30,14 +31,7 @@ ARCHES = ("amd64", "arm64")
 # recipe and the accepted name set can never drift apart.
 KNOWN_PACKAGES: frozenset[str] = frozenset(RECIPES)
 
-# Packages with a reviewed source policy: one architecture of theirs is compiled
-# from upstream source because upstream publishes no release asset for it. The
-# manifest parser accepts a typed source target for these names; discovery,
-# updating, and publication stay with RECIPES, so listing a name here never
-# hands it to the updater or publisher.
-SOURCE_PACKAGES: frozenset[str] = frozenset({"cargo-tauri"})
-
-KNOWN_NAMES: frozenset[str] = KNOWN_PACKAGES | SOURCE_PACKAGES
+KNOWN_NAMES: frozenset[str] = KNOWN_PACKAGES
 
 # One safe POSIX path component: no separator, no dot-prefix, no control byte.
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
@@ -62,6 +56,27 @@ def _arch(arch: str) -> str:
     return arch
 
 
+def arches_for(package_name: str) -> tuple[str, ...]:
+    """Return the reviewed architectures this package publishes for.
+
+    The default is both repository architectures; cargo-tauri is the one
+    ordinary package with an explicit amd64-only policy because upstream
+    publishes no official arm64 asset for it. Support is never inferred from
+    triples alone, because rustfs-cli uses no triple placeholders.
+    """
+    return recipe_for(package_name).arches
+
+
+def exact_tag_release_for(package_name: str) -> bool:
+    """Whether discovery must select this package by its exact stable tag.
+
+    Only the multiproduct tauri-apps/tauri repository needs it: its latest
+    release may name another product line, so the canonical CLI tag is
+    selected from the tag list instead.
+    """
+    return recipe_for(package_name).exact_tag_release
+
+
 def triple_for(package_name: str, arch: str) -> str:
     """Return the upstream target triple this package publishes for an arch."""
     try:
@@ -70,16 +85,6 @@ def triple_for(package_name: str, arch: str) -> str:
         raise ValueError(
             f"{package_name} publishes no {arch} release asset naming"
         ) from None
-
-
-def source_arch_for(package_name: str) -> str:
-    """Return the architecture this package is built from reviewed source, or ''.
-
-    A source-built architecture names no release asset, so every question the
-    catalog answers about an asset — its URL, its archive member, its binary — is
-    a question that must not be asked about it.
-    """
-    return recipe_for(package_name).source_arch
 
 
 def repo_of(package_name: str) -> str:
@@ -100,21 +105,27 @@ def tag_for(package_name: str, version: str) -> str:
 def asset_name(package_name: str, version: str, arch: str) -> str:
     """Return the only release asset name accepted for this package and arch."""
     recipe = recipe_for(package_name)
+    checked = _arch(arch)
+    if checked not in recipe.arches:
+        raise ValueError(
+            f"{package_name} publishes no {arch} release asset naming"
+        )
     fields = {
         "name": recipe.name,
         "upstream": recipe.upstream,
         "version": version,
-        "arch": _arch(arch),
+        "arch": checked,
     }
     if "{triple}" in recipe.asset:
-        fields["triple"] = triple_for(package_name, fields["arch"])
+        fields["triple"] = triple_for(package_name, checked)
     return recipe.asset.format(**fields)
 
 
 def archive_member(package_name: str, version: str, arch: str) -> str:
     """Return the exact archive member that holds this package's binary."""
     recipe = recipe_for(package_name)
-    prefix = asset_name(package_name, version, arch).removesuffix(".tar.gz")
+    raw_asset = asset_name(package_name, version, arch)
+    prefix = raw_asset.removesuffix(".tar.gz").removesuffix(".tgz")
     member = recipe.member.format(
         prefix=prefix, binary=recipe.binary, upstream=recipe.upstream
     )
@@ -127,7 +138,8 @@ def archive_member(package_name: str, version: str, arch: str) -> str:
 def additional_binaries_for(package_name: str, version: str, arch: str) -> dict[str, str]:
     """Return exact reviewed archive members and installed names beyond the primary."""
     recipe = recipe_for(package_name)
-    prefix = asset_name(package_name, version, arch).removesuffix(".tar.gz")
+    raw_asset = asset_name(package_name, version, arch)
+    prefix = raw_asset.removesuffix(".tar.gz").removesuffix(".tgz")
     primary = archive_member(package_name, version, arch)
     members: dict[str, str] = {}
     names = {recipe.binary}
@@ -164,7 +176,8 @@ def install_tree_for(package_name: str, version: str, arch: str) -> str:
     recipe = recipe_for(package_name)
     if not recipe.install_tree:
         return ""
-    prefix = asset_name(package_name, version, arch).removesuffix(".tar.gz")
+    raw_asset = asset_name(package_name, version, arch)
+    prefix = raw_asset.removesuffix(".tar.gz").removesuffix(".tgz")
     return recipe.install_tree.format(prefix=prefix)
 
 

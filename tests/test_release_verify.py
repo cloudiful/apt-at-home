@@ -21,7 +21,6 @@ from scripts.release_verify import (
 )
 from scripts.restore_packages import pool_entries
 from scripts.sign import export_public_key, sign_release
-from scripts.source_build import check_realized_document
 from scripts.storage import MAX_DEB_BYTES, MAX_MANIFEST_BYTES
 from tests.helpers import make_gpg_home_with_key
 from tests.release_fixtures import (
@@ -30,7 +29,6 @@ from tests.release_fixtures import (
     FakeStorage,
     build_release_objects,
 )
-from tests.test_source_build import source_manifest_document
 
 
 class PointerTest(unittest.TestCase):
@@ -66,42 +64,6 @@ class RestoreMetadataTest(unittest.TestCase):
                 for arch in ("amd64", "arm64"):
                     self.assertIn(f"Architecture: {arch}", restored.packages[arch])
                 self.assertEqual([key for key in storage.reads if key.startswith("pool/")], [])
-        finally:
-            tmpdir.cleanup()
-
-    def test_the_bound_manifest_is_checked_for_realized_source_provenance(self) -> None:
-        """A bound manifest is the one a build signed, so it must be realized.
-
-        The trust chain verifies the artifact's digest and size against the
-        signature; this is the other half — a source-built target inside those
-        bound bytes may not be a bare plan. Publishing refuses such a document
-        before signing it, and the restored baseline is checked against the same
-        rule, so a release built by a different path cannot slip a plan through.
-        """
-        tmpdir, home, key_id = make_gpg_home_with_key()
-        try:
-            with tempfile.TemporaryDirectory() as work:
-                storage = self._storage(Path(work), home, key_id)
-                restored = restore_metadata(storage, fingerprint=key_id)
-                # The published baseline has no source target, so it is realized.
-                check_realized_document(restored.manifest_data)
-
-                bound = storage.objects[f"releases/{RELEASE_ID}/{MANIFEST_NAME}"]
-                release_text = storage.objects[
-                    f"releases/{RELEASE_ID}/dists/stable/Release"
-                ].decode("utf-8")
-                document = json.loads(bound)
-                document["packages"].append(
-                    json.loads(json.dumps(source_manifest_document()["packages"][0]))
-                )
-                tampered = canonical_bytes(document)
-                # Changing the bound bytes breaks the signature's own claim...
-                with self.assertRaisesRegex(ValueError, "manifest (size|digest) mismatch"):
-                    check_binding_bytes(release_text=release_text, payload=tampered)
-                # ...and a source target that is still only a plan is refused by
-                # the rule the build applies before it signs anything.
-                with self.assertRaisesRegex(ValueError, "must be realized before it is signed"):
-                    check_realized_document(document)
         finally:
             tmpdir.cleanup()
 

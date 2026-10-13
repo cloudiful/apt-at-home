@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 from scripts.deb import build_deb
-from scripts.manifest import deb_filename, load_manifest
+from scripts.manifest import deb_filename, expected_debs_for_arch, load_manifest
 from tests.helpers import stage_fixture_target
 from scripts.reprepro_adapter import (
     _normalize_stanzas,
@@ -42,7 +42,7 @@ def _fake_debs(root: Path) -> tuple[list[Path], Path]:
     pool.mkdir(parents=True, exist_ok=True)
     outputs: list[Path] = []
     for pkg in manifest.packages:
-        for arch in ARCHES:
+        for arch in sorted(pkg.targets):
             stage = stage_fixture_target(
                 root, pkg, arch, manifest, f"fake-{pkg.name}-{arch}".encode(), root / "stages",
             )
@@ -65,12 +65,12 @@ class RepreproAdapterTest(unittest.TestCase):
             dists = root / "dists"
             for arch in ARCHES:
                 arch_debs = sorted(pool.glob(f"*_{arch}.deb"))
-                self.assertEqual(len(arch_debs), len(manifest.packages))
+                self.assertEqual(len(arch_debs), len(expected_debs_for_arch(manifest, arch)))
                 packages, packages_gz = generate_packages(
                     pool, dists / "stable" / "main" / f"binary-{arch}", arch_debs
                 )
                 stanzas = _stanzas(packages.read_text())
-                self.assertEqual(len(stanzas), len(manifest.packages))
+                self.assertEqual(len(stanzas), len(expected_debs_for_arch(manifest, arch)))
                 names = set()
                 for stanza in stanzas:
                     self.assertEqual(stanza["Architecture"], arch)

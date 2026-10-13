@@ -16,7 +16,6 @@ from unittest import mock
 
 from scripts.catalog import KNOWN_PACKAGES, repo_of, tag_for
 from scripts.manifest import default_manifest_path
-from scripts.metadata import ARCHES
 from scripts.release_manifest import validated_document
 from scripts.update_plan import build_plan, merge_catalog
 from scripts.upstream import Candidate
@@ -38,43 +37,12 @@ def candidate(name: str, version: str, *, sha: str | None = None) -> Candidate:
 
     By default each architecture keeps the digest the committed manifest already
     pins, which is what an unchanged upstream release looks like; pass `sha` to
-    model a rebuilt archive. A source-built architecture names no asset: it
-    carries the committed planned identity instead.
+    model a rebuilt archive.
     """
-    from scripts.catalog import source_arch_for
-    from scripts.manifest import load_manifest as _load_manifest
-    from scripts.source_build import identity_of as _identity_of
+    from scripts.catalog import arches_for
 
     repo = repo_of(name)
     tag = tag_for(name, version)
-    source_arch = source_arch_for(name) if name in KNOWN_PACKAGES else ""
-    # Deferred import to avoid a cycle at module load; only needed for source.
-    if source_arch:
-        committed = next(
-            pkg for pkg in _load_manifest().packages if pkg.name == name
-        )
-        identity = _identity_of(
-            committed.targets[source_arch].source_build  # type: ignore[arg-type]
-        )
-        from types import MappingProxyType as _MP
-
-        return Candidate(
-            name=name,
-            repo=repo,
-            tag=tag,
-            version=version,
-            license_url=license_url(repo, tag, license_path(name)),
-            targets={
-                arch: {
-                    "url": release_download_url(repo, tag, asset_name(name, version, arch)),
-                    "sha256": sha or committed_sha(name, arch),
-                }
-                for arch in ARCHES
-                if arch != source_arch
-            },
-            extra_license_urls=license_urls_for(name, tag)[1:],
-            sources=_MP({source_arch: identity}),
-        )
     return Candidate(
         name=name,
         repo=repo,
@@ -86,7 +54,7 @@ def candidate(name: str, version: str, *, sha: str | None = None) -> Candidate:
                 "url": release_download_url(repo, tag, asset_name(name, version, arch)),
                 "sha256": sha or committed_sha(name, arch),
             }
-            for arch in ARCHES
+            for arch in arches_for(name)
         },
         extra_license_urls=license_urls_for(name, tag)[1:],
     )
@@ -353,20 +321,13 @@ class PlanTest(unittest.TestCase):
         self.assertIn("license", str(ctx.exception))
 
 
-class DiscoverSourceTest(unittest.TestCase):
-    """The updater derives cargo-tauri from the official release, not itself."""
+class DiscoverExactTagTest(unittest.TestCase):
+    """The updater derives cargo-tauri from its exact stable tag, not repo latest."""
 
-    def test_official_source_identity_supplies_the_expected_candidate(self) -> None:
-        import base64
-
+    def test_exact_tag_discovery_supplies_amd64_without_repo_wide_latest(self) -> None:
         from scripts import update as update_module
-        from scripts.catalog import repo_of
-        from scripts.common import sha256_bytes
-        from scripts.tauri_source import git_blob_id
-        from tests.test_source_artifacts import LOCK as _FIXTURE_LOCK
-        from tests.test_tauri_source import COMMIT as _FIXTURE_COMMIT
 
-        repo = repo_of("cargo-tauri")
+        repo = "tauri-apps/tauri"
         tag = "tauri-cli-v2.12.2"
         amd_asset = "cargo-tauri-x86_64-unknown-linux-gnu.tgz"
         amd_sha = "a" * 64
@@ -375,10 +336,8 @@ class DiscoverSourceTest(unittest.TestCase):
             "packaging/licenses/cargo-tauri/LICENSE-APACHE-2.0"
         ).read_bytes()
 
-        class FullClient:
-            """Protocol-complete multiproduct client: tags list, tag-specific
-            release, commit, lockfile, and both licenses. Repository-wide
-            latest is deliberately unsupported for the source package."""
+        class ExactTagClient:
+            """Tags list plus tag-specific release and both licenses."""
 
             def get_json(self, url: str) -> object:
                 if url.endswith("/releases/latest"):
@@ -386,7 +345,14 @@ class DiscoverSourceTest(unittest.TestCase):
                         "canonical CLI discovery must not use repository-wide latest"
                     )
                 if "/tags?" in url:
-                    return [{"name": "tauri-v2.10.0"}, {"name": tag}]
+                    if "page=2" in url:
+                        return [{"name": tag}]
+                    if "&page=" in url:
+                        return []
+                    first = [{"name": "tauri-v2.10.0"}, {"name": tag}]
+                    if len(first) < 100:
+                        return first
+                    return first
                 if f"/releases/tags/{tag}" in url:
                     return {
                         "tag_name": tag, "draft": False, "prerelease": False,
@@ -397,14 +363,6 @@ class DiscoverSourceTest(unittest.TestCase):
                             ),
                             "digest": f"sha256:{amd_sha}",
                         }],
-                    }
-                if "/git/ref/tags/" in url:
-                    return {"object": {"type": "commit", "sha": _FIXTURE_COMMIT}}
-                if "/contents/" in url:
-                    return {
-                        "type": "file", "sha": git_blob_id(_FIXTURE_LOCK),
-                        "size": len(_FIXTURE_LOCK), "encoding": "base64",
-                        "content": base64.b64encode(_FIXTURE_LOCK).decode("ascii"),
                     }
                 raise AssertionError(f"unexpected JSON URL: {url}")
 
@@ -418,17 +376,71 @@ class DiscoverSourceTest(unittest.TestCase):
         with mock.patch.object(
             update_module, "RECIPES", {"cargo-tauri": object()}
         ):
-            result = update_module._discover(FullClient())
+            result = update_module._discover(ExactTagClient())
         candidate = result["cargo-tauri"]
-        # Derived from the official release (fixture commit/lock), not from the
-        # committed catalog's real 279903-byte pin.
-        self.assertIn("arm64", candidate.sources)
-        identity = candidate.sources["arm64"]
-        self.assertEqual(identity.commit, _FIXTURE_COMMIT)
-        self.assertEqual(identity.lockfile.bytes, len(_FIXTURE_LOCK))
-        self.assertEqual(identity.lockfile.sha256, sha256_bytes(_FIXTURE_LOCK))
+        self.assertEqual(candidate.version, "2.12.2")
+        self.assertEqual(candidate.tag, tag)
+        self.assertIn("amd64", candidate.targets)
+        self.assertNotIn("arm64", candidate.targets)
+
+    def test_exact_tag_discovery_reaches_beyond_unrelated_first_page(self) -> None:
+        """A full first page of unrelated tags never hides the CLI release."""
+        from scripts import update as update_module
+
+        repo = "tauri-apps/tauri"
+        tag = "tauri-cli-v2.12.2"
+        amd_asset = "cargo-tauri-x86_64-unknown-linux-gnu.tgz"
+        amd_sha = "a" * 64
+        license_mit = Path("packaging/licenses/cargo-tauri/LICENSE.txt").read_bytes()
+        license_apache = Path(
+            "packaging/licenses/cargo-tauri/LICENSE-APACHE-2.0"
+        ).read_bytes()
+
+        class PagedTagClient:
+            def __init__(self) -> None:
+                self.tags_requests: list[str] = []
+
+            def get_json(self, url: str) -> object:
+                if url.endswith("/releases/latest"):
+                    raise AssertionError(
+                        "canonical CLI discovery must not use repository-wide latest"
+                    )
+                if "/tags?" in url:
+                    self.tags_requests.append(url)
+                    if "page=2" in url:
+                        return [{"name": tag}]
+                    return [{"name": f"tauri-v2.0.{n}"} for n in range(100)]
+                if f"/releases/tags/{tag}" in url:
+                    return {
+                        "tag_name": tag, "draft": False, "prerelease": False,
+                        "assets": [{
+                            "name": amd_asset,
+                            "browser_download_url": (
+                                f"https://github.com/{repo}/releases/download/{tag}/{amd_asset}"
+                            ),
+                            "digest": f"sha256:{amd_sha}",
+                        }],
+                    }
+                raise AssertionError(f"unexpected JSON URL: {url}")
+
+            def get_bytes(self, url: str, *, max_bytes: int) -> bytes:
+                if url.endswith("/LICENSE-MIT"):
+                    return license_mit
+                if url.endswith("/LICENSE-APACHE-2.0"):
+                    return license_apache
+                raise AssertionError(f"unexpected bytes URL: {url}")
+
+        client = PagedTagClient()
+        with mock.patch.object(
+            update_module, "RECIPES", {"cargo-tauri": object()}
+        ):
+            result = update_module._discover(client)
+        candidate = result["cargo-tauri"]
+        self.assertEqual(candidate.tag, tag)
         self.assertEqual(candidate.version, "2.12.2")
         self.assertIn("amd64", candidate.targets)
+        self.assertNotIn("arm64", candidate.targets)
+        self.assertTrue(any("page=2" in url for url in client.tags_requests))
 
 
 class CliTest(unittest.TestCase):

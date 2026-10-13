@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from scripts.catalog import KNOWN_PACKAGES, check_known_names
+from scripts.catalog import KNOWN_PACKAGES, arches_for, check_known_names
 from scripts.manifest import (
     deb_filename,
     debian_version,
@@ -12,7 +12,6 @@ from scripts.manifest import (
 )
 from scripts.release_manifest import load_manifest_data
 from scripts.manifest import default_manifest_path
-from tests.test_source_build import identity_document, source_manifest_document
 
 TARGET = {
     "url": "https://github.com/example/example/releases/download/v1.0.0/x.tar.gz",
@@ -26,25 +25,8 @@ def _document() -> dict:
     return copy.deepcopy(load_manifest_data(default_manifest_path()))
 
 
-def _with_reviewed_extra(document: dict) -> dict:
-    """Return a source fixture as a valid production document.
-
-    P1/P2 helpers predate the production recipe and carry no
-    `extra_license_urls` and a placeholder `license_url`; production parsing
-    requires the reviewed tag-bound dual-license URLs, so tests that exercise
-    source-target validation add them here rather than weakening the validator.
-    """
-    document["packages"][0]["license_url"] = (  # type: ignore[index]
-        "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.2/LICENSE-MIT"
-    )
-    document["packages"][0]["extra_license_urls"] = [  # type: ignore[index]
-        "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.2/LICENSE-APACHE-2.0"
-    ]
-    return document
-
-
 class ManifestTest(unittest.TestCase):
-    def test_pins_the_reviewed_catalog_with_both_architectures(self) -> None:
+    def test_pins_the_reviewed_catalog_with_reviewed_architectures(self) -> None:
         manifest = load_manifest()
         self.assertEqual(
             sorted(p.name for p in manifest.packages),
@@ -52,11 +34,8 @@ class ManifestTest(unittest.TestCase):
         )
         self.assertEqual(manifest.debian_revision, "-1")
         for pkg in manifest.packages:
-            self.assertSetEqual(set(pkg.targets), {"amd64", "arm64"})
+            self.assertSetEqual(set(pkg.targets), set(arches_for(pkg.name)))
             for arch, target in pkg.targets.items():
-                if target.is_source_target:
-                    self.assertEqual((target.url, target.sha256, target.archive_member), ("", "", ""))
-                    continue
                 self.assertTrue(target.url.startswith("https://github.com/"))
                 self.assertRegex(target.sha256, r"^[0-9a-f]{64}$")
                 self.assertNotIn("latest", target.url)
@@ -140,6 +119,7 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(kandev.targets["arm64"].bundle_type, "kandev-standard")
         self.assertEqual(kandev.license, "AGPL-3.0-or-later")
         cargo = by_name["cargo-tauri"]
+        self.assertEqual(set(cargo.targets), {"amd64"})
         self.assertEqual(cargo.targets["amd64"].archive_member, "cargo-tauri")
         self.assertEqual(cargo.targets["amd64"].binary, "cargo-tauri")
         self.assertEqual(cargo.license, "MIT OR Apache-2.0")
@@ -164,12 +144,10 @@ class ManifestTest(unittest.TestCase):
                          "libc6 (>= 2.17), libgcc-s1")
         self.assertEqual(by_name["uv"].targets["arm64"].depends,
                          "libc6 (>= 2.28), libgcc-s1")
-        cargo_depends = (
-            "cargo, libbz2-1.0 (>= 1.0.8-6), libc6 (>= 2.39), "
-            "libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)"
+        self.assertEqual(
+            by_name["cargo-tauri"].targets["amd64"].depends,
+            "cargo, libc6 (>= 2.34), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)",
         )
-        self.assertEqual(by_name["cargo-tauri"].targets["amd64"].depends, cargo_depends)
-        self.assertEqual(by_name["cargo-tauri"].targets["arm64"].depends, cargo_depends)
         for name in ("sccache", "rustfs-cli", "zellij", "starship", "zoxide"):
             for arch in ("amd64", "arm64"):
                 self.assertEqual(by_name[name].targets[arch].depends, "", msg=f"{name} {arch}")
@@ -177,12 +155,15 @@ class ManifestTest(unittest.TestCase):
     def test_expected_sets_are_derived_from_the_manifest(self) -> None:
         manifest = load_manifest()
         expected = expected_debs(manifest)
-        self.assertEqual(len(expected), len(manifest.packages) * 2)
+        self.assertEqual(len(expected), 21)
         self.assertIn("git-delta_0.20.1-1_amd64.deb", expected)
         self.assertIn("sccache_0.18.0-1_arm64.deb", expected)
+        self.assertIn("cargo-tauri_2.12.2-1_amd64.deb", expected)
+        self.assertNotIn("cargo-tauri_2.12.2-1_arm64.deb", expected)
+        self.assertEqual(len(expected_debs_for_arch(manifest, "amd64")), 11)
+        self.assertEqual(len(expected_debs_for_arch(manifest, "arm64")), 10)
         for arch in ("amd64", "arm64"):
             per_arch = expected_debs_for_arch(manifest, arch)
-            self.assertEqual(len(per_arch), len(manifest.packages))
             self.assertTrue(all(name.endswith(f"_{arch}.deb") for name in per_arch))
         with self.assertRaises(ValueError):
             expected_debs_for_arch(manifest, "i386")
@@ -240,6 +221,26 @@ class ManifestTest(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             parse_manifest(data)
         self.assertIn("missing arch target", str(ctx.exception))
+
+    def test_rejects_an_extra_unsupported_architecture(self) -> None:
+        data = _document()
+        cargo = next(e for e in data["packages"] if e["name"] == "cargo-tauri")
+        cargo["targets"]["arm64"] = copy.deepcopy(cargo["targets"]["amd64"])
+        with self.assertRaises(ValueError):
+            parse_manifest(data)
+
+    def test_rejects_unknown_asset_target_fields_including_removed_source_build(self) -> None:
+        for name in ("cargo-tauri", "zellij"):
+            with self.subTest(package=name):
+                data = _document()
+                entry = next(e for e in data["packages"] if e["name"] == name)
+                entry["targets"]["amd64"]["source_build"] = {
+                    "repository": "https://github.com/tauri-apps/tauri",
+                    "tag": "tauri-cli-v2.12.2",
+                }
+                with self.assertRaises(ValueError) as ctx:
+                    parse_manifest(data)
+                self.assertIn("unknown field", str(ctx.exception))
 
     def test_rejects_unsafe_archive_members(self) -> None:
         for member in ("", "/etc/passwd", "../escape", "a/../../escape",
@@ -316,62 +317,6 @@ class ManifestTest(unittest.TestCase):
         for name in ("zellij", "starship", "git-delta", "rustfs-cli", "sccache"):
             self.assertEqual(by_name[name].conflicts, "", msg=name)
             self.assertEqual(by_name[name].replaces, "", msg=name)
-
-    def test_a_source_target_declares_no_asset_fields(self) -> None:
-        """A source-built target names no asset, so it must carry no asset fields."""
-        manifest = parse_manifest(_with_reviewed_extra(source_manifest_document()))
-        target = manifest.packages[0].targets["arm64"]
-        self.assertTrue(target.is_source_target)
-        self.assertEqual((target.url, target.sha256, target.archive_member), ("", "", ""))
-        for field in ("url", "sha256", "archive_member", "install_tree"):
-            with self.subTest(field=field):
-                document = _with_reviewed_extra(source_manifest_document())
-                document["packages"][0]["targets"]["arm64"][field] = "x"  # type: ignore[index]
-                with self.assertRaisesRegex(ValueError, "built from source and must not declare"):
-                    parse_manifest(document)
-
-    def test_a_source_target_names_no_additional_archive_members(self) -> None:
-        document = _with_reviewed_extra(source_manifest_document())
-        document["packages"][0]["targets"]["arm64"]["additional_binaries"] = {  # type: ignore[index]
-            "vendor/uv": "uv"
-        }
-        with self.assertRaisesRegex(ValueError, "names no additional archive members"):
-            parse_manifest(document)
-
-    def test_a_source_target_is_closed(self) -> None:
-        document = _with_reviewed_extra(source_manifest_document())
-        document["packages"][0]["targets"]["arm64"]["payload_url"] = (  # type: ignore[index]
-            "https://example.invalid/cargo-tauri"
-        )
-        with self.assertRaisesRegex(ValueError, "unknown keys"):
-            parse_manifest(document)
-
-    def test_a_source_target_must_name_the_reviewed_pair(self) -> None:
-        """Only the reviewed source-built package/architecture may declare one."""
-        document = source_manifest_document()
-        entry = document["packages"][0]
-        entry["name"] = "zellij"  # type: ignore[index]
-        # zellij has no extra licenses; keep the fixture otherwise valid so the
-        # refusal names the source pair rather than the license provenance.
-        entry["extra_license_urls"] = []  # type: ignore[index]
-        asset = {
-            "source_build": identity_document(),
-            "binary": "zellij",
-        }
-        entry["targets"] = {"amd64": asset, "arm64": dict(asset)}  # type: ignore[index]
-        with self.assertRaisesRegex(ValueError, "may not be built from source"):
-            parse_manifest(document)
-
-    def test_every_committed_target_is_still_an_asset_target(self) -> None:
-        """The ten reviewed asset packages stay asset targets; cargo-tauri adds one source."""
-        for package in load_manifest().packages:
-            for arch, target in package.targets.items():
-                if (package.name, arch) == ("cargo-tauri", "arm64"):
-                    self.assertIsNotNone(target.source_build, msg=f"{package.name} {arch}")
-                    self.assertTrue(target.is_source_target, msg=f"{package.name} {arch}")
-                    continue
-                self.assertIsNone(target.source_build, msg=f"{package.name} {arch}")
-                self.assertFalse(target.is_source_target, msg=f"{package.name} {arch}")
 
     def test_reviewed_extra_metadata_is_required_and_closed(self) -> None:
         data = _document()

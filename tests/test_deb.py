@@ -66,10 +66,11 @@ class DebianControlTest(unittest.TestCase):
     def test_description_makes_no_unverified_c_libc_claim(self) -> None:
         manifest = load_manifest()
         for name, pkg in self._by_name().items():
-            control = debian_control(pkg, "arm64", manifest, installed_size_kb=1)
-            self.assertIn(" Repackaged upstream binary for a private APT repository.\n",
-                          control, msg=name)
-            self.assertNotIn("musl", control, msg=name)
+            for arch in sorted(pkg.targets):
+                control = debian_control(pkg, arch, manifest, installed_size_kb=1)
+                self.assertIn(" Repackaged upstream binary for a private APT repository.\n",
+                              control, msg=f"{name} {arch}")
+                self.assertNotIn("musl", control, msg=f"{name} {arch}")
 
 
 class StagePackageTest(unittest.TestCase):

@@ -185,10 +185,16 @@ def _cargo_tauri_external(
 
 
 def run_installed(manifest: Manifest, arch: str, prefix: Path = Path("/")) -> list[str]:
-    """Run each installed binary with its reviewed check; stops on the first failure."""
+    """Run each installed binary with its reviewed check; stops on the first failure.
+
+    Packages without a target for this architecture are skipped: the absence
+    of cargo-tauri on ARM is normal and native smoke never requires it.
+    """
     findings: list[str] = []
     scratch = Path(os.environ.get("TMPDIR", "/tmp")) / "apt-smoke-run"
     scratch.mkdir(parents=True, exist_ok=True)
     for pkg in sorted(manifest.packages, key=lambda p: p.name):
+        if arch not in pkg.targets:
+            continue
         findings.extend(run_package(pkg, arch, prefix=prefix, scratch=scratch))
     return findings

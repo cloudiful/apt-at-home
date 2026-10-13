@@ -35,7 +35,7 @@ def _declared_identities(release: TrustedRelease) -> dict[str, tuple[str, str, s
             pkg.name, debian_version(pkg, release.manifest), arch,
         )
         for pkg in release.manifest.packages
-        for arch in ARCHES
+        for arch in pkg.targets
     }
 
 

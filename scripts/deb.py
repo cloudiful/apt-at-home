@@ -53,11 +53,11 @@ def finalize_package_stage(
 ) -> None:
     """Write the Debian metadata for a staged tree and normalise it.
 
-    This is the second half of staging, split out so a caller that adds its own
-    payload after `stage_package` — the candidate's notice files and its owned
-    `bunx` alias — can call it again and get a correct `Installed-Size`, correct
-    modes, and clamped mtimes over the finished tree. It writes the copyright,
-    the changelog, and the control file, so it is safe to run more than once.
+    This is the second half of staging, split out so a caller that adds
+    payload after `stage_package` can call it again and get a correct
+    `Installed-Size`, correct modes, and clamped mtimes over the finished
+    tree. It writes the copyright, the changelog, and the control file, so it
+    is safe to run more than once.
     """
     debian_dir = stage / "DEBIAN"
     doc_dir = stage / "usr" / "share" / "doc" / pkg.name
@@ -101,10 +101,6 @@ def stage_package(
     Exactly one payload is staged: a flat `binary_file`, or a reviewed `tree` as
     (archive, validated inventory, required paths). Additional flat commands are
     supplied only by the reviewed target mapping.
-
-    `license_bodies` defaults to the reviewed vendor licenses for a catalog
-    package. The candidate passes its own bodies explicitly, because it is not a
-    catalog package and has no entry in the shared license catalog.
     """
     if (binary_file is None) == (tree is None):
         raise ValueError("stage_package needs exactly one of binary_file or tree")
@@ -149,9 +145,8 @@ def _apply_deterministic_modes(stage: Path, *, keep_executables: bool) -> None:
     archive member declared (`bin/nvim`, `less.sh`), so the policy is not
     flattened to one mode for the whole package.
 
-    A symlink is never followed: the candidate's owned `bunx` alias points at
-    `bun`, and chmod-ing or stat-ing through it would rewrite the target's mode
-    rather than the link's own entry.
+    A symlink is never followed: chmod-ing or stat-ing through it would rewrite
+    the target's mode rather than the link's own entry.
     """
     for directory in sorted(p for p in stage.rglob("*") if p.is_dir() and not p.is_symlink()):
         directory.chmod(0o755)

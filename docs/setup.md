@@ -164,7 +164,8 @@ the exact three steps, reproduced here for operators.
   parser.
 - The command-line packages are `bottom` (`btm`), `git-delta` (`delta`),
   `neovim` (`nvim`), `rustfs-cli` (`rc`), `sccache`, `starship`, `uv` (`uv` and
-  `uvx`), `zellij`, and `zoxide`. Zoxide shell initialization is opt-in; users
+  `uvx`), `zellij`, and `zoxide` for both architectures, plus `cargo-tauri`
+  (`cargo-tauri` and `cargo tauri`, requires `cargo`) for amd64 only. Zoxide shell initialization is opt-in; users
   may add `eval "$(zoxide init bash)"` to their own Bash configuration. Package
   installation never edits shell configuration.
 

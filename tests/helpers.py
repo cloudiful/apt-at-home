@@ -65,6 +65,8 @@ def make_gpg_home_with_key() -> tuple[tempfile.TemporaryDirectory[str], Path, st
 
 def write_target_archive(dest: Path, pkg: Package, arch: str, payload: bytes) -> Path:
     """Write the fake upstream archive for one pinned target, flat or tree-shaped."""
+    if arch not in pkg.targets:
+        raise ValueError(f"{pkg.name} publishes no {arch} release asset")
     target = pkg.targets[arch]
     if target.install_tree:
         parser_paths = tuple(f"lib/nvim/parser/{parser}.so" for parser in parsers_for(pkg.name))
@@ -88,7 +90,11 @@ def stage_fixture_target(
 
     A flat target stages its fake binary; a tree target stages a fake archive of its
     required paths, so the fixture matches the production payload shape exactly.
+    Only an architecture in `pkg.targets` may be staged: cargo-tauri is AMD-only,
+    so requesting its absent ARM target is refused rather than invented.
     """
+    if arch not in pkg.targets:
+        raise ValueError(f"{pkg.name} publishes no {arch} release asset")
     target = pkg.targets[arch]
     archive = write_target_archive(root / "src" / f"{pkg.name}-{arch}.tar.gz", pkg, arch, payload)
     if target.install_tree:
@@ -112,6 +118,20 @@ def stage_fixture_target(
         pkg=pkg, arch=arch, manifest=manifest, binary_file=binary,
         additional_binary_files=additional, stage_root=stage_root,
     )
+
+
+def fixture_targets(manifest: Manifest) -> list[tuple[Package, str]]:
+    """Every (package, arch) the manifest actually declares, in stable order.
+
+    cargo-tauri contributes only its AMD target; every other package contributes
+    both. Fixture builders must iterate this rather than a global arch tuple,
+    so the pool holds 11 AMD and 10 ARM debs for the current catalog.
+    """
+    return [
+        (pkg, arch)
+        for pkg in sorted(manifest.packages, key=lambda p: p.name)
+        for arch in sorted(pkg.targets)
+    ]
 
 
 def make_tree_archive(path: Path, entries: list[tuple[str, str, object, int]]) -> Path:

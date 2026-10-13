@@ -69,79 +69,9 @@ class BashArrayShellTest(unittest.TestCase):
     A container job runs `run` steps with `sh` unless it says otherwise, so an
     array like `args=(...)` fails before the command it was assembling ever
     starts. Every job that uses one must therefore have an effective Bash shell,
-    declared on the job or on the step.
+    declared on the job or on the step. The ordinary CI build no longer routes
+    through a Bash array; only the publish routing steps do.
     """
-
-    def build_step_body(self) -> str:
-        """The Python job's repository-build run body, exactly as committed."""
-        job = job_block(read_workflow("ci.yml"), "python")
-        bodies = [b for b in run_bodies(job) if "scripts.repo build" in b]
-        self.assertEqual(len(bodies), 1, "the Python job builds the repository once")
-        return bodies[0]
-
-    def run_build_step_under_bash(self, *, with_artifact: bool) -> list[str]:
-        """Execute the real step body in Bash with `uv` replaced by a recorder."""
-        import os
-        import subprocess
-        import tempfile
-
-        body = self.build_step_body()
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            artifacts = root / "dist" / "source-artifacts"
-            artifacts.mkdir(parents=True)
-            if with_artifact:
-                # The producer's record is what says this run compiled something.
-                (artifacts / "build-provenance.json").write_text("{}", encoding="utf-8")
-            recorder = root / "uv"
-            recorder.write_text(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" >>\"$ARGV_LOG\"\n", encoding="utf-8"
-            )
-            recorder.chmod(0o755)
-            log = root / "argv.log"
-            script = root / "step.sh"
-            script.write_text(body, encoding="utf-8")
-            environment = {
-                **os.environ,
-                "PATH": f"{root}:{os.environ['PATH']}",
-                "ARGV_LOG": str(log),
-            }
-            completed = subprocess.run(
-                ["bash", str(script)],
-                cwd=root, env=environment, capture_output=True, text=True,
-            )
-            self.assertEqual(
-                completed.returncode, 0,
-                f"the step must run under Bash: {completed.stderr}",
-            )
-            self.assertTrue(log.is_file(), "uv was never invoked")
-            return log.read_text(encoding="utf-8").splitlines()
-
-    def test_the_build_step_runs_under_bash_not_a_posix_shell(self) -> None:
-        """The committed body is a syntax error for `sh`, and valid for Bash."""
-        body = self.build_step_body()
-        posix = subprocess.run(
-            ["sh", "-n", "-c", body], capture_output=True, text=True
-        )
-        self.assertNotEqual(
-            posix.returncode, 0,
-            "the guard is only meaningful while `sh` still rejects this body",
-        )
-        self.assertEqual(
-            subprocess.run(["bash", "-n", "-c", body], capture_output=True).returncode, 0
-        )
-
-    def test_the_no_artifact_branch_invokes_the_plain_build(self) -> None:
-        argv = self.run_build_step_under_bash(with_artifact=False)
-        self.assertEqual(argv, ["run", "python", "-m", "scripts.repo",
-                                "build", "--output", "dist/repo"])
-        self.assertNotIn("--source-artifacts", argv)
-
-    def test_the_artifact_branch_appends_the_same_run_artifact(self) -> None:
-        argv = self.run_build_step_under_bash(with_artifact=True)
-        self.assertEqual(argv, ["run", "python", "-m", "scripts.repo",
-                                "build", "--output", "dist/repo",
-                                "--source-artifacts", "dist/source-artifacts"])
 
     def array_jobs(self) -> list[tuple[str, str, str]]:
         found: list[tuple[str, str, str]] = []
@@ -169,22 +99,16 @@ class BashArrayShellTest(unittest.TestCase):
             with self.subTest(workflow=workflow, job=name):
                 self.assertIn("shell: bash", job)
 
-    def test_the_repair_is_scoped_to_the_python_job_only(self) -> None:
-        """No workflow-wide default shell, and no unrelated job gains one."""
-        ci = read_workflow("ci.yml")
-        self.assertEqual(ci.count("shell: bash"), 1, "only the python job declares it")
-        text = ci
-        for name in re.findall(r"\n  ([A-Za-z0-9_-]+):", text):
-            job = job_block(text, name)
-            if name == "python":
-                continue
-            with self.subTest(job=name):
-                self.assertNotIn("shell: bash", job)
-                self.assertNotIn("defaults:", job)
+    def test_the_ordinary_build_invokes_no_source_routing(self) -> None:
+        """The simplified CI build is a plain asset-only invocation."""
+        job = job_block(read_workflow("ci.yml"), "python")
+        self.assertIn("python -m scripts.repo build --output dist/repo", job)
+        self.assertNotIn("--source-artifacts", job)
+        self.assertNotIn("--reuse-published-source", job)
+        self.assertNotIn("SOURCE_ROUTING", job)
 
 
-# The two jobs that run the complete Python suite. They compare this build against
-# the real base release, so they need git and the history that release lives in.
+# The two jobs that run the complete Python suite.
 FULL_SUITE_JOBS = (("ci.yml", "python"), ("publish.yml", "publish"))
 
 
@@ -214,97 +138,27 @@ class CheckoutHistoryTest(unittest.TestCase):
                 self.assertLess(tools, checkout, "git must exist before checkout runs")
                 self.assertIn("git", install_packages(job))
 
-    def test_the_full_suite_jobs_keep_the_history_the_baseline_needs(self) -> None:
-        for workflow, job_name in FULL_SUITE_JOBS:
-            with self.subTest(workflow=workflow):
-                job = job_block(read_workflow(workflow), job_name)
-                self.assertRegex(job, r"fetch-depth:\s*0")
-
-    def test_the_native_producer_never_fetches_full_history(self) -> None:
-        """The producer needs one reviewed commit, not the whole repository.
-
-        Its own checkout stays shallow, and the upstream source tree is fetched
-        by the reviewed checkout step rather than by a full clone: Tauri history
-        would cost gigabytes on the runner for nothing the build reads.
-        """
-        for workflow in ("ci.yml", "publish.yml"):
-            with self.subTest(workflow=workflow):
-                producer = job_block(read_workflow(workflow), "source-producer")
-                self.assertNotRegex(producer, r"fetch-depth:\s*0")
-                self.assertIn("scripts.tauri_source checkout", producer)
-                self.assertIn("--identity", producer)
-
     def test_checkout_never_persists_credentials(self) -> None:
         for workflow, job_name in FULL_SUITE_JOBS:
             with self.subTest(workflow=workflow, job=job_name):
                 job = job_block(read_workflow(workflow), job_name)
                 self.assertIn("persist-credentials: false", job)
 
+    def test_no_source_producer_job_remains(self) -> None:
+        """The source-build producer and its routing are gone, not disabled."""
+        for workflow in ("ci.yml", "publish.yml"):
+            text = read_workflow(workflow)
+            self.assertNotIn("source-producer", text)
+            self.assertNotIn("tauri_source", text)
+            self.assertNotIn("source-plan", text)
+            self.assertNotIn("SOURCE_ROUTING", text)
 
-class SuiteGitOwnershipTest(unittest.TestCase):
-    """The suite may trust its own workspace, and nothing wider.
-
-    Git refuses a repository whose owner differs from the user reading it, and
-    `actions/checkout` records its safe.directory under its own temporary HOME
-    rather than the one this step runs with. The fix is the narrowest one
-    available: this command's own environment, naming the directory it runs in.
-    """
-
-    def suite_step(self, workflow: str, job_name: str) -> str:
-        """The run body of the job's unittest step."""
-        job = job_block(read_workflow(workflow), job_name)
-        bodies = run_bodies(job)
-        matched = [b for b in bodies if "unittest discover" in b]
-        self.assertEqual(len(matched), 1, "the job runs the suite exactly once")
-        return matched[0]
-
-    def test_both_full_suite_jobs_trust_only_their_own_workspace(self) -> None:
-        for workflow, job_name in FULL_SUITE_JOBS:
-            with self.subTest(workflow=workflow):
-                body = self.suite_step(workflow, job_name)
-                self.assertIn("GIT_CONFIG_COUNT=1", body)
-                self.assertIn("GIT_CONFIG_KEY_0=safe.directory", body)
-                # The value is expanded by the shell where the step runs, so it
-                # is the real workspace and not a host/container mismatch.
-                self.assertIn('GIT_CONFIG_VALUE_0="$PWD"', body)
-                self.assertNotIn("${{", body)
-
-    def test_the_trust_is_scoped_to_that_command_and_writes_nothing(self) -> None:
-        for workflow, job_name in FULL_SUITE_JOBS:
-            with self.subTest(workflow=workflow):
-                body = self.suite_step(workflow, job_name)
-                # Environment prefixes on the command itself, not `git config`.
-                self.assertNotIn("git config", body)
-                for flag in ("--global", "--system", "--file"):
-                    self.assertNotIn(flag, body)
-                # No wildcard and no parent root: one exact directory only.
-                self.assertNotIn('GIT_CONFIG_VALUE_0="*"', body)
-                self.assertNotIn('GIT_CONFIG_VALUE_0="/"*', body)
-                self.assertNotIn("chown", body)
-                self.assertNotIn("chmod", body)
-
-    def test_the_exact_suite_command_is_preserved(self) -> None:
-        for workflow, job_name in FULL_SUITE_JOBS:
-            with self.subTest(workflow=workflow):
-                body = self.suite_step(workflow, job_name)
-                self.assertIn("uv run python -m unittest discover -s tests", body)
-
-    def test_only_the_suite_step_carries_the_ownership_config(self) -> None:
-        """The trust must not leak into the job environment or its other steps."""
+    def test_shallow_checkout_is_sufficient_without_source_history(self) -> None:
+        """Normal shallow checkouts remain; no job requires full history."""
         for workflow, job_name in FULL_SUITE_JOBS:
             with self.subTest(workflow=workflow):
                 job = job_block(read_workflow(workflow), job_name)
-                self.assertEqual(job.count("GIT_CONFIG_COUNT"), 1)
-                lines = job.splitlines()
-                carrying = [i for i, line in enumerate(lines) if "GIT_CONFIG_COUNT" in line]
-                self.assertEqual(len(carrying), 1)
-                # It belongs to the run block that runs the suite, not to the
-                # job-level env block above the steps.
-                suite_line = next(
-                    i for i, line in enumerate(lines) if "unittest discover" in line
-                )
-                self.assertGreater(carrying[0], suite_line - 4)
-                self.assertNotIn("safe.directory", job.split("steps:")[0])
+                self.assertNotRegex(job, r"fetch-depth:\s*0")
 
 
 class WorkflowStructureTest(unittest.TestCase):
@@ -434,15 +288,9 @@ class WorkflowStructureTest(unittest.TestCase):
         import_step = text.split("Import signing key")[1].split("- name:")[0]
         self.assertIn('chmod 600 "$RUNNER_TEMP/release-private.asc"', import_step)
         self.assertIn("gpg --batch --import", import_step)
-        # The key is never an artifact and never echoed. The producer job uploads
-        # its own compilation, so the rule is scoped to the job that holds the key.
+        # The key is never an artifact and never echoed.
         publish = job_block(text, "publish")
         self.assertNotIn("upload-artifact", publish)
-        for path in (
-            "release-private.asc", "$GNUPGHOME", "APT_RELEASE_SIGNING_KEY",
-            "APT_SIGNING_KEY_FILE",
-        ):
-            self.assertNotIn(path, job_block(text, "source-producer"), path)
         cleanup = text.split("Scrub isolated key material")[1]
         self.assertIn("if: always()", cleanup)
         self.assertIn("$RUNNER_TEMP/release-private.asc", cleanup)

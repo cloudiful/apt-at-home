@@ -65,7 +65,7 @@ def _build_pool(root: Path, manifest: Manifest) -> Path:
     pool = root / "pool"
     pool.mkdir(parents=True, exist_ok=True)
     for pkg in manifest.packages:
-        for arch in ("amd64", "arm64"):
+        for arch in sorted(pkg.targets):
             stage = stage_fixture_target(
                 root, pkg, arch, manifest, fake_elf(arch), root / "stages",
             )
@@ -282,10 +282,12 @@ class CliTest(unittest.TestCase):
         return path
 
     def test_count_is_derived_from_the_manifest(self) -> None:
-        from scripts.manifest import default_manifest_path
+        from scripts.manifest import default_manifest_path, expected_debs
         from scripts.release_manifest import canonical_bytes, load_manifest_data
 
         def count_of(packages: list[str]) -> int:
+            from scripts.manifest import parse_manifest
+
             data = load_manifest_data(default_manifest_path())
             data["packages"] = [
                 e for e in data["packages"] if e["name"] in packages
@@ -294,7 +296,7 @@ class CliTest(unittest.TestCase):
             path.write_bytes(canonical_bytes(data))
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(main(["--manifest", str(path), "--count"]), 0)
-            return len(packages) * 2
+            return len(expected_debs(parse_manifest(data)))
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -302,6 +304,7 @@ class CliTest(unittest.TestCase):
             self.assertEqual(
                 count_of(["zellij", "starship", "git-delta", "rustfs-cli", "sccache"]), 10
             )
+            self.assertEqual(count_of(["cargo-tauri"]), 1)
 
     def test_a_mode_is_required(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stderr(io.StringIO()):

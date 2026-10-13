@@ -94,7 +94,7 @@ def _build_debs(root: Path, manifest: Manifest) -> None:
     pool = root / "pool"
     pool.mkdir(parents=True, exist_ok=True)
     for pkg in manifest.packages:
-        for arch in ARCHES:
+        for arch in sorted(pkg.targets):
             stage = stage_fixture_target(
                 root, pkg, arch, manifest, f"fake-{pkg.name}-{arch}".encode(), root / "stages",
             )

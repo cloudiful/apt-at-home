@@ -8,7 +8,7 @@ from pathlib import Path
 
 from scripts.common import sha256_file
 from scripts.deb import build_deb
-from scripts.manifest import deb_filename, default_manifest_path, load_manifest
+from scripts.manifest import deb_filename, default_manifest_path, expected_debs_for_arch, load_manifest
 from scripts.metadata import generate_release, write_indices
 from scripts.release_manifest import MANIFEST_NAME, manifest_binding_fields, write_manifest_artifact
 from scripts.reprepro_adapter import generate_packages
@@ -72,7 +72,7 @@ def build_complete_tree(
     pool = root / "pool"
     pool.mkdir(parents=True, exist_ok=True)
     for pkg in manifest.packages:
-        for arch in ("amd64", "arm64"):
+        for arch in sorted(pkg.targets):
             stage = stage_fixture_target(
                 root, pkg, arch, manifest, f"fake-{pkg.name}-{arch}".encode(), root / "stages",
             )
@@ -190,12 +190,22 @@ class VerifyTest(unittest.TestCase):
                 self.assertTrue(verify_tree(root))
                 target = root / "releases" / "20260102-030405" / "dists" / "stable" / "main" / "binary-amd64" / "Packages"
                 stanzas = target.read_text().strip().split("\n\n")
-                self.assertEqual(len(stanzas), len(manifest.packages))
+                self.assertEqual(len(stanzas), len(expected_debs_for_arch(manifest, "amd64")))
+                self.assertEqual(len(stanzas), 11)
                 # The pool still holds every .deb the manifest declares, so only
                 # the index omission can reveal the defect.
                 self.assertEqual(
                     len(list((root / "pool").glob("*.deb"))),
-                    len(manifest.packages) * 2,
+                    21,
+                )
+                # The ARM index carries one fewer package: cargo-tauri is AMD-only.
+                arm_target = root / "releases" / "20260102-030405" / "dists" / "stable" / "main" / "binary-arm64" / "Packages"
+                self.assertEqual(
+                    len(arm_target.read_text().strip().split("\n\n")),
+                    len(expected_debs_for_arch(manifest, "arm64")),
+                )
+                self.assertEqual(
+                    len(arm_target.read_text().strip().split("\n\n")), 10
                 )
                 target.write_text("\n\n".join(stanzas[:-1]) + "\n", encoding="utf-8")
                 resign_tree(root, "20260102-030405", key_home=home, key_id=key_id)
@@ -238,13 +248,48 @@ class VerifyTest(unittest.TestCase):
                                                    key_home=home, key_id=key_id)
                         target = root / "releases" / "20260102-030405" / "dists" / "stable" / "main" / "binary-arm64" / "Packages"
                         stanzas = target.read_text().strip().split("\n\n")
-                        self.assertEqual(len(stanzas), len(manifest.packages))
+                        self.assertEqual(len(stanzas), len(expected_debs_for_arch(manifest, "arm64")))
+                        self.assertEqual(len(stanzas), 10)
                         target.write_text("\n\n".join(mutate(stanzas)) + "\n", encoding="utf-8")
                         resign_tree(root, "20260102-030405", key_home=home, key_id=key_id)
                         with self.assertRaises(ValueError):
                             verify_tree(root)
                 finally:
                     tmpdir.cleanup()
+
+    def test_partial_arch_pool_has_eleven_amd_and_ten_arm(self) -> None:
+        """The ordinary catalog builds 21 debs: 11 AMD, 10 ARM."""
+        manifest = load_manifest()
+        tmpdir, home, key_id = make_gpg_home_with_key()
+        try:
+            with tempfile.TemporaryDirectory() as work:
+                root = build_complete_tree(Path(work) / "repo", "20260102-030405",
+                                           key_home=home, key_id=key_id)
+                self.assertEqual(len(list((root / "pool").glob("*_amd64.deb"))), 11)
+                self.assertEqual(len(list((root / "pool").glob("*_arm64.deb"))), 10)
+                self.assertEqual(len(list((root / "pool").glob("*.deb"))), 21)
+                self.assertEqual(
+                    len(expected_debs_for_arch(manifest, "amd64")), 11
+                )
+                self.assertEqual(
+                    len(expected_debs_for_arch(manifest, "arm64")), 10
+                )
+                self.assertTrue(verify_tree(root))
+        finally:
+            tmpdir.cleanup()
+
+    def test_absent_arm_target_is_refused_not_invented(self) -> None:
+        """Staging cargo-tauri for ARM must fail rather than invent bytes."""
+        from tests.helpers import stage_fixture_target as _stage
+
+        manifest = load_manifest()
+        cargo = next(p for p in manifest.packages if p.name == "cargo-tauri")
+        self.assertEqual(sorted(cargo.targets), ["amd64"])
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            with self.assertRaises(ValueError) as ctx:
+                _stage(root, cargo, "arm64", manifest, b"fake", root / "stages")
+            self.assertIn("publishes no arm64", str(ctx.exception))
 
 
 class ManifestBindingVerifyTest(unittest.TestCase):

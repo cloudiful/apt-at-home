@@ -274,45 +274,7 @@
           "sha256": "35c7b50266256cb6d5f757608d7097a59a5faeb0c75879ee1f504652a9b6087e",
           "archive_member": "cargo-tauri",
           "binary": "cargo-tauri",
-          "depends": "cargo, libbz2-1.0 (>= 1.0.8-6), libc6 (>= 2.39), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)"
-        },
-        "arm64": {
-          "source_build": {
-            "schema": "apt-at-home/source-build/1",
-            "repository": "https://github.com/tauri-apps/tauri",
-            "tag": "tauri-cli-v2.12.2",
-            "commit": "5b23c82ea5ba6b9aec420dd71f60493edc486aa9",
-            "lockfile": {
-              "path": "Cargo.lock",
-              "git_blob": "6b052c58398b8d6ec246d77f65a748448cd4c859",
-              "bytes": 279903,
-              "sha256": "e2bd9e7d86c343e1b484ad3e6e30528451040894279009eb3ddb49b77338e1ca"
-            },
-            "toolchain": {
-              "channel": "1.99.0"
-            },
-            "build": {
-              "manifest": "crates/tauri-cli/Cargo.toml",
-              "command": [
-                "cargo",
-                "build",
-                "--locked",
-                "--manifest-path",
-                "crates/tauri-cli/Cargo.toml",
-                "--target",
-                "aarch64-unknown-linux-gnu",
-                "--profile",
-                "release-size-optimized",
-                "--bin",
-                "cargo-tauri"
-              ],
-              "target": "aarch64-unknown-linux-gnu",
-              "profile": "release-size-optimized",
-              "binary": "cargo-tauri"
-            }
-          },
-          "binary": "cargo-tauri",
-          "depends": "cargo, libbz2-1.0 (>= 1.0.8-6), libc6 (>= 2.39), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)"
+          "depends": "cargo, libc6 (>= 2.34), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)"
         }
       }
     }

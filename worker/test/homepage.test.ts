@@ -246,14 +246,17 @@ describe('root page content', () => {
     expect(html).toContain('/etc/apt/keyrings/apt-at-home.asc');
     expect(html).toContain('Signed-By: /etc/apt/keyrings/apt-at-home.asc');
     expect(html).toContain(
-      'sudo apt update &amp;&amp; sudo apt install bottom cargo-tauri git-delta kandev neovim rustfs-cli sccache starship uv zellij zoxide',
+      'sudo apt update &amp;&amp; sudo apt install bottom git-delta kandev neovim rustfs-cli sccache starship uv zellij zoxide',
     );
+    expect(html).toContain('sudo apt install cargo-tauri');
+    expect(html).toContain('On amd64 only');
     // The two packages whose command differs from their Debian name say so.
     expect(html).toContain('<code>bottom</code> provides <code>btm</code>');
     expect(html).toContain('<code>git-delta</code> provides <code>delta</code>');
     expect(html).toContain('<code>rustfs-cli</code> provides <code>rc</code>');
     expect(html).toContain('<code>uv</code> provides <code>uv</code> and <code>uvx</code>');
-    expect(html).toContain('<code>cargo-tauri</code> provides <code>cargo-tauri</code>');
+    expect(html).toContain('<code>cargo-tauri</code>');
+    expect(html).toContain('amd64 only');
     expect(html).toContain('<code>kandev</code> package installs the standard server bundle');
     expect(html).toContain('run <code>kandev</code> to start it');
     expect(html).toContain('Zoxide Bash integration is optional');
@@ -274,13 +277,15 @@ describe('root page content', () => {
     expect(html).toContain('/etc/apt/keyrings/apt-at-home.asc');
     expect(html).toContain('Signed-By: /etc/apt/keyrings/apt-at-home.asc');
     expect(html).toContain(
-      'sudo apt update &amp;&amp; sudo apt install bottom cargo-tauri git-delta kandev neovim rustfs-cli sccache starship uv zellij zoxide',
+      'sudo apt update &amp;&amp; sudo apt install bottom git-delta kandev neovim rustfs-cli sccache starship uv zellij zoxide',
     );
+    expect(html).toContain('sudo apt install cargo-tauri');
+    expect(html).toContain('仅 amd64');
     expect(html).toContain('<code>bottom</code> 提供 <code>btm</code>');
     expect(html).toContain('<code>git-delta</code> 提供 <code>delta</code>');
     expect(html).toContain('<code>rustfs-cli</code> 提供 <code>rc</code>');
     expect(html).toContain('<code>uv</code> 提供 <code>uv</code> 和 <code>uvx</code>');
-    expect(html).toContain('<code>cargo-tauri</code> 提供 <code>cargo-tauri</code>');
+    expect(html).toContain('<code>cargo-tauri</code>');
     expect(html).toContain('<code>kandev</code> 安装标准服务器套件');
     expect(html).toContain('运行 <code>kandev</code> 才会启动服务器');
     expect(html).toContain('zoxide 的 Bash 集成是可选的');

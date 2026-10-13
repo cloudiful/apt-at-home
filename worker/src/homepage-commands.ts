@@ -37,6 +37,7 @@ export interface SourcesStepCopy {
 export interface InstallStepCopy {
   readonly title: string;
   readonly intro: string;
+  readonly amd64Intro: string;
 }
 
 /** Localized prose for the collapsed device-credential details. */
@@ -89,7 +90,9 @@ EOF</code></pre>
       <li>
         <h3>${copy.install.title}</h3>
         <p>${copy.install.intro}</p>
-        <pre><code>sudo apt update &amp;&amp; sudo apt install bottom cargo-tauri git-delta kandev neovim rustfs-cli sccache starship uv zellij zoxide</code></pre>
+        <pre><code>sudo apt update &amp;&amp; sudo apt install bottom git-delta kandev neovim rustfs-cli sccache starship uv zellij zoxide</code></pre>
+        <p>${copy.install.amd64Intro}</p>
+        <pre><code>sudo apt install cargo-tauri</code></pre>
       </li>`;
 }
 

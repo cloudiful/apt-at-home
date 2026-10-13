@@ -56,10 +56,16 @@ class Recipe:
     install_tree: str = ""
     bundle_type: str = ""
     required: tuple[str, ...] = ()
-    # The one architecture this package is compiled from reviewed upstream source
-    # because upstream publishes no release asset for it. Empty for every package
-    # whose both architectures come from official assets.
-    source_arch: str = ""
+    # The architectures this package publishes for, reviewed per package.
+    # The default covers every dual-architecture package; cargo-tauri is the
+    # one ordinary package with an explicit amd64-only policy because upstream
+    # publishes no official arm64 asset for it.
+    arches: tuple[str, ...] = ("amd64", "arm64")
+    # When true, discovery selects the highest stable tag with this recipe's
+    # own tag prefix from the repository's tag list and fetches that exact
+    # release, so a multiproduct repository's latest release for another
+    # product line can never select the wrong CLI version.
+    exact_tag_release: bool = False
     # Tree-sitter parser libraries under lib/nvim/parser, each checked for the
     # package architecture's ELF machine.
     parsers: tuple[str, ...] = ()
@@ -180,10 +186,10 @@ _BASE_RECIPES: dict[str, Recipe] = {
         binary="cargo-tauri",
         triples=MappingProxyType({"amd64": "x86_64-unknown-linux-gnu"}),
         depends=MappingProxyType({
-            "amd64": "cargo, libbz2-1.0 (>= 1.0.8-6), libc6 (>= 2.39), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)",
-            "arm64": "cargo, libbz2-1.0 (>= 1.0.8-6), libc6 (>= 2.39), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)",
+            "amd64": "cargo, libc6 (>= 2.34), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)",
         }),
-        source_arch="arm64",
+        arches=("amd64",),
+        exact_tag_release=True,
         extra_license_paths=("LICENSE-APACHE-2.0",),
     ),
 }

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from scripts.common import sha256_file
 from scripts.deb import build_deb
-from scripts.manifest import deb_filename, load_manifest
+from scripts.manifest import deb_filename, expected_debs_for_arch, load_manifest
 from scripts.metadata import generate_release, write_indices
 from scripts.reprepro_adapter import generate_packages
 from tests.helpers import stage_fixture_target
@@ -33,7 +33,7 @@ def _fake_debs(tmpdir: Path) -> tuple[list[Path], Path]:
     pool.mkdir(parents=True, exist_ok=True)
     outputs: list[Path] = []
     for pkg in manifest.packages:
-        for arch in ("amd64", "arm64"):
+        for arch in sorted(pkg.targets):
             stage = stage_fixture_target(
                 tmpdir, pkg, arch, manifest, f"fake-{pkg.name}-{arch}".encode(), tmpdir / "stages",
             )
@@ -55,17 +55,17 @@ class MetadataTest(unittest.TestCase):
             release_inputs: list[tuple[Path, str]] = []
             for arch in ("amd64", "arm64"):
                 arch_debs = sorted(pool.glob(f"*_{arch}.deb"))
-                self.assertEqual(len(arch_debs), len(manifest.packages))
+                self.assertEqual(len(arch_debs), len(expected_debs_for_arch(manifest, arch)))
                 arch_dir = output / "releases" / release_id / "dists" / "stable" / "main" / f"binary-{arch}"
                 packages, packages_gz = generate_packages(pool, arch_dir, arch_debs)
-                self.assertEqual(_packages_names(packages.read_text()), {pkg.name for pkg in manifest.packages})
+                self.assertEqual(_packages_names(packages.read_text()), {pkg.name for pkg in manifest.packages if arch in pkg.targets})
                 for stanza in packages.read_text().strip().split("\n\n"):
                     fields = _fields(stanza)
                     self.assertEqual(fields["Architecture"], arch)
                     self.assertTrue(fields["Filename"].startswith("pool/"))
                     self.assertTrue((pool / fields["Filename"][len("pool/"):]).exists())
                 self.assertEqual(
-                    len(packages.read_text().strip().split("\n\n")), len(manifest.packages)
+                    len(packages.read_text().strip().split("\n\n")), len(expected_debs_for_arch(manifest, arch))
                 )
                 packages_files[arch] = [packages, packages_gz]
                 release_inputs.append((packages, f"main/binary-{arch}/Packages"))

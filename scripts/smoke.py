@@ -11,7 +11,8 @@ Three modes, all read-only with respect to the repository:
   `smoke_package`). No upstream binary is executed.
 - ``--installed`` runs the already-installed binaries of one architecture with
   their reviewed native check (`smoke_runtime`) and requires exit status 0. Only
-  a native runner of the matching architecture may use it.
+  a native runner of the matching architecture may use it. Packages without a
+  target for that architecture are skipped.
 - ``--upgraded`` checks the dpkg state after an APT upgrade (`smoke_upgrade`).
 """
 
@@ -24,12 +25,11 @@ import tempfile
 from pathlib import Path
 
 from .common import require_tool
-from .manifest import Manifest, deb_filename, load_manifest
+from .manifest import Manifest, deb_filename, expected_debs, load_manifest
 from .smoke_package import (
     ELF_MACHINE,
     MAX_BINARY_BYTES,
     SmokeError,
-    check_cargo_tauri_docs,
     check_copyright,
     check_elf,
     check_package,
@@ -68,19 +68,19 @@ def _extract(deb: Path, destination: Path) -> Path:
 
 
 def check_pool(manifest: Manifest, pool: Path, arches: tuple[str, ...]) -> list[str]:
-    """Check every declared package of every architecture in a built pool."""
+    """Check every declared package target in a built pool."""
     findings: list[str] = []
     with tempfile.TemporaryDirectory(prefix="apt-smoke-") as scratch:
         for arch in arches:
             for pkg in sorted(manifest.packages, key=lambda p: p.name):
+                if arch not in pkg.targets:
+                    continue
                 findings.extend(check_package(pkg, arch, manifest=manifest, pool=pool))
                 extracted = _extract(
                     pool / deb_filename(pkg, arch, manifest),
                     Path(scratch) / f"{pkg.name}-{arch}",
                 )
                 check_copyright(pkg, extracted)
-                if pkg.name == "cargo-tauri":
-                    findings.append(check_cargo_tauri_docs(pkg, arch, extracted))
                 if pkg.targets[arch].bundle_type:
                     findings.extend(check_bundle_payload(pkg, arch, extracted))
                 else:
@@ -126,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         manifest = load_manifest(Path(args.manifest))
         if args.count:
-            print(len(manifest.packages) * len(ELF_MACHINE))
+            print(len(expected_debs(manifest)))
             return 0
         if args.pool:
             require_tool("dpkg-deb")
