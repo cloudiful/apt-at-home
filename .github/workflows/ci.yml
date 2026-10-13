@@ -158,11 +158,19 @@ jobs:
     env:
       UV_DEFAULT_INDEX: https://pypi.org/simple
     steps:
+      # Git is installed before this repository is checked out: actions/checkout
+      # falls back to a REST tarball when it cannot find git, and a tarball is
+      # not a repository, so the baseline comparison in the suite could not read
+      # the known release it compares against.
+      - name: Install system tools
+        run: apt-get update && apt-get install -y --no-install-recommends apt file git reprepro xz-utils gnupg python3 curl ca-certificates && rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Install system tools
-        run: apt-get update && apt-get install -y --no-install-recommends apt file git reprepro xz-utils gnupg python3 curl ca-certificates && rm -rf /var/lib/apt/lists/*
+          # The suite compares this build against the real base release, so the
+          # object it names has to be present: a shallow clone omits it and the
+          # comparison would read a different repository or fail.
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
       - name: Verify portable public dependency lock
         run: uv lock --check

@@ -42,6 +42,76 @@ def install_packages(job: str) -> list[str]:
     return []
 
 
+def step_order(job: str) -> list[str]:
+    """Each top-level step's identifying text, in the order the job runs them."""
+    steps: list[str] = []
+    for line in job.splitlines():
+        if not line.startswith("      - "):
+            continue
+        body = line.strip()[2:].strip()
+        if body.startswith("uses:") or body.startswith("name:"):
+            steps.append(body)
+    return steps
+
+
+# The two jobs that run the complete Python suite. They compare this build against
+# the real base release, so they need git and the history that release lives in.
+FULL_SUITE_JOBS = (("ci.yml", "python"), ("publish.yml", "publish"))
+
+
+class CheckoutHistoryTest(unittest.TestCase):
+    """A checkout that cannot read git, or cannot read the base, fails the suite.
+
+    `actions/checkout` silently falls back to a REST tarball when git is missing,
+    and a shallow clone omits the base commit the suite compares against. Both
+    failures look the same from here — a suite step that cannot find the
+    repository — so they are asserted structurally instead.
+    """
+
+    def test_git_is_installed_before_this_repository_is_checked_out(self) -> None:
+        for workflow, job_name in FULL_SUITE_JOBS:
+            with self.subTest(workflow=workflow):
+                job = job_block(read_workflow(workflow), job_name)
+                order = step_order(job)
+                checkout = next(
+                    (i for i, step in enumerate(order) if "actions/checkout" in step), None
+                )
+                self.assertIsNotNone(checkout, "the job checks this repository out")
+                tools = next(
+                    (i for i, step in enumerate(order) if step.startswith("name: Install system tools")),
+                    None,
+                )
+                self.assertIsNotNone(tools, "the job installs its tools explicitly")
+                self.assertLess(tools, checkout, "git must exist before checkout runs")
+                self.assertIn("git", install_packages(job))
+
+    def test_the_full_suite_jobs_keep_the_history_the_baseline_needs(self) -> None:
+        for workflow, job_name in FULL_SUITE_JOBS:
+            with self.subTest(workflow=workflow):
+                job = job_block(read_workflow(workflow), job_name)
+                self.assertRegex(job, r"fetch-depth:\s*0")
+
+    def test_the_native_producer_never_fetches_full_history(self) -> None:
+        """The producer needs one reviewed commit, not the whole repository.
+
+        Its own checkout stays shallow, and the upstream source tree is fetched
+        by the reviewed checkout step rather than by a full clone: Tauri history
+        would cost gigabytes on the runner for nothing the build reads.
+        """
+        for workflow in ("ci.yml", "publish.yml"):
+            with self.subTest(workflow=workflow):
+                producer = job_block(read_workflow(workflow), "source-producer")
+                self.assertNotRegex(producer, r"fetch-depth:\s*0")
+                self.assertIn("scripts.tauri_source checkout", producer)
+                self.assertIn("--identity", producer)
+
+    def test_checkout_never_persists_credentials(self) -> None:
+        for workflow, job_name in FULL_SUITE_JOBS:
+            with self.subTest(workflow=workflow, job=job_name):
+                job = job_block(read_workflow(workflow), job_name)
+                self.assertIn("persist-credentials: false", job)
+
+
 class WorkflowStructureTest(unittest.TestCase):
     def test_only_ci_and_publish_workflows_exist(self) -> None:
         names = sorted(path.name for path in WORKFLOWS.glob("*.yml"))
