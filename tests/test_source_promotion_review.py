@@ -226,3 +226,120 @@ def artifact_directory_for_document():
     from dataclasses import replace
     identity = source_identity()
     return None, replace(identity, tag="tauri-cli-v2.13.0", commit="a" * 40)
+
+
+class NativeCargoInvocationReviewTest(unittest.TestCase):
+    def test_real_proxy_and_toolchain_probes_work_without_global_state(self):
+        """Execute only small shell fixtures: no Rust/source compiler or ARM payload."""
+        from scripts.tauri_candidate_smoke import native_checks
+        from scripts.tauri_source import toolchain_cargo
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cli_dir, proxy_dir = root / "cli", root / "proxy"
+            pinned_dir, home = root / "toolchain", root / "private-home"
+            for directory in (cli_dir, proxy_dir, pinned_dir, home):
+                directory.mkdir()
+            cli = cli_dir / "cargo-tauri"
+            cli.write_text(
+                f'#!/bin/sh\n[ "$HOME" = "{home}" ] || exit 91\n'
+                "printf 'tauri-cli 2.12.2\\n'\n"
+            )
+            cli.chmod(0o755)
+            dispatch = (
+                '#!/bin/sh\ncase "${0##*/}" in cargo) ;; *) exit 92 ;; esac\n'
+                '[ "$1" = tauri ] && [ "$2" = --version ] || exit 93\n'
+                '[ -z "${RUSTUP_HOME+x}" ] && [ -z "${CARGO_HOME+x}" ] || exit 94\n'
+                'exec cargo-tauri --version\n'
+            )
+            rustup = proxy_dir / "rustup"
+            rustup.write_text(dispatch)
+            rustup.chmod(0o755)
+            proxy = proxy_dir / "cargo"
+            proxy.symlink_to(rustup)
+            # Real subprocess execution distinguishes cargo argv0 from rustup argv0.
+            self.assertEqual(len(native_checks(cli, "2.12.2", home, str(proxy),
+                                               require_cargo=True)), 2)
+            pinned = pinned_dir / "cargo"
+            pinned.write_text(dispatch)
+            pinned.chmod(0o755)
+
+            def trusted_lookup(argv, cwd):
+                self.assertEqual(argv, [str(rustup.absolute()), "which", "--toolchain",
+                                        "1.99.0", "cargo"])
+                return subprocess.CompletedProcess(argv, 0, f"{pinned}\n", "")
+
+            with mock.patch("scripts.tauri_source.shutil.which", return_value=str(rustup)), \
+                 mock.patch("scripts.tauri_source._run", side_effect=trusted_lookup):
+                selected = toolchain_cargo("1.99.0")
+            self.assertEqual(selected, str(pinned.absolute()))
+            self.assertEqual(len(native_checks(cli, "2.12.2", home, selected,
+                                               require_cargo=True)), 2)
+
+    def test_producer_probe_keeps_the_cargo_proxy_name_and_pinned_toolchain(self):
+        """A rustup cargo shim must be invoked by name, with the pinned toolchain.
+
+        CI failed because the probe dereferenced `/…/cargo-home/bin/cargo` to the
+        real toolchain executable, so `cargo tauri` ran as a differently named
+        command. The probe must keep the proxy path (only made absolute) and must
+        receive the pinned channel's own cargo, resolved before the private HOME
+        exists. No compiler runs here.
+        """
+        from scripts.tauri_candidate_smoke import native_checks, version_output
+        from scripts.tauri_source import toolchain_cargo
+
+        seen: list[tuple] = []
+
+        def run_probe(command, home, *, path=None):
+            seen.append((command, path))
+            return version_output("2.12.2")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "dist" / "usr" / "bin"
+            cargo_home = root / "cargo-home" / "bin"
+            toolchain_bin = cargo_home / "toolchains" / "1.99.0" / "bin"
+            for directory in (bin_dir, cargo_home, toolchain_bin):
+                directory.mkdir(parents=True)
+            cli = bin_dir / "cargo-tauri"
+            cli.write_text("#!/bin/sh\nprintf 'tauri-cli 2.12.2\\n'\n", encoding="utf-8")
+            cli.chmod(0o755)
+            # rustup installs cargo as a proxy with a differently named target.
+            real = toolchain_bin / "cargo-1.99.0"
+            real.write_text("#!/bin/sh\n", encoding="utf-8")
+            real.chmod(0o755)
+            proxy = cargo_home / "cargo"
+            proxy.symlink_to(real)
+            home = root / "isolated-home"
+            home.mkdir()
+
+            with mock.patch(
+                "scripts.tauri_candidate_smoke.run_probe", side_effect=run_probe
+            ):
+                lines = native_checks(cli, "2.12.2", home, str(proxy), require_cargo=True)
+
+            self.assertEqual(len(lines), 2)
+            self.assertTrue(any("external subcommand" in line for line in lines))
+            # The direct proof still ran against the candidate binary.
+            self.assertEqual(seen[0][0], [str(cli.absolute()), "--version"])
+            # The Cargo proof ran the proxy itself, not its dereferenced target.
+            invoked = Path(seen[1][0][0])
+            self.assertEqual(invoked, proxy.absolute())
+            self.assertEqual(invoked.name, "cargo")
+            self.assertNotEqual(invoked, real.absolute())
+            self.assertEqual(seen[1][0][1:], ["tauri", "--version"])
+            # A private HOME carried no rustup state, so the pinned toolchain
+            # cargo must come from the trusted lookup, not from that HOME.
+            rustup = root / "rustup"
+            rustup.write_text("#!/bin/sh\n", encoding="utf-8")
+            rustup.chmod(0o755)
+            calls: list[list[str]] = []
+
+            def fake_run(argv, cwd):
+                calls.append(argv)
+                return subprocess.CompletedProcess(argv, 0, f"{real}\n", "")
+
+            with mock.patch("scripts.tauri_source.shutil.which", return_value=str(rustup)), \
+                 mock.patch("scripts.tauri_source._run", side_effect=fake_run):
+                self.assertEqual(toolchain_cargo("1.99.0"), str(real.absolute()))
+            self.assertEqual(calls[0][1:], ["which", "--toolchain", "1.99.0", "cargo"])

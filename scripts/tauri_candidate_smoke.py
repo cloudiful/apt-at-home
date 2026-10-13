@@ -586,10 +586,16 @@ def native_checks(
     """Run the two bounded checks inside `home` and return their result lines."""
     # Both workflows pass a relative --upstream, so the compiled binary path is
     # relative too. The probe runs with cwd set to the isolated home, so every
-    # executable path is resolved to absolute first; the proof still runs with
-    # the private HOME/XDG tree.
-    binary = Path(binary).resolve()
-    cargo_path = str(Path(cargo).resolve()) if cargo is not None else None
+    # executable path is made absolute first; the proof still runs with the
+    # private HOME/XDG tree.
+    #
+    # `absolute()` rather than `resolve()`: Cargo on a rustup toolchain is a
+    # proxy that dispatches on its own invoked name, so dereferencing the path
+    # would replace `/…/cargo-home/bin/cargo` with the toolchain's real cargo and
+    # turn `cargo tauri` into a differently-behaving command. The basename is the
+    # behaviour; only the leading path is made absolute here.
+    binary = Path(binary).absolute()
+    cargo_path = str(Path(cargo).absolute()) if cargo is not None else None
     expected = version_output(version)
     reported = run_probe([str(binary), "--version"], home)
     if reported != expected:
@@ -604,7 +610,7 @@ def native_checks(
         return results
     probe_path = f"{binary.parent}:{Path(cargo_path).parent}"
     resolved = shutil.which(BINARY, path=probe_path)
-    if resolved is None or Path(resolved).resolve() != binary.resolve():
+    if resolved is None or Path(resolved).absolute() != binary:
         raise ValueError(
             f"cargo would not resolve {BINARY} to the candidate binary (found {resolved!r})"
         )

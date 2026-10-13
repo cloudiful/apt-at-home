@@ -242,6 +242,43 @@ class ProducerIsolationTest(unittest.TestCase):
 class ProducerModeTest(unittest.TestCase):
     """Each producer plans from the mode its own run is actually about."""
 
+    def test_both_producers_plan_against_the_real_public_gateway(self) -> None:
+        """A placeholder host fails DNS before any planning happens.
+
+        The producer verifies the served key against its pin, so the URL is not
+        configuration to be parameterised: it is the deployment this repository
+        publishes, and the two producers must name the same root so a CI run and
+        a publication run can never disagree about what is published.
+        """
+        expected = "https://deb.cloud1ful.com/"
+        seen = {}
+        for workflow in WORKFLOWS:
+            with self.subTest(workflow=workflow):
+                job = job_block(read_workflow(workflow), PRODUCER)
+                declared = re.findall(r"SOURCE_BASE_URL:\s*(\S+)", job)
+                self.assertEqual(len(declared), 1, "the producer declares one gateway root")
+                self.assertEqual(declared[0], expected)
+                self.assertNotIn("example.com", job)
+                self.assertNotIn("${{", declared[0], "the root is never a template")
+                self.assertTrue(declared[0].startswith("https://"))
+                # The plan step must spend the declared root, not another one.
+                self.assertIn('--base-url "$SOURCE_BASE_URL"',
+                              run_body(step_named(job, PLAN_STEP)))
+                seen[workflow] = declared[0]
+        self.assertEqual(len(set(seen.values())), 1,
+                         "both producers must name the same public gateway root")
+        # The pin that root has to serve is the published trust anchor.
+        self.assertIn("94D49782052D6521E0249E4178C3D292443558E2",
+                      job_block(read_workflow("ci.yml"), PRODUCER))
+
+    def test_the_production_producer_keeps_its_trust_pin(self) -> None:
+        """Repointing the root must not have moved the fingerprint it verifies."""
+        for workflow in WORKFLOWS:
+            with self.subTest(workflow=workflow):
+                job = job_block(read_workflow(workflow), PRODUCER)
+                pins = re.findall(r"SOURCE_TRUST_FINGERPRINT:\s*(\S+)", job)
+                self.assertEqual(pins, ["94D49782052D6521E0249E4178C3D292443558E2"])
+
     def test_the_publication_producer_follows_the_dispatch_inputs(self) -> None:
         job = job_block(read_workflow("publish.yml"), PRODUCER)
         # A scheduled run is always an upstream publish; a manual run may choose.

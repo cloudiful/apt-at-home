@@ -37,8 +37,10 @@ from scripts.tauri_source import (
     read_lock_object,
     resolve_tag_commit,
     source_policy,
+    toolchain_cargo,
     write_identity,
 )
+from scripts.source_artifacts import NOTICE_FILES
 from scripts.upstream_assets import repo_slug
 from tests.test_source_artifacts import (
     LOCK,
@@ -194,6 +196,102 @@ class DiscoverIdentityTest(unittest.TestCase):
                 read_identity(path)
             with self.assertRaisesRegex(ValueError, "not found"):
                 read_identity(Path(tmp) / "absent.json")
+
+
+class ToolchainCargoTest(unittest.TestCase):
+    """The probe uses the pinned toolchain's own cargo, not a rustup proxy."""
+
+    def test_rustup_resolves_the_reviewed_toolchain_cargo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rustup = root / "rustup"
+            rustup.write_text("#!/bin/sh\n", encoding="utf-8")
+            rustup.chmod(0o755)
+            real = root / "toolchains" / "1.99.0" / "bin" / "cargo"
+            real.parent.mkdir(parents=True)
+            real.write_text("#!/bin/sh\n", encoding="utf-8")
+            real.chmod(0o755)
+            seen: list[tuple] = []
+
+            def run(argv, cwd):
+                seen.append((argv, cwd))
+                return subprocess.CompletedProcess(argv, 0, f"{real}\n", "")
+
+            with mock.patch("scripts.tauri_source.shutil.which", return_value=str(rustup)):
+                with mock.patch("scripts.tauri_source._run", side_effect=run):
+                    found = toolchain_cargo("1.99.0")
+            self.assertEqual(found, str(real.absolute()))
+            self.assertEqual(seen[0][0][1:], ["which", "--toolchain", "1.99.0", "cargo"])
+            self.assertEqual(Path(seen[0][0][0]).name, "rustup")
+
+    def test_an_unresolvable_toolchain_cargo_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rustup = root / "rustup"
+            rustup.write_text("#!/bin/sh\n", encoding="utf-8")
+            rustup.chmod(0o755)
+            with mock.patch("scripts.tauri_source.shutil.which", return_value=str(rustup)):
+                with mock.patch("scripts.tauri_source._run", return_value=subprocess.CompletedProcess(
+                    ["rustup"], 1, "", "toolchain not installed")):
+                    with self.assertRaisesRegex(ValueError, "could not resolve"):
+                        toolchain_cargo("1.99.0")
+                # Ambiguous or empty answers are a refusal, never a guess.
+                for output in ("", f"{root}/a\n{root}/b\n"):
+                    with mock.patch("scripts.tauri_source._run", return_value=subprocess.CompletedProcess(
+                        ["rustup"], 0, output, "")):
+                        with self.assertRaisesRegex(ValueError, "expected exactly one"):
+                            toolchain_cargo("1.99.0")
+                # A path that is not a real file cannot be proven usable.
+                with mock.patch("scripts.tauri_source._run", return_value=subprocess.CompletedProcess(
+                    ["rustup"], 0, f"{root}/absent\n", "")):
+                    with self.assertRaisesRegex(ValueError, "not a file"):
+                        toolchain_cargo("1.99.0")
+        with mock.patch("scripts.tauri_source.shutil.which", return_value=None):
+            with self.assertRaisesRegex(ValueError, "no rustup is on PATH"):
+                toolchain_cargo("1.99.0")
+
+    def test_the_native_build_probes_the_toolchain_cargo_not_the_proxy(self) -> None:
+        """build_native resolves the pinned cargo before entering the private HOME."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            upstream = root / "checkout"
+            upstream.mkdir()
+            binary = upstream / "target" / "aarch64-unknown-linux-gnu" / (
+                "release-size-optimized"
+            ) / "cargo-tauri"
+            binary.parent.mkdir(parents=True)
+            binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            binary.chmod(0o755)
+            provenance = root / "prov"
+            provenance.mkdir()
+            notices = root / "notices"
+            notices.mkdir()
+            for name in NOTICE_FILES:
+                (notices / name).write_text("reviewed\n", encoding="utf-8")
+
+            def runner(argv, cwd):
+                return subprocess.CompletedProcess(argv, 0, CARGO_LINE if argv[0] == "cargo" else RUSTC_LINE, "")
+
+            with mock.patch("scripts.tauri_source.native_arch", return_value="arm64"), \
+                 mock.patch("scripts.tauri_source.check_checkout"), \
+                 mock.patch("scripts.tauri_source.check_elf_arch"), \
+                 mock.patch("scripts.tauri_source.check_runtime"), \
+                 mock.patch("scripts.tauri_source.check_runtime", return_value=None), \
+                 mock.patch("scripts.tauri_source.check_elf_arch", return_value=None), \
+                 mock.patch("scripts.tauri_source.toolchain_cargo", return_value="/pinned/cargo") as lookup, \
+                 mock.patch("scripts.tauri_source.native_checks", return_value=["probe ok"]) as probes, \
+                 mock.patch("scripts.tauri_source.emit_source_build", return_value={"ok": True}), \
+                 mock.patch("scripts.tauri_source.write_record", return_value=provenance / "record.json"), \
+                 mock.patch("scripts.tauri_candidate_provenance._git_output", return_value="a" * 40), \
+                 mock.patch("scripts.tauri_source._run", side_effect=runner):
+                build_native(
+                    identity=source_identity(commit=COMMIT), package="cargo-tauri",
+                    version=VERSION, upstream=upstream, output=root / "out",
+                    notices={n: notices / n for n in NOTICE_FILES},
+                )
+            lookup.assert_called_once_with("1.99.0")
+            self.assertEqual(probes.call_args.args[3], "/pinned/cargo")
+            self.assertTrue(probes.call_args.kwargs["require_cargo"])
 
 
 class _Runner:

@@ -788,6 +788,47 @@ class NativeCheckTest(unittest.TestCase):
         self.assertEqual(seen[1][1], f"{bin_dir}:{cargo_dir}")
         self.assertTrue(any("external subcommand" in line for line in lines))
 
+    def test_a_cargo_proxy_symlink_is_invoked_by_its_own_name(self) -> None:
+        """A rustup-style cargo proxy dispatches on argv0, so its link is not followed.
+
+        The proxy is a symlink to a differently named real executable, exactly how
+        a rustup toolchain installs cargo. Dereferencing it would hand the probe a
+        different command name and change its behaviour; the invoked path must
+        stay the symlink itself, and it must be absolute.
+        """
+        seen: list[tuple] = []
+
+        def run(command, home, *, path=None):
+            seen.append((command, path))
+            return smoke.version_output(VERSION)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "usr" / "bin"
+            cargo_home = root / "cargo-home" / "bin"
+            toolchains = cargo_home / "toolchains" / "1.99.0-aarch64" / "bin"
+            for directory in (bin_dir, cargo_home, toolchains):
+                directory.mkdir(parents=True)
+            cli = bin_dir / BINARY
+            cli.write_text("#!/bin/sh\n", encoding="utf-8")
+            cli.chmod(0o755)
+            # The real toolchain executable carries a different basename.
+            real = toolchains / "cargo-1.99.0"
+            real.write_text("#!/bin/sh\n", encoding="utf-8")
+            real.chmod(0o755)
+            proxy = cargo_home / "cargo"
+            proxy.symlink_to(real)
+            with mock.patch.object(smoke, "run_probe", side_effect=run):
+                smoke.native_checks(cli, VERSION, root, str(proxy), require_cargo=True)
+
+        invoked = seen[1][0][0]
+        self.assertEqual(Path(invoked), Path(proxy).absolute())
+        self.assertTrue(Path(invoked).is_absolute())
+        self.assertNotEqual(Path(invoked), real.absolute())
+        self.assertEqual(Path(invoked).name, "cargo")
+        # The private probe path still leads to the candidate binary first.
+        self.assertEqual(seen[1][1], f"{bin_dir.absolute()}:{cargo_home.absolute()}")
+
 
 class ExecutionDisableTest(unittest.TestCase):
     def setUp(self) -> None:

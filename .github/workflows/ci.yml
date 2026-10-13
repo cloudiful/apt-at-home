@@ -29,7 +29,7 @@ jobs:
       # and it is written here because this job may not read a secret. An
       # authorized rotation moves the pin in `prod` and here; until both move,
       # the plan fails with a clear mismatch instead of trusting the served key.
-      SOURCE_BASE_URL: https://apt.example.com/
+      SOURCE_BASE_URL: https://deb.cloud1ful.com/
       SOURCE_TRUST_FINGERPRINT: 94D49782052D6521E0249E4178C3D292443558E2
       # One artifact root: the plan, and whatever the compile adds to it. The
       # upstream checkout is a sibling directory so it can never be uploaded.

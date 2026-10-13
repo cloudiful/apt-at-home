@@ -326,6 +326,41 @@ def _tool_identity(runner: Runner, tool: str, upstream: Path, channel: str) -> s
     return check_tool_identity(tool, completed.stdout, channel)
 
 
+def toolchain_cargo(channel: str, *, run: Runner | None = None) -> str:
+    """Return the pinned toolchain's own cargo executable, not a rustup proxy.
+
+    A producer's PATH usually leads to `rustup`'s `cargo` shim, which picks a
+    toolchain from its own global state. The probe runs with a private HOME, so
+    that state is deliberately not inherited: asking the already installed,
+    already pinned rustup which cargo belongs to the reviewed channel resolves the
+    real executable before the isolated environment exists. The absolute path is
+    read from that trusted lookup and never from the probe's environment.
+    """
+    run = run if run is not None else _run
+    rustup = shutil.which("rustup")
+    if rustup is None:
+        raise ValueError(
+            "no rustup is on PATH, so the pinned toolchain's cargo cannot be resolved"
+        )
+    completed = run(
+        [str(Path(rustup).absolute()), "which", "--toolchain", channel, "cargo"], Path.cwd()
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise ValueError(
+            f"rustup could not resolve the {channel} toolchain's cargo: {detail}"
+        )
+    found = completed.stdout.strip().splitlines()
+    if len(found) != 1 or not found[0].strip():
+        raise ValueError(
+            f"rustup named {len(found)} cargo executables for {channel}, expected exactly one"
+        )
+    cargo = Path(found[0].strip()).absolute()
+    if not cargo.is_file():
+        raise ValueError(f"rustup named a cargo that is not a file: {cargo}")
+    return str(cargo)
+
+
 def build_native(
     *,
     identity: SourceIdentity,
@@ -374,9 +409,10 @@ def build_native(
             f"probes; this machine is {native_arch()}"
         )
     if native_arch() == arch:
+        cargo = toolchain_cargo(channel)
         with tempfile.TemporaryDirectory(prefix="apt-tauri-source-") as private:
             for line in native_checks(
-                binary, version, Path(private), shutil.which("cargo"), require_cargo=True,
+                binary, version, Path(private), cargo, require_cargo=True,
             ):
                 print(line)
     else:
