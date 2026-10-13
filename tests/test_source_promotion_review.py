@@ -228,6 +228,51 @@ def artifact_directory_for_document():
     return None, replace(identity, tag="tauri-cli-v2.13.0", commit="a" * 40)
 
 
+class SuiteGitTrustReviewTest(unittest.TestCase):
+    def test_workflow_trust_reaches_git_only_for_the_suite_workspace(self):
+        from tests.test_workflows import FULL_SUITE_JOBS, job_block, read_workflow, run_bodies
+
+        workspace = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir, home = root / "bin", root / "home"
+            bin_dir.mkdir()
+            home.mkdir()
+            uv = bin_dir / "uv"
+            uv.write_text(
+                '#!/bin/sh\n[ "$*" = "run python -m unittest discover -s tests" ] || exit 91\n'
+                '[ "$GIT_CONFIG_COUNT" = 1 ] || exit 92\n'
+                '[ "$GIT_CONFIG_KEY_0" = safe.directory ] || exit 93\n'
+                '[ "$GIT_CONFIG_VALUE_0" = "$PWD" ] || exit 94\n'
+                'git config --get-all safe.directory || exit 95\n'
+                # Simulate mismatched ownership without chown or config/ref writes.
+                'GIT_TEST_ASSUME_DIFFERENT_OWNER=1 git rev-parse --is-inside-work-tree\n'
+            )
+            uv.chmod(0o755)
+            env = {key: value for key, value in os.environ.items()
+                   if not key.startswith("GIT_CONFIG") and key != "GIT_TEST_ASSUME_DIFFERENT_OWNER"}
+            env.update(PATH=f"{bin_dir}:{os.environ['PATH']}", HOME=str(home),
+                       GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null")
+            for workflow, job_name in FULL_SUITE_JOBS:
+                with self.subTest(workflow=workflow):
+                    bodies = run_bodies(job_block(read_workflow(workflow), job_name))
+                    body = next(body for body in bodies if "unittest discover" in body)
+                    proc = subprocess.run(
+                        ["bash", "-c", body + '\nprintf "after-count=%s\\n" "${GIT_CONFIG_COUNT-unset}"'],
+                        cwd=workspace, env=env, text=True, capture_output=True,
+                    )
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+                    self.assertEqual(proc.stdout.splitlines(),
+                                     [str(workspace), "true", "after-count=unset"])
+            # Trusting a different path must not exempt this repository's ownership.
+            other = dict(env, GIT_TEST_ASSUME_DIFFERENT_OWNER="1", GIT_CONFIG_COUNT="1",
+                         GIT_CONFIG_KEY_0="safe.directory", GIT_CONFIG_VALUE_0=str(root))
+            denied = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"],
+                                    cwd=workspace, env=other, text=True, capture_output=True)
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("dubious ownership", denied.stderr)
+
+
 class NativeCargoInvocationReviewTest(unittest.TestCase):
     def test_real_proxy_and_toolchain_probes_work_without_global_state(self):
         """Execute only small shell fixtures: no Rust/source compiler or ARM payload."""

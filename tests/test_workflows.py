@@ -112,6 +112,72 @@ class CheckoutHistoryTest(unittest.TestCase):
                 self.assertIn("persist-credentials: false", job)
 
 
+class SuiteGitOwnershipTest(unittest.TestCase):
+    """The suite may trust its own workspace, and nothing wider.
+
+    Git refuses a repository whose owner differs from the user reading it, and
+    `actions/checkout` records its safe.directory under its own temporary HOME
+    rather than the one this step runs with. The fix is the narrowest one
+    available: this command's own environment, naming the directory it runs in.
+    """
+
+    def suite_step(self, workflow: str, job_name: str) -> str:
+        """The run body of the job's unittest step."""
+        job = job_block(read_workflow(workflow), job_name)
+        bodies = run_bodies(job)
+        matched = [b for b in bodies if "unittest discover" in b]
+        self.assertEqual(len(matched), 1, "the job runs the suite exactly once")
+        return matched[0]
+
+    def test_both_full_suite_jobs_trust_only_their_own_workspace(self) -> None:
+        for workflow, job_name in FULL_SUITE_JOBS:
+            with self.subTest(workflow=workflow):
+                body = self.suite_step(workflow, job_name)
+                self.assertIn("GIT_CONFIG_COUNT=1", body)
+                self.assertIn("GIT_CONFIG_KEY_0=safe.directory", body)
+                # The value is expanded by the shell where the step runs, so it
+                # is the real workspace and not a host/container mismatch.
+                self.assertIn('GIT_CONFIG_VALUE_0="$PWD"', body)
+                self.assertNotIn("${{", body)
+
+    def test_the_trust_is_scoped_to_that_command_and_writes_nothing(self) -> None:
+        for workflow, job_name in FULL_SUITE_JOBS:
+            with self.subTest(workflow=workflow):
+                body = self.suite_step(workflow, job_name)
+                # Environment prefixes on the command itself, not `git config`.
+                self.assertNotIn("git config", body)
+                for flag in ("--global", "--system", "--file"):
+                    self.assertNotIn(flag, body)
+                # No wildcard and no parent root: one exact directory only.
+                self.assertNotIn('GIT_CONFIG_VALUE_0="*"', body)
+                self.assertNotIn('GIT_CONFIG_VALUE_0="/"*', body)
+                self.assertNotIn("chown", body)
+                self.assertNotIn("chmod", body)
+
+    def test_the_exact_suite_command_is_preserved(self) -> None:
+        for workflow, job_name in FULL_SUITE_JOBS:
+            with self.subTest(workflow=workflow):
+                body = self.suite_step(workflow, job_name)
+                self.assertIn("uv run python -m unittest discover -s tests", body)
+
+    def test_only_the_suite_step_carries_the_ownership_config(self) -> None:
+        """The trust must not leak into the job environment or its other steps."""
+        for workflow, job_name in FULL_SUITE_JOBS:
+            with self.subTest(workflow=workflow):
+                job = job_block(read_workflow(workflow), job_name)
+                self.assertEqual(job.count("GIT_CONFIG_COUNT"), 1)
+                lines = job.splitlines()
+                carrying = [i for i, line in enumerate(lines) if "GIT_CONFIG_COUNT" in line]
+                self.assertEqual(len(carrying), 1)
+                # It belongs to the run block that runs the suite, not to the
+                # job-level env block above the steps.
+                suite_line = next(
+                    i for i, line in enumerate(lines) if "unittest discover" in line
+                )
+                self.assertGreater(carrying[0], suite_line - 4)
+                self.assertNotIn("safe.directory", job.split("steps:")[0])
+
+
 class WorkflowStructureTest(unittest.TestCase):
     def test_only_ci_and_publish_workflows_exist(self) -> None:
         names = sorted(path.name for path in WORKFLOWS.glob("*.yml"))

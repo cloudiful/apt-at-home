@@ -81,7 +81,17 @@ jobs:
       - name: Verify portable public dependency lock
         run: uv lock --check
       - run: uv sync --frozen
-      - run: uv run python -m unittest discover -s tests
+      # The same scoped trust as the CI suite step: this job runs the identical
+      # full suite, and Git refuses a repository owned by another user. The
+      # settings are this command's own process variables, `$PWD` is expanded by
+      # the shell at run time to the directory this step runs in, and nothing is
+      # written to any global or system config file.
+      - name: Run the full Python suite
+        run: |
+          GIT_CONFIG_COUNT=1 \
+          GIT_CONFIG_KEY_0=safe.directory \
+          GIT_CONFIG_VALUE_0="$PWD" \
+          uv run python -m unittest discover -s tests
       # No run id and no artifact id: the name resolves inside this run only, so a
       # consumer cannot be handed an artifact from another one.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4

@@ -175,7 +175,20 @@ jobs:
       - name: Verify portable public dependency lock
         run: uv lock --check
       - run: uv sync --frozen
-      - run: uv run python -m unittest discover -s tests
+      # Git refuses to read a repository whose ownership differs from the user
+      # running it. actions/checkout records its safe.directory under its own
+      # temporary HOME, while this step runs with the job HOME, so the suite's
+      # baseline comparison needs this one workspace trusted here. The config is
+      # passed as this command's own process variables: `$PWD` is expanded by the
+      # shell at run time, so the value is the directory this step actually runs
+      # in. It is that one path, not a wildcard and not a parent root, and nothing
+      # is written to any global or system config file.
+      - name: Run the full Python suite
+        run: |
+          GIT_CONFIG_COUNT=1 \
+          GIT_CONFIG_KEY_0=safe.directory \
+          GIT_CONFIG_VALUE_0="$PWD" \
+          uv run python -m unittest discover -s tests
       - run: uv run python -m scripts.repo --help
       - run: uv run python -m scripts.update --help
       - name: Generate ephemeral signing key (CI only, isolated homedir)
