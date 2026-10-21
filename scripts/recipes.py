@@ -1,9 +1,9 @@
 """The reviewed upstream recipe table: how each Debian package is fetched and laid out.
 
-Each `Recipe` pins one package's official repository, tag prefix, asset and member
-templates, installed binary, declared dependencies, package-level relations, and
-license identity. `scripts.catalog` is the only consumer that derives values from
-these records.
+Each `Recipe` pins one package's official repository and its source host, tag
+prefix, asset and member templates, installed binary, declared dependencies,
+package-level relations, and license identity. `scripts.catalog` is the only
+consumer that derives values from these records.
 """
 
 from __future__ import annotations
@@ -23,6 +23,11 @@ _DELTA = MappingProxyType(
 _NO_TRIPLES: Mapping[str, str] = MappingProxyType({})
 _NEOVIM = MappingProxyType({"amd64": "x86_64", "arm64": "arm64"})
 _NO_DEPENDS: Mapping[str, str] = MappingProxyType({})
+
+# The upstream hosts a reviewed recipe may be fetched from. The set is closed:
+# a source nobody reviewed fails closed instead of building a URL for a host
+# this repository never vetted.
+SOURCES = ("github", "codeberg")
 
 
 @dataclass(frozen=True)
@@ -45,6 +50,9 @@ class Recipe:
     asset: str
     member: str
     binary: str
+    # The upstream host the release metadata and the official assets come from.
+    # Every other recipe keeps the GitHub default.
+    source: str = "github"
     triples: Mapping[str, str] = _MUSL
     depends: Mapping[str, str] = _NO_DEPENDS
     conflicts: str = ""
@@ -71,6 +79,12 @@ class Recipe:
     parsers: tuple[str, ...] = ()
     additional_members: Mapping[str, str] = _NO_DEPENDS
     extra_license_paths: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.source not in SOURCES:
+            raise ValueError(
+                f"unsupported release source for {self.name!r}: {self.source!r}"
+            )
 
 
 # zellij and starship publish one asset name per toolchain and never embed the

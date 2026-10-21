@@ -5,7 +5,7 @@
   "section": "utils",
   "priority": "optional",
   "source_date_epoch": 1767225600,
-  "checksum_provenance": "Archive SHA256 verified by direct download against GitHub API digests. Zellij upstream .sha256sum files cover the inner binary (target/<triple>/release/zellij), not the tarball; starship .tar.gz.sha256 files cover the tarball and match the API digests.",
+  "checksum_provenance": "Archive SHA256 verified by direct download against GitHub API digests. Zellij upstream .sha256sum files cover the inner binary (target/<triple>/release/zellij), not the tarball; starship .tar.gz.sha256 files cover the tarball and match the API digests. Codeberg publishes no release digest, so the forgejo-cli archives are pinned by SHA256 computed from the official Codeberg download and recomputed on every discovery.",
   "packages": [
     {
       "name": "zellij",
@@ -300,6 +300,34 @@
           "archive_member": "bun-linux-aarch64/bun",
           "binary": "bun",
           "depends": "libc6 (>= 2.17), libgcc-s1"
+        }
+      }
+    },
+    {
+      "name": "forgejo-cli",
+      "version": "0.7.0",
+      "homepage": "https://codeberg.org/forgejo-contrib/forgejo-cli",
+      "description": "Command line client for Forgejo",
+      "license": "MIT OR Apache-2.0",
+      "copyright": "Copyright (c) 2026 The forgejo-cli developers",
+      "license_url": "https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/v0.7.0/LICENSE-MIT",
+      "extra_license_urls": [
+        "https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/v0.7.0/LICENSE-APACHE"
+      ],
+      "targets": {
+        "amd64": {
+          "url": "https://codeberg.org/forgejo-contrib/forgejo-cli/releases/download/v0.7.0/forgejo-cli-x86_64-linux.tar.gz",
+          "sha256": "6803c12eed17bfadb40ba95da2a6ab58f9b4a7dc10eabfe3512fce7e2fe6216f",
+          "archive_member": "fj",
+          "binary": "fj",
+          "depends": "libc6 (>= 2.39), libgcc-s1, libssl3t64, zlib1g"
+        },
+        "arm64": {
+          "url": "https://codeberg.org/forgejo-contrib/forgejo-cli/releases/download/v0.7.0/forgejo-cli-aarch64-linux.tar.gz",
+          "sha256": "198987908e194704b4a350119596547bc95cd9b6518024d6d02c26f061cfce83",
+          "archive_member": "fj",
+          "binary": "fj",
+          "depends": "libc6 (>= 2.39), libgcc-s1"
         }
       }
     }

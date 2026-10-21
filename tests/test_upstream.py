@@ -6,15 +6,22 @@ payload fixtures are a small fixed representative set, not a mirror of the
 catalog: they cover the differing release-tag prefixes, asset names, archive
 members, and license sources that discovery has to get right, including a
 project whose tags carry no `v` prefix, assets whose names embed the version,
-a binary nested under a versioned directory, and a ZIP release asset.
+a binary nested under a versioned directory, and a ZIP release asset. A source
+that publishes no release digest is covered too: its assets are pinned by the
+bytes it serves.
 """
 
+import hashlib
 import unittest
 from pathlib import Path
 
 from scripts.catalog import RECIPES, archive_member, asset_name, extra_license_paths_for
 from scripts.upstream import HttpError, UrllibClient, discover, latest_stable
-from scripts.upstream_assets import license_url, releases_api_url
+from scripts.upstream_assets import (
+    license_url,
+    release_download_url,
+    releases_api_url,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ZELLIJ = "zellij-org/zellij"
@@ -145,12 +152,9 @@ class FakeHttp:
         if isinstance(payload, Exception):
             raise payload
         assert isinstance(payload, bytes)
-        if len(payload) > MAX_LICENSE_BYTES:
+        if len(payload) > max_bytes:
             raise HttpError(f"response exceeded {max_bytes} bytes: {url}")
         return payload
-
-
-MAX_LICENSE_BYTES = 1024 * 1024
 
 
 class LatestStableTest(unittest.TestCase):
@@ -479,14 +483,132 @@ class CargoTauriTagSpecificTest(unittest.TestCase):
             latest_stable(self._client(tag_payload=draft), "cargo-tauri")
 
 
+class CodebergDiscoveryTest(unittest.TestCase):
+    """A source that publishes no release digest is pinned by its own bytes."""
+
+    REPO = "forgejo-contrib/forgejo-cli"
+    TAG = "v0.7.0"
+    VERSION = "0.7.0"
+    ASSET_BYTES = {
+        "amd64": b"forgejo-cli-amd64-archive-bytes",
+        "arm64": b"forgejo-cli-arm64-archive-bytes",
+    }
+
+    def _asset_url(self, arch: str) -> str:
+        return release_download_url(
+            self.REPO, self.TAG, asset_name("forgejo-cli", self.VERSION, arch),
+            source="codeberg",
+        )
+
+    def _license_url(self, path: str) -> str:
+        return license_url(self.REPO, self.TAG, path, source="codeberg")
+
+    def _payloads(self, *, assets: dict[str, bytes] | None = None) -> dict[str, object]:
+        """Serve a Codeberg release without any digest, plus its assets and licenses."""
+        payloads: dict[str, object] = {
+            releases_api_url(self.REPO, source="codeberg"): {
+                "tag_name": self.TAG,
+                "draft": False,
+                "prerelease": False,
+                "assets": [
+                    {
+                        "name": asset_name("forgejo-cli", self.VERSION, arch),
+                        "browser_download_url": self._asset_url(arch),
+                    }
+                    for arch in ("amd64", "arm64")
+                ],
+            },
+        }
+        for arch, payload in (assets or self.ASSET_BYTES).items():
+            payloads[self._asset_url(arch)] = payload
+        vendor = REPO_ROOT / "packaging" / "licenses" / "forgejo-cli"
+        payloads[self._license_url("LICENSE-MIT")] = (vendor / "LICENSE.txt").read_bytes()
+        payloads[self._license_url("LICENSE-APACHE")] = (vendor / "LICENSE-APACHE").read_bytes()
+        return payloads
+
+    def test_the_digest_is_computed_from_the_official_bytes(self) -> None:
+        client = FakeHttp(self._payloads())
+        candidate = discover(client, "forgejo-cli")
+        self.assertEqual(candidate.repo, self.REPO)
+        self.assertEqual(candidate.tag, self.TAG)
+        self.assertEqual(candidate.version, self.VERSION)
+        for arch, payload in self.ASSET_BYTES.items():
+            with self.subTest(arch=arch):
+                self.assertEqual(
+                    candidate.targets[arch]["sha256"],
+                    hashlib.sha256(payload).hexdigest(),
+                )
+                self.assertEqual(candidate.targets[arch]["url"], self._asset_url(arch))
+
+    def test_no_upstream_digest_is_required(self) -> None:
+        """The release payload carries no digest field at all."""
+        payload = self._payloads()[releases_api_url(self.REPO, source="codeberg")]
+        for asset in payload["assets"]:  # type: ignore[index]
+            self.assertNotIn("digest", asset)
+
+    def test_the_licenses_come_from_the_reviewed_codeberg_source(self) -> None:
+        client = FakeHttp(self._payloads())
+        candidate = discover(client, "forgejo-cli")
+        self.assertEqual(candidate.license_url, self._license_url("LICENSE-MIT"))
+        self.assertEqual(candidate.extra_license_urls, (self._license_url("LICENSE-APACHE"),))
+
+    def test_an_unreachable_asset_stops_the_run(self) -> None:
+        payloads = self._payloads()
+        payloads[self._asset_url("arm64")] = HttpError("request failed: codeberg is down")
+        with self.assertRaises(HttpError):
+            discover(FakeHttp(payloads), "forgejo-cli")
+
+    def test_a_missing_asset_stops_the_run(self) -> None:
+        payload = self._payloads()[releases_api_url(self.REPO, source="codeberg")]
+        payload["assets"] = [  # type: ignore[index]
+            asset for asset in payload["assets"]  # type: ignore[index]
+            if asset["name"] != asset_name("forgejo-cli", self.VERSION, "arm64")
+        ]
+        payloads = self._payloads()
+        payloads[releases_api_url(self.REPO, source="codeberg")] = payload
+        with self.assertRaisesRegex(ValueError, "missing asset"):
+            discover(FakeHttp(payloads), "forgejo-cli")
+
+    def test_an_asset_from_a_foreign_origin_is_refused(self) -> None:
+        payloads = self._payloads()
+        payload = payloads[releases_api_url(self.REPO, source="codeberg")]
+        payload["assets"][0]["browser_download_url"] = (  # type: ignore[index]
+            "https://github.com/forgejo-contrib/forgejo-cli/releases/download/"
+            f"{self.TAG}/forgejo-cli-x86_64-linux.tar.gz"
+        )
+        with self.assertRaisesRegex(ValueError, "not the official"):
+            discover(FakeHttp(payloads), "forgejo-cli")
+
+    def test_changed_license_bytes_stop_the_run(self) -> None:
+        payloads = self._payloads()
+        payloads[self._license_url("LICENSE-MIT")] = b"a different license text"
+        with self.assertRaisesRegex(ValueError, "license bytes changed"):
+            discover(FakeHttp(payloads), "forgejo-cli")
+
+
 class UrllibClientTest(unittest.TestCase):
     def test_reads_are_bounded_and_timeouts_are_set(self) -> None:
         client = UrllibClient(timeout=1)
         self.assertEqual(client._timeout, 1)  # noqa: SLF001 - the bound is the contract
-        self.assertNotIn("Authorization", client._headers())  # noqa: SLF001
-        token_client = UrllibClient(token="secret-value")
-        headers = token_client._headers()  # noqa: SLF001
-        self.assertEqual(headers["Authorization"], "Bearer secret-value")
+
+    def test_the_token_only_reaches_the_github_api(self) -> None:
+        client = UrllibClient(token="secret-value")
+        api = client._headers(  # noqa: SLF001 - the header scope is the contract
+            "https://api.github.com/repos/x/y/releases/latest"
+        )
+        self.assertEqual(api["Authorization"], "Bearer secret-value")
+        for url in (
+            "https://codeberg.org/api/v1/repos/x/y/releases/latest",
+            "https://codeberg.org/x/y/releases/download/v1.0.0/x.tar.gz",
+            "https://raw.githubusercontent.com/x/y/v1.0.0/LICENSE",
+            "https://github.com/x/y/releases/download/v1.0.0/x.tar.gz",
+            "http://api.github.com/repos/x/y/releases/latest",
+            "https://api.github.com:8443/repos/x/y/releases/latest",
+        ):
+            with self.subTest(url=url):
+                headers = client._headers(url)  # noqa: SLF001
+                self.assertNotIn("Authorization", headers)
+                self.assertNotIn("application/vnd.github+json", headers["Accept"] if "Accept" in headers else "")
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from scripts.manifest import (
 )
 from scripts.release_manifest import load_manifest_data
 from scripts.manifest import default_manifest_path
+from scripts.upstream_assets import asset_name, release_download_url
 
 TARGET = {
     "url": "https://github.com/example/example/releases/download/v1.0.0/x.tar.gz",
@@ -36,9 +37,45 @@ class ManifestTest(unittest.TestCase):
         for pkg in manifest.packages:
             self.assertSetEqual(set(pkg.targets), set(arches_for(pkg.name)))
             for arch, target in pkg.targets.items():
-                self.assertTrue(target.url.startswith("https://github.com/"))
+                # Every target is the official asset of its own package, on the
+                # source host that package's recipe reviews.
+                self.assertEqual(
+                    target.url,
+                    release_download_url(
+                        RECIPES[pkg.name].repo,
+                        RECIPES[pkg.name].tag_prefix + pkg.version,
+                        asset_name(pkg.name, pkg.version, arch),
+                        source=RECIPES[pkg.name].source,
+                    ),
+                )
                 self.assertRegex(target.sha256, r"^[0-9a-f]{64}$")
                 self.assertNotIn("latest", target.url)
+
+    def test_rejects_a_url_that_is_not_the_reviewed_official_asset(self) -> None:
+        """A target URL is bound to its own package, source, release, and asset."""
+        data = _document()
+        zellij = next(e for e in data["packages"] if e["name"] == "zellij")
+        official = zellij["targets"]["amd64"]["url"]
+        swapped = {
+            "other_host": official.replace("github.com", "codeberg.org"),
+            "other_repo": official.replace("zellij-org/zellij", "attacker/zellij"),
+            "other_tag": official.replace("/v0.45.1/", "/v0.46.0/"),
+            "other_asset": official.replace(
+                "zellij-x86_64-unknown-linux-musl.tar.gz", "zellij-x86_64-unknown-linux-gnu.tar.gz"
+            ),
+            "credentials": official.replace("https://", "https://user:secret@"),
+            "port": official.replace("https://github.com", "https://github.com:8443"),
+            "query": official + "?token=secret",
+            "fragment": official + "#secret",
+            "plain_http": official.replace("https://", "http://"),
+        }
+        for label, url in swapped.items():
+            with self.subTest(case=label):
+                bad = _document()
+                entry = next(e for e in bad["packages"] if e["name"] == "zellij")
+                entry["targets"]["amd64"]["url"] = url
+                with self.assertRaises(ValueError, msg=label):
+                    parse_manifest(bad)
 
     def test_records_nested_members_binaries_and_licenses(self) -> None:
         by_name = {p.name: p for p in load_manifest().packages}

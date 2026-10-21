@@ -1,23 +1,33 @@
 """Discover the latest stable upstream release for a reviewed package.
 
-The GitHub API is the only discovery source and it must supply the asset
-digests: an archive is never accepted on a guessed checksum. Asset names, archive
-members, binaries, and dependencies come from the reviewed recipe rather than
-from the release payload, and the license bytes are compared against the
-vendored copy, so a licensing change stops the run instead of being assumed
-equivalent.
+Each recipe names the source host its release comes from. GitHub's API is the
+only source for most packages and must supply the asset digests: an archive is
+never accepted on a guessed checksum. Codeberg publishes no release digest, so
+the assets of a Codeberg package are pinned by a SHA256 computed here from the
+official download. Asset names, archive members, binaries, and dependencies come
+from the reviewed recipe rather than from the release payload, and the license
+bytes are compared against the vendored copy, so a licensing change stops the
+run instead of being assumed equivalent.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Protocol
 
-from .catalog import arches_for, exact_tag_release_for, license_path_for, repo_of
+from .catalog import (
+    arches_for,
+    exact_tag_release_for,
+    license_path_for,
+    repo_of,
+    source_for,
+)
 from .license_sources import check_license_sources, vendor_license_sources
 from .upstream_assets import (
     asset_name,
@@ -37,6 +47,18 @@ BYTES_TIMEOUT = 60
 # Generous ceilings: the largest pinned musl tarball is well under this, and a
 # response that exceeds it is refused rather than buffered without bound.
 MAX_JSON_BYTES = 4 * 1024 * 1024
+# A release archive is downloaded whole to be hashed, so it needs its own
+# ceiling; the reviewed archives are an order of magnitude below it.
+MAX_ASSET_BYTES = 64 * 1024 * 1024
+# The only origin a GitHub token is ever sent to, and the path prefix of the
+# Codeberg API.
+GITHUB_API_HOST = "api.github.com"
+CODEBERG_API_PATH = "/api/v1/"
+# The most redirects one request chain may follow, each of them inside its
+# origin.
+MAX_REDIRECTS = 3
+# The request attribute that carries the hop budget along one chain.
+_HOP_COUNT = "_apt_at_home_redirect_hops"
 
 
 class HttpClient(Protocol):
@@ -51,24 +73,80 @@ class HttpError(RuntimeError):
     """A bounded HTTP read failed."""
 
 
+def _origin(url: str) -> tuple[str, str]:
+    """Return the scheme and host:port an URL belongs to."""
+    parts = urllib.parse.urlsplit(url)
+    return (parts.scheme.lower(), parts.netloc.lower())
+
+
+class SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only inside the origin the request already had.
+
+    A redirect is refused before the next request is sent when it leaves the
+    origin (host, port, and scheme) or downgrades to plain HTTP, so a token or
+    a cookie scoped to one origin can never reach another one. A chain follows
+    at most three hops in total, repeated destinations included; the budget
+    travels with the request, so every new request starts with a full
+    allowance and concurrent chains never share a counter.
+    """
+
+    max_redirections = MAX_REDIRECTS
+    max_repeats = MAX_REDIRECTS
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        if urllib.parse.urlsplit(newurl).scheme.lower() != "https":
+            raise urllib.error.HTTPError(
+                newurl, code, "a redirect to a non-HTTPS url is refused", headers, fp
+            )
+        if _origin(newurl) != _origin(req.full_url):
+            raise urllib.error.HTTPError(
+                newurl, code, "a cross-origin redirect is refused", headers, fp
+            )
+        hops = getattr(req, _HOP_COUNT, 0)
+        if hops >= MAX_REDIRECTS:
+            raise urllib.error.HTTPError(
+                newurl, code,
+                f"the redirect budget of {MAX_REDIRECTS} hops is exhausted",
+                headers, fp,
+            )
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        setattr(new, _HOP_COUNT, hops + 1)
+        return new
+
+
 class UrllibClient:
     """stdlib HTTP with timeouts, response ceilings, and an optional bearer token."""
 
     def __init__(self, *, token: str | None = None, timeout: int = JSON_TIMEOUT) -> None:
         self._token = token
         self._timeout = timeout
+        self._opener = urllib.request.build_opener(SameOriginRedirectHandler())
 
-    def _headers(self) -> dict[str, str]:
-        headers = {"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"}
-        # The token only ever lives in a request header; nothing logs it.
-        if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
+    def _headers(self, url: str) -> dict[str, str]:
+        headers = {"User-Agent": USER_AGENT}
+        parts = urllib.parse.urlsplit(url)
+        if parts.scheme.lower() != "https":
+            return headers
+        if parts.netloc.lower() == GITHUB_API_HOST:
+            headers["Accept"] = "application/vnd.github+json"
+            # The token only ever lives in a request header to the GitHub API;
+            # nothing logs it, and no other host ever receives it.
+            if self._token:
+                headers["Authorization"] = f"Bearer {self._token}"
+        elif parts.netloc.lower() == "codeberg.org" and parts.path.startswith(
+            CODEBERG_API_PATH
+        ):
+            headers["Accept"] = "application/json"
         return headers
 
     def _read(self, url: str, *, max_bytes: int) -> bytes:
-        request = urllib.request.Request(url, headers=self._headers())
+        # The client speaks HTTPS only: a plaintext target is refused here,
+        # before any request is created and before the transport is touched.
+        if urllib.parse.urlsplit(url).scheme.lower() != "https":
+            raise HttpError(f"refusing a non-HTTPS request: {url}")
+        request = urllib.request.Request(url, headers=self._headers(url))
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+            with self._opener.open(request, timeout=self._timeout) as response:
                 chunks: list[bytes] = []
                 total = 0
                 while True:
@@ -80,6 +158,8 @@ class UrllibClient:
                         raise HttpError(f"response exceeded {max_bytes} bytes: {url}")
                     chunks.append(chunk)
         except urllib.error.URLError as exc:
+            if isinstance(exc, urllib.error.HTTPError):
+                exc.close()
             raise HttpError(f"request failed for {url}: {exc.reason}") from exc
         return b"".join(chunks)
 
@@ -167,6 +247,16 @@ def _latest_exact_tag(client: HttpClient, package_name: str, repo: str) -> str:
     return tag_for(package_name, best)
 
 
+def _computed_asset_digest(client: HttpClient, url: str) -> str:
+    """Return the SHA256 of the official asset bytes, computed here.
+
+    A source that publishes no release digest is pinned by the digest of the
+    bytes it serves. The read is bounded, and a failure to fetch the asset
+    stops the run rather than skipping the package.
+    """
+    return hashlib.sha256(client.get_bytes(url, max_bytes=MAX_ASSET_BYTES)).hexdigest()
+
+
 def latest_stable(
     client: HttpClient, package_name: str,
 ) -> tuple[str, str, dict[str, ReleaseAsset]]:
@@ -175,9 +265,12 @@ def latest_stable(
     Packages with the reviewed exact-tag policy resolve the highest stable tag
     with their own prefix from the tag list and fetch that exact release;
     every other package retains `releases/latest` behavior. Only the reviewed
-    architectures carry assets.
+    architectures carry assets. A GitHub release supplies the asset digest; a
+    Codeberg release supplies none, so its digest is computed from the
+    official download.
     """
     repo = repo_of(package_name)
+    source = source_for(package_name)
     if exact_tag_release_for(package_name):
         tag = _latest_exact_tag(client, package_name, repo)
         # The tag must carry this project's own prefix and be an exact stable
@@ -197,11 +290,13 @@ def latest_stable(
                 f"selected {tag!r}"
             )
     else:
-        payload = client.get_json(releases_api_url(repo))
+        payload = client.get_json(releases_api_url(repo, source=source))
         if not isinstance(payload, dict):
-            raise ValueError(f"GitHub release payload for {package_name} is not an object")
+            raise ValueError(
+                f"{source} release payload for {package_name} is not an object"
+            )
         if payload.get("draft") or payload.get("prerelease"):
-            raise ValueError(f"GitHub returned a draft or prerelease for {package_name}")
+            raise ValueError(f"{source} returned a draft or prerelease for {package_name}")
         tag = payload.get("tag_name")
         # The tag must carry this project's own prefix and be an exact stable
         # version before any asset name is derived from it.
@@ -210,7 +305,7 @@ def latest_stable(
             raise ValueError(f"{package_name} release tag {tag!r} is not canonical")
     raw_assets = payload.get("assets")
     if not isinstance(raw_assets, list):
-        raise ValueError(f"GitHub release for {package_name} carries no asset list")
+        raise ValueError(f"{source} release for {package_name} carries no asset list")
 
     by_name = {a.get("name"): a for a in raw_assets if isinstance(a, dict)}
     assets: dict[str, ReleaseAsset] = {}
@@ -219,13 +314,17 @@ def latest_stable(
         asset = by_name.get(name)
         if asset is None:
             raise ValueError(f"{package_name} {arch} is missing asset {name} from {tag}")
-        assets[arch] = ReleaseAsset(
-            name=name,
-            url=check_official_asset_url(
-                asset.get("browser_download_url"), repo=repo, tag=tag, name=name
-            ),
-            sha256=parse_asset_digest(asset),
+        url = check_official_asset_url(
+            asset.get("browser_download_url"), repo=repo, tag=tag, name=name, source=source
         )
+        # GitHub publishes a digest for every asset; Codeberg publishes none, so
+        # the digest of the official bytes is computed here.
+        digest = (
+            parse_asset_digest(asset)
+            if source == "github"
+            else _computed_asset_digest(client, url)
+        )
+        assets[arch] = ReleaseAsset(name=name, url=url, sha256=digest)
     return repo, tag, assets
 
 
@@ -267,5 +366,9 @@ def discover(
 
 
 def client_from_env() -> UrllibClient:
-    """Build the default client; a token raises the API rate limit when present."""
+    """Build the default client; a token raises the API rate limit when present.
+
+    The token is only ever sent to the GitHub API, so a client that also reads
+    another source never hands it to that host.
+    """
     return UrllibClient(token=os.environ.get("GITHUB_TOKEN") or None)

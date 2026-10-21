@@ -14,15 +14,16 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts.catalog import KNOWN_PACKAGES, repo_of, tag_for
+from scripts.catalog import KNOWN_PACKAGES, repo_of, source_for, tag_for
 from scripts.manifest import default_manifest_path
 from scripts.release_manifest import validated_document
 from scripts.update_plan import build_plan, merge_catalog
 from scripts.upstream import Candidate
 from scripts.upstream_assets import (
-    asset_name, license_path, license_url, license_urls_for, release_download_url,
+    asset_name, license_urls_for, release_download_url,
 )
 from tests.release_fixtures import published_manifest, published_manifest_data
+from tests.helpers import move_package_version
 
 
 def committed_sha(package_name: str, arch: str) -> str:
@@ -37,21 +38,25 @@ def candidate(name: str, version: str, *, sha: str | None = None) -> Candidate:
 
     By default each architecture keeps the digest the committed manifest already
     pins, which is what an unchanged upstream release looks like; pass `sha` to
-    model a rebuilt archive.
+    model a rebuilt archive. The URLs follow the package's own reviewed source,
+    so a Codeberg package never carries a GitHub origin.
     """
     from scripts.catalog import arches_for
 
     repo = repo_of(name)
     tag = tag_for(name, version)
+    source = source_for(name)
     return Candidate(
         name=name,
         repo=repo,
         tag=tag,
         version=version,
-        license_url=license_url(repo, tag, license_path(name)),
+        license_url=license_urls_for(name, tag)[0],
         targets={
             arch: {
-                "url": release_download_url(repo, tag, asset_name(name, version, arch)),
+                "url": release_download_url(
+                    repo, tag, asset_name(name, version, arch), source=source
+                ),
                 "sha256": sha or committed_sha(name, arch),
             }
             for arch in arches_for(name)
@@ -248,8 +253,7 @@ class PlanTest(unittest.TestCase):
         baseline = baseline_document()
         for entry in baseline["packages"]:  # type: ignore[index]
             if entry["name"] == "starship":
-                entry["version"] = "1.27.0"
-                entry["license_url"] = candidate("starship", "1.27.0").license_url
+                move_package_version(entry, "1.27.0")
         plan = build_plan(
             baseline_release_id="20260102-030405",
             baseline_data=baseline,
@@ -267,8 +271,7 @@ class PlanTest(unittest.TestCase):
         baseline = baseline_document()
         for entry in baseline["packages"]:  # type: ignore[index]
             if entry["name"] == "starship":
-                entry["version"] = "1.27.0"
-                entry["license_url"] = candidate("starship", "1.27.0").license_url
+                move_package_version(entry, "1.27.0")
         with self.assertRaises(ValueError) as ctx:
             build_plan(
                 baseline_release_id="20260102-030405",
@@ -344,6 +347,48 @@ class PlanTest(unittest.TestCase):
                 candidates=_catalog_candidates(starship="1.27.0"),
             )
         self.assertIn("license", str(ctx.exception))
+
+
+class CodebergPlanTest(unittest.TestCase):
+    """A package from a source without release digests still plans and freezes."""
+
+    def test_a_new_codeberg_version_moves_only_its_own_fields(self) -> None:
+        plan = build_plan(
+            baseline_release_id="20260102-030405",
+            baseline_data=baseline_document(),
+            catalog_data=catalog_document(),
+            candidates=_catalog_candidates(**{"forgejo-cli": "0.8.0"}),
+        )
+        pkg = next(p for p in plan.manifest.packages if p.name == "forgejo-cli")
+        self.assertEqual(pkg.version, "0.8.0")
+        self.assertIn("forgejo-cli", plan.changed)
+        self.assertEqual(
+            pkg.targets["amd64"].url,
+            "https://codeberg.org/forgejo-contrib/forgejo-cli/releases/download/"
+            "v0.8.0/forgejo-cli-x86_64-linux.tar.gz",
+        )
+        self.assertEqual(
+            pkg.license_url,
+            "https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/v0.8.0/LICENSE-MIT",
+        )
+        self.assertEqual(pkg.targets["amd64"].archive_member, "fj")
+        self.assertEqual(pkg.targets["arm64"].depends, "libc6 (>= 2.39), libgcc-s1")
+
+    def test_a_republished_codeberg_tag_is_refused(self) -> None:
+        """The same version with different bytes is a republished tag, not a no-op."""
+        candidates = _catalog_candidates()
+        moved = candidate("forgejo-cli", "0.7.0", sha="cd" * 32)
+        candidates["forgejo-cli"] = moved
+        with self.assertRaises(ValueError) as ctx:
+            build_plan(
+                baseline_release_id="20260102-030405",
+                baseline_data=catalog_document(),
+                catalog_data=catalog_document(),
+                candidates=candidates,
+            )
+        message = str(ctx.exception)
+        self.assertIn("immutable", message)
+        self.assertIn("amd64", message)
 
 
 class DiscoverExactTagTest(unittest.TestCase):

@@ -193,12 +193,50 @@ export class FakeContext {
   }
 }
 
-export function createEnv(bucket: FakeBucket, credentials: unknown, authRequired?: unknown): Env {
+/**
+ * The public asset binding.
+ *
+ * The Worker asks for one flat name and the binding answers with that file
+ * or with a 404, exactly as the real asset directory does.
+ */
+export class FakeAssets {
+  readonly entries = new Map<string, { readonly body: string; readonly contentType: string }>();
+  readonly requests: string[] = [];
+
+  seed(name: string, body: string, contentType = 'application/octet-stream'): void {
+    this.entries.set(name, { body, contentType });
+  }
+
+  asBinding(): Fetcher {
+    const entries = this.entries;
+    const requests = this.requests;
+    return {
+      async fetch(request: Request): Promise<Response> {
+        const path = new URL(request.url).pathname.replace(/^\//, '');
+        requests.push(path);
+        const entry = entries.get(path);
+        if (entry === undefined) return new Response('not found', { status: 404 });
+        return new Response(request.method === 'HEAD' ? null : entry.body, {
+          status: 200,
+          headers: { 'Content-Type': entry.contentType },
+        });
+      },
+    } as unknown as Fetcher;
+  }
+}
+
+export function createEnv(
+  bucket: FakeBucket,
+  credentials: unknown,
+  authRequired?: unknown,
+  assets?: FakeAssets,
+): Env {
   const env = { BUCKET: bucket.asBinding(), CREDENTIALS: credentials } as unknown as Record<
     string,
     unknown
   >;
   if (authRequired !== undefined) env['AUTH_REQUIRED'] = authRequired;
+  env['ASSETS'] = (assets ?? new FakeAssets()).asBinding();
   return env as unknown as Env;
 }
 

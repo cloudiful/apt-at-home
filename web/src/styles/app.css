@@ -1,0 +1,229 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * The two palettes, each declared once, and the tokens the page reads.
+ *
+ * The tokens point at the light palette by default. The dark palette is
+ * applied by the `.dark` marker, and by the system preference when the
+ * document carries neither marker — so a reader without JavaScript still gets
+ * the dark theme of their system, and an explicit choice always wins.
+ */
+:root {
+  --radius: 0.625rem;
+
+  --light-background: oklch(1 0 0);
+  --light-foreground: oklch(0.145 0 0);
+  --light-card: oklch(1 0 0);
+  --light-card-foreground: oklch(0.145 0 0);
+  --light-popover: oklch(1 0 0);
+  --light-popover-foreground: oklch(0.145 0 0);
+  --light-primary: oklch(0.205 0 0);
+  --light-primary-foreground: oklch(0.985 0 0);
+  --light-secondary: oklch(0.97 0 0);
+  --light-secondary-foreground: oklch(0.205 0 0);
+  --light-muted: oklch(0.97 0 0);
+  --light-muted-foreground: oklch(0.556 0 0);
+  --light-accent: oklch(0.97 0 0);
+  --light-accent-foreground: oklch(0.205 0 0);
+  --light-destructive: oklch(0.577 0.245 27.325);
+  --light-border: oklch(0.922 0 0);
+  --light-input: oklch(0.922 0 0);
+  --light-ring: oklch(0.708 0 0);
+
+  --dark-background: oklch(0.145 0 0);
+  --dark-foreground: oklch(0.985 0 0);
+  --dark-card: oklch(0.205 0 0);
+  --dark-card-foreground: oklch(0.985 0 0);
+  --dark-popover: oklch(0.205 0 0);
+  --dark-popover-foreground: oklch(0.985 0 0);
+  --dark-primary: oklch(0.922 0 0);
+  --dark-primary-foreground: oklch(0.205 0 0);
+  --dark-secondary: oklch(0.269 0 0);
+  --dark-secondary-foreground: oklch(0.985 0 0);
+  --dark-muted: oklch(0.269 0 0);
+  --dark-muted-foreground: oklch(0.708 0 0);
+  --dark-accent: oklch(0.269 0 0);
+  --dark-accent-foreground: oklch(0.985 0 0);
+  --dark-destructive: oklch(0.704 0.191 22.216);
+  --dark-border: oklch(1 0 0 / 10%);
+  --dark-input: oklch(1 0 0 / 15%);
+  --dark-ring: oklch(0.556 0 0);
+
+  --background: var(--light-background);
+  --foreground: var(--light-foreground);
+  --card: var(--light-card);
+  --card-foreground: var(--light-card-foreground);
+  --popover: var(--light-popover);
+  --popover-foreground: var(--light-popover-foreground);
+  --primary: var(--light-primary);
+  --primary-foreground: var(--light-primary-foreground);
+  --secondary: var(--light-secondary);
+  --secondary-foreground: var(--light-secondary-foreground);
+  --muted: var(--light-muted);
+  --muted-foreground: var(--light-muted-foreground);
+  --accent: var(--light-accent);
+  --accent-foreground: var(--light-accent-foreground);
+  --destructive: var(--light-destructive);
+  --border: var(--light-border);
+  --input: var(--light-input);
+  --ring: var(--light-ring);
+
+  /* The document follows the system until an explicit choice is marked. */
+  color-scheme: light dark;
+}
+
+/*
+ * The system preference applies only while the document carries no explicit
+ * marker, so a saved light choice is never overridden by a dark system.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not(.dark) {
+    --background: var(--dark-background);
+    --foreground: var(--dark-foreground);
+    --card: var(--dark-card);
+    --card-foreground: var(--dark-card-foreground);
+    --popover: var(--dark-popover);
+    --popover-foreground: var(--dark-popover-foreground);
+    --primary: var(--dark-primary);
+    --primary-foreground: var(--dark-primary-foreground);
+    --secondary: var(--dark-secondary);
+    --secondary-foreground: var(--dark-secondary-foreground);
+    --muted: var(--dark-muted);
+    --muted-foreground: var(--dark-muted-foreground);
+    --accent: var(--dark-accent);
+    --accent-foreground: var(--dark-accent-foreground);
+    --destructive: var(--dark-destructive);
+    --border: var(--dark-border);
+    --input: var(--dark-input);
+    --ring: var(--dark-ring);
+  }
+}
+
+.dark {
+  --background: var(--dark-background);
+  --foreground: var(--dark-foreground);
+  --card: var(--dark-card);
+  --card-foreground: var(--dark-card-foreground);
+  --popover: var(--dark-popover);
+  --popover-foreground: var(--dark-popover-foreground);
+  --primary: var(--dark-primary);
+  --primary-foreground: var(--dark-primary-foreground);
+  --secondary: var(--dark-secondary);
+  --secondary-foreground: var(--dark-secondary-foreground);
+  --muted: var(--dark-muted);
+  --muted-foreground: var(--dark-muted-foreground);
+  --accent: var(--dark-accent);
+  --accent-foreground: var(--dark-accent-foreground);
+  --destructive: var(--dark-destructive);
+  --border: var(--dark-border);
+  --input: var(--dark-input);
+  --ring: var(--dark-ring);
+}
+
+/* An explicit choice also fixes the form controls and the scrollbars. */
+.light {
+  color-scheme: light;
+}
+
+.dark {
+  color-scheme: dark;
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    overflow-wrap: break-word;
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .page {
+    margin: 0 auto;
+    max-width: 44rem;
+    padding: 1.5rem;
+  }
+  .code-block {
+    margin: 0.5rem 0;
+    padding: 0.75rem;
+    max-width: 100%;
+    overflow-x: auto;
+    background: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    white-space: pre;
+  }
+  .code-block code {
+    font-family: inherit;
+    font-size: inherit;
+  }
+  .more {
+    min-width: 0;
+    margin: 0.75rem 0;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+  }
+  .more > summary {
+    cursor: pointer;
+    color: var(--muted-foreground);
+    font-size: 0.9rem;
+  }
+  .more > p {
+    margin: 0.5rem 0 0;
+  }
+  .steps {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.5rem;
+    margin: 0;
+    padding-left: 1.25rem;
+  }
+  .steps > li {
+    min-width: 0;
+    padding-left: 0.25rem;
+  }
+}

@@ -1,15 +1,19 @@
 """Trusted upstream release identity: tags, official URLs, and digests.
 
-Everything discovered from GitHub passes through this module before a byte is
-downloaded, so an unexpected origin, an asset the reviewed recipe does not
-name, or a release without an API digest fails closed instead of guessing. The
-API endpoint, the download origin, and the raw license host are constants here:
-nothing a manifest or an upstream response can supply ever builds one.
+Everything discovered from an upstream host passes through this module before a
+byte is downloaded, so an unexpected origin, an asset the reviewed recipe does
+not name, or a release without the digest its source provides fails closed
+instead of guessing. The API endpoint, the download origin, and the raw license
+host are fixed per source here: nothing a manifest or an upstream response can
+supply ever builds one. Two sources are reviewed: GitHub, whose API publishes a
+sha256 digest for every asset, and Codeberg, whose API publishes none.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
+from types import MappingProxyType
 
 from .catalog import (
     ARCHES,
@@ -18,21 +22,48 @@ from .catalog import (
     license_path_for,
     recipe_for,
     repo_of,
+    source_for,
     tag_for,
 )
 
 API_BASE = "https://api.github.com"
 WEB_BASE = "https://github.com"
 RAW_BASE = "https://raw.githubusercontent.com"
+CODEBERG_API_BASE = "https://codeberg.org/api/v1"
+CODEBERG_WEB_BASE = "https://codeberg.org"
+
+# The fixed URL form of each reviewed source. Nothing outside this table can
+# become a release, download, or raw-license origin.
+_RELEASE_API_TEMPLATES = MappingProxyType({
+    "github": f"{API_BASE}/repos/{{repo}}/releases/latest",
+    "codeberg": f"{CODEBERG_API_BASE}/repos/{{repo}}/releases/latest",
+})
+_DOWNLOAD_TEMPLATES = MappingProxyType({
+    "github": f"{WEB_BASE}/{{repo}}/releases/download/{{tag}}/{{name}}",
+    "codeberg": f"{CODEBERG_WEB_BASE}/{{repo}}/releases/download/{{tag}}/{{name}}",
+})
+_RAW_LICENSE_TEMPLATES = MappingProxyType({
+    "github": f"{RAW_BASE}/{{repo}}/{{tag}}/{{path}}",
+    "codeberg": f"{CODEBERG_WEB_BASE}/{{repo}}/raw/tag/{{tag}}/{{path}}",
+})
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 # Latest stable only: an exact <prefix>N.N.N with no prerelease or build part.
 _STABLE_TAG = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 
-def releases_api_url(repo: str) -> str:
+def _source_url(templates: Mapping[str, str], source: str, **fields: str) -> str:
+    """Return one source's fixed URL form; an unreviewed source fails closed."""
+    try:
+        template = templates[source]
+    except KeyError:
+        raise ValueError(f"unsupported release source: {source!r}") from None
+    return template.format(**fields)
+
+
+def releases_api_url(repo: str, *, source: str = "github") -> str:
     """Return the fixed API endpoint for one repository's latest release."""
-    return f"{API_BASE}/repos/{repo}/releases/latest"
+    return _source_url(_RELEASE_API_TEMPLATES, source, repo=repo)
 
 
 def release_tag_api_url(repo: str, tag: str) -> str:
@@ -40,7 +71,8 @@ def release_tag_api_url(repo: str, tag: str) -> str:
 
     A multiproduct repository's `releases/latest` may name another product
     line; the canonical CLI release is fetched by its exact reviewed tag so
-    discovery selects the same CLI version.
+    discovery selects the same CLI version. The exact-tag policy is a GitHub
+    one, so this endpoint stays on the GitHub API.
     """
     return f"{API_BASE}/repos/{repo}/releases/tags/{tag}"
 
@@ -99,34 +131,39 @@ def parse_asset_digest(asset: object) -> str:
     return value
 
 
-def release_download_url(repo: str, tag: str, name: str) -> str:
+def release_download_url(repo: str, tag: str, name: str, *, source: str = "github") -> str:
     """Build the canonical download URL for one release asset."""
-    return f"{WEB_BASE}/{repo}/releases/download/{tag}/{name}"
+    return _source_url(_DOWNLOAD_TEMPLATES, source, repo=repo, tag=tag, name=name)
 
 
-def check_official_asset_url(url: object, *, repo: str, tag: str, name: str) -> str:
+def check_official_asset_url(
+    url: object, *, repo: str, tag: str, name: str, source: str = "github"
+) -> str:
     """Require the API's download URL to be the canonical official one."""
-    expected = release_download_url(repo, tag, name)
+    expected = release_download_url(repo, tag, name, source=source)
     if url != expected:
         raise ValueError(f"release asset url is not the official {repo} url: {url!r}")
     return expected
 
 
-def license_url(repo: str, tag: str, path: str) -> str:
+def license_url(repo: str, tag: str, path: str, *, source: str = "github") -> str:
     """Return the raw license URL for one exact upstream tag."""
-    return f"{RAW_BASE}/{repo}/{tag}/{path}"
+    return _source_url(_RAW_LICENSE_TEMPLATES, source, repo=repo, tag=tag, path=path)
 
 
 def license_urls_for(package_name: str, tag: str) -> tuple[str, ...]:
     """Return primary and supplemental license URLs in reviewed recipe order."""
     paths = (license_path(package_name), *extra_license_paths_for(package_name))
     repo = repo_of(package_name)
-    return tuple(license_url(repo, tag, path) for path in paths)
+    source = source_for(package_name)
+    return tuple(license_url(repo, tag, path, source=source) for path in paths)
 
 
 __all__ = [
     "ARCHES",
     "API_BASE",
+    "CODEBERG_API_BASE",
+    "CODEBERG_WEB_BASE",
     "RAW_BASE",
     "WEB_BASE",
     "asset_name",

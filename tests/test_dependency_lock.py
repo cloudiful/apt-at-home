@@ -3,7 +3,9 @@
 The Python lock and the npm install-script policy must keep builds working
 without the private mirror: every locked artifact resolves from public PyPI
 with unchanged versions and hashes, and the only permitted install scripts are
-the exact, version-pinned registry packages the lock declares.
+the exact, version-pinned registry packages the lock declares. The browser
+stack of the landing page is pinned the same way, so a build never resolves a
+newer release on its own.
 """
 
 import json
@@ -141,6 +143,74 @@ class InstallScriptPolicyTest(unittest.TestCase):
             for name, _, version in (key.rpartition("@") for key in self.manifest["allowScripts"])
         }
         self.assertEqual(approved, self.install_script_packages())
+
+
+class BrowserStackPinTest(unittest.TestCase):
+    """The browser stack of the landing page is pinned to exact versions."""
+
+    EXPECTED = {
+        "react": "19.3.1",
+        "react-dom": "19.3.1",
+        "@radix-ui/react-dropdown-menu": "2.2.1",
+        "@radix-ui/react-slot": "1.5.0",
+        "class-variance-authority": "0.7.1",
+        "clsx": "2.1.1",
+        "tailwind-merge": "3.7.0",
+        "lucide-react": "1.61.0",
+        "tailwindcss": "4.3.3",
+        "@tailwindcss/vite": "4.3.3",
+        "tw-animate-css": "1.4.0",
+        "vite": "8.3.5",
+        "@vitejs/plugin-react": "6.1.2",
+        "@types/react": "19.3.0",
+        "@types/react-dom": "19.3.0",
+    }
+
+    def setUp(self) -> None:
+        self.manifest = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+        self.lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
+
+    def test_every_declared_dependency_is_pinned_to_an_exact_version(self) -> None:
+        declared = {
+            **self.manifest.get("dependencies", {}),
+            **self.manifest.get("devDependencies", {}),
+        }
+        for name, version in declared.items():
+            with self.subTest(package=name):
+                self.assertRegex(version, r"^\d+\.\d+\.\d+$")
+                self.assertNotIn("*", version)
+
+    def test_the_browser_stack_resolves_to_the_pinned_versions(self) -> None:
+        packages = self.lock["packages"]
+        for name, version in self.EXPECTED.items():
+            with self.subTest(package=name):
+                entry = packages.get(f"node_modules/{name}")
+                self.assertIsNotNone(entry, name)
+                self.assertEqual(entry["version"], version, name)
+
+    def test_the_lock_resolves_from_the_public_registry(self) -> None:
+        for path, entry in self.lock["packages"].items():
+            if path == "":
+                continue
+            with self.subTest(package=path):
+                self.assertNotIn(PRIVATE_HOST, json.dumps(entry))
+                resolved = entry.get("resolved")
+                if resolved is not None:
+                    self.assertTrue(
+                        resolved.startswith("https://registry.npmjs.org/"), resolved
+                    )
+
+    def test_no_new_package_needs_an_install_script(self) -> None:
+        approved = {
+            name: version
+            for name, _, version in (key.rpartition("@") for key in self.manifest["allowScripts"])
+        }
+        needed = {
+            path.split("node_modules/")[-1]: entry["version"]
+            for path, entry in self.lock["packages"].items()
+            if entry.get("hasInstallScript") and not entry.get("optional")
+        }
+        self.assertEqual(needed, approved)
 
 
 if __name__ == "__main__":

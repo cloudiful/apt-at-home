@@ -43,6 +43,32 @@ class LicenseSourcesTest(unittest.TestCase):
             check_license_sources(client, "uv", "0.13.0", vendored={})
         self.assertEqual(client.requests, [])
 
+    def test_a_codeberg_package_reads_its_licenses_from_its_own_source(self) -> None:
+        vendored = vendor_license_sources("forgejo-cli")
+        urls = license_urls_for("forgejo-cli", "v0.7.0")
+        self.assertEqual(
+            urls,
+            (
+                "https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/v0.7.0/LICENSE-MIT",
+                "https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/v0.7.0/LICENSE-APACHE",
+            ),
+        )
+        client = FakeHttp(dict(zip(urls, vendored.values(), strict=True)))
+
+        primary, extras = check_license_sources(client, "forgejo-cli", "v0.7.0")
+
+        self.assertEqual((primary, extras), (urls[0], urls[1:]))
+        self.assertEqual([url for url, _ in client.requests], list(urls))
+
+    def test_changed_codeberg_license_bytes_fail_closed(self) -> None:
+        urls = license_urls_for("forgejo-cli", "v0.7.0")
+        vendored = vendor_license_sources("forgejo-cli")
+        payloads = dict(zip(urls, vendored.values(), strict=True))
+        payloads[urls[0]] = b"a different license text"
+
+        with self.assertRaisesRegex(ValueError, "license bytes changed"):
+            check_license_sources(FakeHttp(payloads), "forgejo-cli", "v0.7.0")
+
 
 if __name__ == "__main__":
     unittest.main()

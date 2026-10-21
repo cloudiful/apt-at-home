@@ -10,9 +10,40 @@ import zipfile
 from pathlib import Path
 
 from scripts.archive_tree import inventory_tree
-from scripts.catalog import archive_suffix_for, parsers_for, required_paths_for
+from scripts.catalog import (
+    archive_suffix_for,
+    parsers_for,
+    repo_of,
+    required_paths_for,
+    source_for,
+    tag_for,
+)
 from scripts.deb import stage_package
 from scripts.manifest import Manifest, Package
+from scripts.upstream_assets import asset_name, license_urls_for, release_download_url
+
+
+def move_package_version(entry: dict, version: str) -> None:
+    """Move one manifest entry to another version, with its canonical URLs.
+
+    A manifest binds a version to the release URLs that version names, so a
+    document that changes the version string alone is not a valid document.
+    The URLs follow the package's own reviewed source.
+    """
+    name = str(entry["name"])
+    tag = tag_for(name, version)
+    source = source_for(name)
+    entry["version"] = version
+    entry["license_url"] = license_urls_for(name, tag)[0]
+    targets = entry.get("targets")
+    if not isinstance(targets, dict):
+        raise ValueError(f"{name} manifest entry has no targets object")
+    for arch, target in targets.items():
+        if not isinstance(target, dict):
+            raise ValueError(f"{name} {arch} target must be an object")
+        target["url"] = release_download_url(
+            repo_of(name), tag, asset_name(name, version, arch), source=source
+        )
 
 
 def make_gpg_home_with_key() -> tuple[tempfile.TemporaryDirectory[str], Path, str]:
@@ -150,7 +181,7 @@ def fixture_targets(manifest: Manifest) -> list[tuple[Package, str]]:
 
     cargo-tauri contributes only its AMD target; every other package contributes
     both. Fixture builders must iterate this rather than a global arch tuple,
-    so the pool holds 12 AMD and 11 ARM debs for the current catalog.
+    so the pool holds 13 AMD and 12 ARM debs for the current catalog.
     """
     return [
         (pkg, arch)

@@ -25,7 +25,13 @@ from scripts.release_manifest import load_manifest_data
 from scripts.repo import main
 from scripts.sign import export_public_key, sign_release
 from scripts.storage import ObjectNotFound
-from tests.helpers import FakeS3, archive_stem, make_gpg_home_with_key, write_target_archive
+from tests.helpers import (
+    FakeS3,
+    archive_stem,
+    make_gpg_home_with_key,
+    move_package_version,
+    write_target_archive,
+)
 from tests.test_kandev_bundle import write_bundle_archive
 from tests.release_fixtures import build_release_objects
 
@@ -83,7 +89,7 @@ def _build_candidate(
     if older_zellij:
         for entry in data["packages"]:
             if entry["name"] == "zellij":
-                entry["version"] = "0.44.0"
+                move_package_version(entry, "0.44.0")
     with mock.patch("scripts.build.fetch_verified", _fake_fetch):
         build_release(
             output_root=tree,

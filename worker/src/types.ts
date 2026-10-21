@@ -2,6 +2,11 @@
 export interface Env {
   /** Private R2 bucket holding the published repository. Never a public bucket. */
   readonly BUCKET: R2Bucket;
+  /**
+   * Public browser assets of the landing page: the client script, its
+   * stylesheet, and the theme bootstrap. They carry no repository content.
+   */
+  readonly ASSETS: Fetcher;
   /** Worker secret: JSON object mapping client name to SHA256 hex digest of its token. */
   readonly CREDENTIALS: string;
   /**

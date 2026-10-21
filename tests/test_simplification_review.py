@@ -95,8 +95,8 @@ class RealArtifactReviewTest(unittest.TestCase):
             self.assertEqual({p.name for p in built}, expected_debs(manifest))
             findings = verify_tree(output, expected_fingerprint=fingerprint)
             print("SIGNED21", findings)
-        self.assertEqual(len(list((output / "pool").glob("*_amd64.deb"))), 11)
-        self.assertEqual(len(list((output / "pool").glob("*_arm64.deb"))), 10)
+        self.assertEqual(len(list((output / "pool").glob("*_amd64.deb"))), 13)
+        self.assertEqual(len(list((output / "pool").glob("*_arm64.deb"))), 12)
         for name, digest in baseline.items():
             self.assertEqual(sha256_file(output / "pool" / name), digest, name)
             self.assertEqual(sha256_file(Path("dist/repo/pool") / name), digest)

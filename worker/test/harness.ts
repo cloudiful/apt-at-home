@@ -8,6 +8,7 @@
  */
 import gateway from '../src/index.js';
 import { FakeBucket, FakeCache, FakeContext, createEnv, credentialSecret, sha256Hex } from './fakes.js';
+import { FakeAssets } from './fakes.js';
 
 export const ORIGIN = 'https://apt.example.test';
 export const CLIENT = 'laptop';
@@ -74,6 +75,7 @@ export interface Fixture {
   readonly bucket: FakeBucket;
   readonly cache: FakeCache;
   readonly ctx: FakeContext;
+  readonly assets: FakeAssets;
   readonly env: ReturnType<typeof createEnv>;
   readonly amd64Digest: string;
   readonly arm64Digest: string;
@@ -87,7 +89,16 @@ export async function createFixture(): Promise<Fixture> {
   const bucket = new FakeBucket();
   const cache = new FakeCache();
   const ctx = new FakeContext();
-  const env = createEnv(bucket, await credentialSecret({ [CLIENT]: TOKEN, phone: OTHER_TOKEN }));
+  const assets = new FakeAssets();
+  assets.seed('main.js', 'console.log("client")', 'text/javascript');
+  assets.seed('main.css', 'body{color:#000}', 'text/css');
+  assets.seed('theme-init.js', '/* theme */', 'text/javascript');
+  const env = createEnv(
+    bucket,
+    await credentialSecret({ [CLIENT]: TOKEN, phone: OTHER_TOKEN }),
+    undefined,
+    assets,
+  );
 
   const amd64Digest = await sha256Hex(AMD64_PACKAGES);
   const arm64Digest = await sha256Hex(ARM64_PACKAGES);
@@ -105,6 +116,7 @@ export async function createFixture(): Promise<Fixture> {
     bucket,
     cache,
     ctx,
+    assets,
     env,
     amd64Digest,
     arm64Digest,

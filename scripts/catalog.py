@@ -23,6 +23,7 @@ __all__ = [
     "archive_suffix_for",
     "arches_for",
     "exact_tag_release_for",
+    "source_for",
     "tag_prefix_for",
 ]
 
@@ -96,6 +97,11 @@ def triple_for(package_name: str, arch: str) -> str:
 def repo_of(package_name: str) -> str:
     """Return the only upstream repository this package may be fetched from."""
     return recipe_for(package_name).repo
+
+
+def source_for(package_name: str) -> str:
+    """Return the reviewed upstream host this package's release comes from."""
+    return recipe_for(package_name).source
 
 
 def tag_prefix_for(package_name: str) -> str:
@@ -185,10 +191,14 @@ def extra_license_paths_for(package_name: str) -> tuple[str, ...]:
 
 def extra_license_urls_for(package_name: str, version: str) -> tuple[str, ...]:
     """Return exact raw-source URLs for the recipe's additional license texts."""
+    # The official URL forms live in `upstream_assets`, which reads this
+    # module; the import is deferred so the two stay acyclic.
+    from .upstream_assets import license_url
+
     recipe = recipe_for(package_name)
     tag = tag_for(package_name, version)
     return tuple(
-        f"https://raw.githubusercontent.com/{recipe.repo}/{tag}/{path}"
+        license_url(recipe.repo, tag, path, source=recipe.source)
         for path in recipe.extra_license_paths
     )
 

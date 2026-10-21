@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import gateway from '../src/index.js';
 import { renderHomepageDocument } from '../src/homepage.js';
+import manifest from '../dist/assets/.vite/manifest.json';
+import { markTheme } from '../../web/src/components/theme-provider.js';
 import { authorized, createEnv, FakeContext, plain } from './fakes.js';
 import {
   CLIENT,
@@ -16,6 +18,35 @@ const encoder = new TextEncoder();
 
 /** The metadata keys the root page is allowed to read. */
 const METADATA_KEYS = ['current.json', `releases/${RELEASE_ID}/manifest.json`];
+
+/** The names the build gave the client entry and its stylesheet. */
+const ENTRY = (manifest as unknown as Record<string, { file: string; css?: string[] }>)[
+  'web/src/main.tsx'
+];
+const CLIENT_SCRIPT = ENTRY?.file ?? '';
+const CLIENT_STYLE = ENTRY?.css?.[0] ?? '';
+
+/** A build name carries the hash of its content. */
+const HASHED_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*-[A-Za-z0-9_-]{8}\.(?:js|css)$/;
+
+/**
+ * Reads a file of this repository.
+ *
+ * The assertions about the theme bootstrap and the stylesheet are about their
+ * text, so the text is read from the file the build and the browser use.
+ */
+function readSource(relative: string): string {
+  const fs = (
+    globalThis as unknown as {
+      process: {
+        getBuiltinModule(id: string): {
+          readFileSync(path: URL, encoding: 'utf8'): string;
+        };
+      };
+    }
+  ).process.getBuiltinModule('fs');
+  return fs.readFileSync(new URL(relative, import.meta.url), 'utf8');
+}
 
 describe('public root landing page', () => {
   afterEach(() => {
@@ -139,6 +170,98 @@ describe('public root landing page', () => {
   });
 });
 
+describe('the rendered document', () => {
+  it('renders the page as a React tree with the built assets', async () => {
+    const fixture = await createFixture();
+    const html = await (await fixture.call(plain('/'))).text();
+
+    // The client script and its stylesheet come from the build manifest.
+    expect(html).toContain(`<script src="/assets/${CLIENT_SCRIPT}" type="module"></script>`);
+    expect(html).toContain(`<link rel="stylesheet" href="/assets/${CLIENT_STYLE}">`);
+    // The theme bootstrap is an external script in the head, before the body.
+    expect(html).toContain('<script src="/assets/theme-init.js"></script>');
+    expect(html.indexOf('/assets/theme-init.js')).toBeLessThan(html.indexOf('<body>'));
+    expect(html).not.toContain('<script>');
+  });
+
+  it('links the assets the build named, and every name carries its content hash', async () => {
+    const fixture = await createFixture();
+    const html = await (await fixture.call(plain('/'))).text();
+
+    expect(CLIENT_SCRIPT).toMatch(HASHED_NAME);
+    expect(CLIENT_STYLE).toMatch(HASHED_NAME);
+    // The document never links an unhashed build file.
+    expect(html).not.toContain('/assets/main.js');
+    expect(html).not.toContain('/assets/main.css');
+    // The theme bootstrap keeps its stable name on purpose.
+    expect(html).toContain('/assets/theme-init.js');
+  });
+
+  it('keeps the title and subtitle out of the visible page', async () => {
+    const fixture = await createFixture();
+    for (const path of ['/', '/?lang=zh']) {
+      const html = await (await fixture.call(plain(path))).text();
+      expect(html, path).not.toContain('Debian 13');
+      expect(html, path).not.toMatch(/<h1[^>]*>apt-at-home<\/h1>/);
+      // The page still has one first-level heading for assistive technology.
+      expect(html, path).toMatch(/<h1 class="sr-only">(APT repository|APT 软件源)<\/h1>/);
+    }
+  });
+
+  it('offers the language, theme and repository controls', async () => {
+    const fixture = await createFixture();
+    const html = await (await fixture.call(plain('/'))).text();
+
+    expect(html).toContain('aria-label="Language"');
+    expect(html).toContain('aria-label="Toggle theme"');
+    expect(html).toContain('href="https://github.com/cloudiful/apt-at-home"');
+    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).toContain('https://img.shields.io/github/stars/cloudiful/apt-at-home?style=social');
+    expect(html).toContain('apt-at-home on GitHub');
+  });
+
+  it('locks the page down to its own origin and the stars image', async () => {
+    const fixture = await createFixture();
+    const response = await fixture.call(plain('/'));
+    const policy = response.headers.get('Content-Security-Policy') ?? '';
+
+    expect(policy).toContain("script-src 'self'");
+    expect(policy).not.toContain("script-src 'self' 'unsafe-inline'");
+    expect(policy).not.toContain('unsafe-eval');
+    expect(policy).toContain("style-src 'self' 'unsafe-inline'");
+    expect(policy).toContain('img-src data: https://img.shields.io');
+    expect(policy).toContain("base-uri 'none'");
+    expect(policy).toContain("frame-ancestors 'none'");
+    for (const forbidden of ['cdn.', 'unpkg', 'jsdelivr', 'googleapis', 'fonts.']) {
+      expect(policy, forbidden).not.toContain(forbidden);
+    }
+  });
+
+  it('hands the browser the props as data, never as markup', async () => {
+    const fixture = await createFixture();
+    const html = await (await fixture.call(plain('/'))).text();
+
+    expect(html).toContain('<script id="app-props" type="application/json">');
+    const payload = html.slice(
+      html.indexOf('<script id="app-props" type="application/json">') +
+        '<script id="app-props" type="application/json">'.length,
+      html.indexOf('</script>', html.indexOf('<script id="app-props"')),
+    );
+    expect(payload).not.toContain('<');
+    expect(JSON.parse(payload).packages).toHaveLength(SYNTHETIC_PACKAGES.length);
+  });
+
+  it('escapes a payload that would otherwise close the data block', () => {
+    const html = renderHomepageDocument({
+      locale: 'en',
+      origin: 'https://apt.example.test',
+      packages: [{ name: '</script><script>alert(1)</script>', version: '1.0.0', architectures: ['amd64'] }],
+    });
+    expect(html).not.toContain('</script><script>alert(1)');
+    expect(html).toContain('\\u003c/script>');
+  });
+});
+
 describe('root page locale negotiation', () => {
   const withHeader = (path: string, acceptLanguage: string): Request =>
     new Request(`https://apt.example.test${path}`, {
@@ -181,17 +304,18 @@ describe('root page locale negotiation', () => {
     );
     const html = await response.text();
     expect(response.headers.get('Content-Language')).toBe('zh-CN');
-    expect(html).not.toContain('<script>');
+    expect(html).not.toContain('<script>alert(1)');
     expect(html).not.toContain('%3Cscript');
   });
 
-  it('marks the active locale link and normalizes the switch hrefs', async () => {
+  it('marks the active locale and normalizes the switch links', async () => {
     const fixture = await createFixture();
     const html = await (await fixture.call(plain('/?lang=zh'))).text();
-    expect(html).toContain('href="?lang=en"');
-    expect(html).toContain('href="?lang=zh"');
-    expect(html).toMatch(/<a href="\?lang=zh"[^>]*aria-current="true"/);
-    expect(html).not.toMatch(/<a href="\?lang=en"[^>]*aria-current/);
+    // The menu opens on interaction, so the document carries the trigger and
+    // never a second copy of the switch.
+    expect(html).toContain('aria-label="语言"');
+    expect(html).not.toContain('href="?lang=en"');
+    expect(html).not.toContain('href="?lang=zh"');
   });
 
   it('sends a Content-Length matching each locale body and differing between them', async () => {
@@ -220,7 +344,7 @@ describe('root page locale negotiation', () => {
     const fixture = await createFixture();
     const blocksFor = async (path: string): Promise<string[]> => {
       const html = await (await fixture.call(plain(path))).text();
-      return html.match(/<pre><code>[\s\S]*?<\/code><\/pre>/g) ?? [];
+      return html.match(/<pre class="code-block"><code>[\s\S]*?<\/code><\/pre>/g) ?? [];
     };
     const en = await blocksFor('/?lang=en');
     const zh = await blocksFor('/?lang=zh');
@@ -288,7 +412,7 @@ describe('root page content', () => {
     fixture.bucket.entries.delete(`releases/${RELEASE_ID}/manifest.json`);
     const html = await (await fixture.call(plain('/'))).text();
 
-    expect(html).toContain('<pre><code>sudo apt update</code></pre>');
+    expect(html).toContain('sudo apt update');
     expect(html).not.toContain('Update the package index');
     expect(html).toContain('sudo install -d -m0755 /etc/apt/keyrings');
   });
@@ -297,19 +421,15 @@ describe('root page content', () => {
     const fixture = await createFixture();
     const html = await (await fixture.call(plain('/'))).text();
 
-    expect(html).toContain('<caption class="sr-only">Published packages</caption>');
-    expect(html).toContain('<th scope="col">Package</th>');
-    expect(html).toContain('<th scope="col">Upstream version</th>');
-    expect(html).toContain('<th scope="col">Architecture</th>');
-    expect(html).toContain('<th scope="row">alpha</th>');
-    expect(html).toContain('<th scope="row">beta</th>');
-    expect(html).toContain('<th scope="row">gamma</th>');
-    expect(html).toContain('<td>1.2.3</td>');
-    expect(html).toContain('<td>0.4.0</td>');
-    expect(html).toContain('<td>2.0.0</td>');
-    expect(html).toContain('<td>amd64, arm64</td>');
-    expect(html).toContain('<td>amd64</td>');
-    expect(html).toContain('<td>arm64</td>');
+    expect(html).toContain('Published packages');
+    expect(html).toContain('Package');
+    expect(html).toContain('Upstream version');
+    expect(html).toContain('Architecture');
+    expect(html).toContain('alpha');
+    expect(html).toContain('1.2.3');
+    expect(html).toContain('amd64, arm64');
+    expect(html).toContain('0.4.0');
+    expect(html).toContain('2.0.0');
   });
 
   it('labels the table for assistive technology without repeating it visibly', async () => {
@@ -319,39 +439,11 @@ describe('root page content', () => {
       ['/?lang=zh', '已发布的软件包'],
     ] as const) {
       const html = await (await fixture.call(plain(path))).text();
-      expect(html, path).toContain(`<caption class="sr-only">${caption}</caption>`);
+      const label = html.slice(html.indexOf('<caption'), html.indexOf('</caption>'));
+      expect(label, path).toContain(caption);
+      expect(label, path).toContain('sr-only');
       expect(html, path).not.toContain('<caption>');
       expect(html, path).not.toContain('display: none');
-    }
-  });
-
-  it('ends with one documentation link and no policy prose', async () => {
-    const fixture = await createFixture();
-    for (const [path, label] of [
-      ['/', 'Documentation'],
-      ['/?lang=zh', '文档'],
-    ] as const) {
-      const html = await (await fixture.call(plain(path))).text();
-      const footer = html.slice(html.indexOf('<footer>'), html.indexOf('</footer>'));
-      expect(footer, path).toContain(
-        `<a href="https://github.com/cloudiful/apt-at-home">${label}</a>`,
-      );
-      expect(footer.match(/<a /g) ?? [], path).toHaveLength(1);
-      expect(html, path).not.toContain('public test mode');
-      expect(html, path).not.toContain('公开测试模式');
-      expect(html, path).not.toContain('docs/setup.md');
-    }
-  });
-
-  it('keeps the platform label and drops the lede and the prerequisites block', async () => {
-    const fixture = await createFixture();
-    for (const path of ['/', '/?lang=zh']) {
-      const html = await (await fixture.call(plain(path))).text();
-      expect(html, path).toContain('Debian 13');
-      expect(html, path).not.toContain('class="lede"');
-      expect(html, path).not.toContain('Before you start');
-      expect(html, path).not.toContain('开始之前');
-      expect(html, path).not.toContain('prerequisites');
     }
   });
 
@@ -361,9 +453,9 @@ describe('root page content', () => {
 
     expect(html).toContain('sudo apt update &amp;&amp; sudo apt install alpha');
     expect(html).toContain('Only on amd64:');
-    expect(html).toContain('<pre><code>sudo apt install beta</code></pre>');
+    expect(html).toContain('sudo apt install beta');
     expect(html).toContain('Only on arm64:');
-    expect(html).toContain('<pre><code>sudo apt install gamma</code></pre>');
+    expect(html).toContain('sudo apt install gamma');
     expect(html).not.toContain('sudo apt install alpha beta');
   });
 
@@ -374,9 +466,9 @@ describe('root page content', () => {
 
     expect(html).toContain('role="status"');
     expect(html).toContain('The published package list is unavailable right now.');
-    expect(html).not.toContain('<table>');
+    expect(html).not.toContain('<table');
     expect(html).not.toContain('sudo apt install');
-    expect(html).toContain('<pre><code>sudo apt update</code></pre>');
+    expect(html).toContain('sudo apt update');
     expect(html).toContain('/etc/apt/keyrings/apt-at-home.asc');
   });
 
@@ -397,10 +489,10 @@ describe('root page content', () => {
     );
     const html = await (await fixture.call(plain('/'))).text();
 
-    expect(html).not.toContain('<script>');
+    expect(html).not.toContain('<script>alert(1)');
     expect(html).not.toContain('alert(1)');
     expect(html).toContain('The published package list is unavailable right now.');
-    expect(html).not.toContain('<table>');
+    expect(html).not.toContain('<table');
   });
 
   it('picks up a newly published package without a template change', async () => {
@@ -411,8 +503,8 @@ describe('root page content', () => {
     ]);
     const html = await (await fixture.call(plain('/'))).text();
 
-    expect(html).toContain('<th scope="row">delta</th>');
-    expect(html).toContain('<td>3.1.4</td>');
+    expect(html).toContain('delta');
+    expect(html).toContain('3.1.4');
     expect(html).toContain('sudo apt update &amp;&amp; sudo apt install alpha delta');
   });
 
@@ -424,7 +516,6 @@ describe('root page content', () => {
       expect(html, path).not.toContain('trusted=yes');
       expect(html, path).not.toContain('--dearmor');
       expect(html, path).not.toContain('apt-at-home.gpg');
-      expect(html, path).not.toContain('<script');
       expect(html, path).not.toContain('<form');
 
       const start = html.indexOf('curl --fail');
@@ -450,11 +541,12 @@ describe('root page content', () => {
 
   it('escapes a hostile origin instead of interpolating markup', () => {
     for (const locale of ['en', 'zh'] as const) {
-      const html = renderHomepageDocument(
-        'https://evil"</code><script>alert(1)</script>',
+      const html = renderHomepageDocument({
         locale,
-      );
-      expect(html, locale).not.toContain('<script>');
+        origin: 'https://evil"</code><script>alert(1)</script>',
+        packages: null,
+      });
+      expect(html, locale).not.toContain('<script>alert(1)');
       expect(html, locale).toContain('&lt;script&gt;');
       expect(html, locale).toContain('&quot;');
     }
@@ -467,5 +559,205 @@ describe('root page content', () => {
     expect(response.status).toBe(200);
     expect(html).not.toContain('ho"st.test');
     expect(html).toContain('ho&quot;st.test');
+  });
+});
+
+describe('public browser assets', () => {
+  it('serves the built assets without a credential', async () => {
+    const fixture = await createFixture();
+    fixture.assets.seed(CLIENT_SCRIPT, 'console.log("client")', 'text/javascript');
+    fixture.assets.seed(CLIENT_STYLE, 'body{color:#000}', 'text/css');
+    for (const [name, type] of [
+      [CLIENT_SCRIPT, 'text/javascript'],
+      [CLIENT_STYLE, 'text/css'],
+      ['theme-init.js', 'text/javascript'],
+    ] as const) {
+      const response = await fixture.call(plain(`/assets/${name}`));
+      expect(response.status, name).toBe(200);
+      expect(response.headers.get('Content-Type'), name).toBe(type);
+      expect(response.headers.get('X-Content-Type-Options'), name).toBe('nosniff');
+    }
+    expect(fixture.assets.requests).toEqual([CLIENT_SCRIPT, CLIENT_STYLE, 'theme-init.js']);
+    expect(fixture.bucket.calls).toEqual([]);
+  });
+
+  it('answers HEAD for an asset without a body', async () => {
+    const fixture = await createFixture();
+    fixture.assets.seed(CLIENT_SCRIPT, 'console.log("client")', 'text/javascript');
+    const response = await fixture.call(plain(`/assets/${CLIENT_SCRIPT}`, { method: 'HEAD' }));
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('');
+  });
+
+  it('refuses every asset name that is not one flat script or stylesheet', async () => {
+    const fixture = await createFixture();
+    const refused = [
+      '/assets/',
+      '/assets/.vite/manifest.json',
+      '/assets/main.js.map',
+      '/assets/main.css.map',
+      '/assets/manifest.json',
+      '/assets/index.html',
+      '/assets/.hidden.js',
+      '/assets/sub/dir/main.js',
+    ];
+    for (const path of refused) {
+      const response = await fixture.call(plain(path));
+      expect(response.status, path).toBe(404);
+    }
+    expect(fixture.assets.requests).toEqual([]);
+    expect(fixture.bucket.calls).toEqual([]);
+  });
+
+  it('ignores the query string of an asset request and never reflects it', async () => {
+    const fixture = await createFixture();
+    fixture.assets.seed(CLIENT_SCRIPT, 'console.log("client")', 'text/javascript');
+    const response = await fixture.call(plain(`/assets/${CLIENT_SCRIPT}?token=SECRET`));
+    expect(response.status).toBe(200);
+    expect(await response.text()).not.toContain('SECRET');
+    expect(fixture.assets.requests).toEqual([CLIENT_SCRIPT]);
+  });
+
+  it('never treats a path that leaves the asset prefix as an asset', async () => {
+    const fixture = await createFixture();
+    // The request line is normalised before the Worker sees it, so these
+    // paths are ordinary repository paths and stay behind the credential gate.
+    for (const path of [
+      '/assets/theme-init.js/../../key.asc',
+      '/assets/%2e%2e/key.asc',
+    ]) {
+      const response = await fixture.call(plain(path));
+      expect(response.status, path).toBe(401);
+    }
+    expect(fixture.assets.requests).toEqual([]);
+  });
+
+  it('refuses an unknown asset with a 404', async () => {
+    const fixture = await createFixture();
+    const response = await fixture.call(plain('/assets/missing.js'));
+    expect(response.status).toBe(404);
+    expect(fixture.assets.requests).toEqual(['missing.js']);
+  });
+
+  it('refuses any method but GET and HEAD on an asset', async () => {
+    const fixture = await createFixture();
+    const response = await fixture.call(
+      plain(`/assets/${CLIENT_SCRIPT}`, { method: 'POST' }),
+    );
+    expect(response.status).toBe(405);
+    expect(response.headers.get('Allow')).toBe('GET, HEAD');
+    expect(fixture.assets.requests).toEqual([]);
+  });
+});
+
+/** The class list of a document, reduced to what the theme code touches. */
+class FakeClassList {
+  private readonly names = new Set<string>();
+
+  add(...names: string[]): void {
+    for (const name of names) this.names.add(name);
+  }
+
+  remove(...names: string[]): void {
+    for (const name of names) this.names.delete(name);
+  }
+
+  contains(name: string): boolean {
+    return this.names.has(name);
+  }
+
+  get list(): string[] {
+    return [...this.names].sort();
+  }
+}
+
+describe('the theme bootstrap', () => {
+  const source = readSource('../../web/public/theme-init.js');
+
+  /** Runs the bootstrap against a document and a browser double. */
+  function bootstrap(options: {
+    stored?: string | null;
+    storageDenied?: boolean;
+    prefersDark?: boolean;
+  }): FakeClassList {
+    const classList = new FakeClassList();
+    const storage = {
+      getItem() {
+        if (options.storageDenied === true) throw new Error('storage denied');
+        return options.stored ?? null;
+      },
+    };
+    const window = {
+      localStorage: storage,
+      matchMedia: () => ({ matches: options.prefersDark === true }),
+    };
+    const document = { documentElement: { classList } };
+    new Function('window', 'document', source)(window, document);
+    return classList;
+  }
+
+  it('marks the document with the saved preference', () => {
+    expect(bootstrap({ stored: 'dark', prefersDark: false }).list).toEqual(['dark']);
+    expect(bootstrap({ stored: 'light', prefersDark: true }).list).toEqual(['light']);
+  });
+
+  it('resolves the system preference when nothing is saved', () => {
+    expect(bootstrap({ prefersDark: true }).list).toEqual(['dark']);
+    expect(bootstrap({ prefersDark: false }).list).toEqual(['light']);
+  });
+
+  it('still resolves the system preference when storage is refused', () => {
+    expect(bootstrap({ storageDenied: true, prefersDark: true }).list).toEqual(['dark']);
+    expect(bootstrap({ storageDenied: true, prefersDark: false }).list).toEqual(['light']);
+  });
+
+  it('never leaves the document without a marker', () => {
+    for (const options of [
+      { stored: 'dark' },
+      { stored: 'light' },
+      { storageDenied: true },
+      { prefersDark: true },
+      { prefersDark: false },
+    ]) {
+      const classList = bootstrap(options);
+      expect(classList.list.length, JSON.stringify(options)).toBe(1);
+      expect(['light', 'dark']).toContain(classList.list[0]);
+    }
+  });
+});
+
+describe('the theme markers', () => {
+  it('keeps the light and dark markers mutually exclusive', () => {
+    const classList = new FakeClassList();
+    markTheme({ classList }, 'dark');
+    expect(classList.list).toEqual(['dark']);
+    markTheme({ classList }, 'light');
+    expect(classList.list).toEqual(['light']);
+  });
+});
+
+describe('the stylesheet fallback', () => {
+  const styles = readSource('../../web/src/styles/app.css');
+  const built = readSource(`../dist/assets/${CLIENT_STYLE}`);
+
+  it('applies the dark palette under the system preference only without a marker', () => {
+    expect(styles).toMatch(/@media \(prefers-color-scheme: dark\)/);
+    expect(styles).toMatch(/:root:not\(\.light\):not\(\.dark\)/);
+    expect(styles).toMatch(/^\.dark \{/m);
+    expect(styles).toMatch(/^\.light \{/m);
+  });
+
+  it('carries the system fallback into the stylesheet the browser loads', () => {
+    expect(built).toContain('prefers-color-scheme:dark');
+    expect(built).toContain(':root:not(.light):not(.dark)');
+  });
+
+  it('declares each palette value once and reuses it', () => {
+    // The dark background value appears once as a palette entry; the two
+    // blocks that use it only name the variable.
+    const value = '--dark-background: oklch(0.145 0 0);';
+    expect(styles.split(value).length - 1).toBe(1);
+    expect(styles).toMatch(/--background: var\(--dark-background\);/);
+    expect(styles).toMatch(/--background: var\(--light-background\);/);
   });
 });

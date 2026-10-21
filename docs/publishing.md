@@ -139,25 +139,30 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   `Packages` hashes, and the manifest bound by `X-Manifest-SHA256` /
   `X-Manifest-Size`) before it reads a single package byte, then compares that
   signed baseline against the latest stable upstream release of every package
-  in the catalog: bottom, bun, cargo-tauri (amd64 only), git-delta, kandev,
-  neovim, rustfs-cli, sccache, starship, uv, zellij, and zoxide.
+  in the catalog: bottom, bun, cargo-tauri (amd64 only), forgejo-cli,
+  git-delta, kandev, neovim, rustfs-cli, sccache, starship, uv, zellij, and
+  zoxide.
   `cargo-tauri` selects the highest stable `tauri-cli-vN.N.N` tag and that exact
   release's official amd64 asset, so another product line's latest release never
   selects it.
-- Each package has one reviewed recipe: the official repository, the release
-  tag prefix, asset names, archive members, installed commands, dependencies,
-  and SPDX license sources. Version bumps recompute member paths from the new
-  version, preserving uvx and uv's supplemental Apache provenance without
-  trusting release metadata to choose files.
+- Each package has one reviewed recipe: the official repository, its source
+  host, the release tag prefix, asset names, archive members, installed
+  commands, dependencies, and SPDX license sources. Version bumps recompute
+  member paths from the new version, preserving uvx and uv's supplemental
+  Apache provenance without trusting release metadata to choose files.
+- Most packages come from GitHub, whose API publishes a sha256 digest for
+  every asset. `forgejo-cli` comes from Codeberg, which publishes none, so
+  its archives are pinned by a SHA256 computed from the official download and
+  recomputed on every discovery; that costs about 18 MiB of downloads per run.
 - A package the published release does not carry yet is added from the catalog
-  rather than replacing anything. With the twelve-package catalog, a two-package
-  baseline adds ten packages, a six-package baseline adds six, and a
-  five-package baseline adds seven. Every added package contributes one `.deb`
-  per architecture, except `cargo-tauri`, whose amd64-only target contributes a
-  single `.deb`, and every existing package stays byte-identical. The final
-  indices list every package the new bound manifest declares. The published
-  version is authoritative, so a catalog that pins an older version never
-  overwrites a newer published one.
+  rather than replacing anything. With the thirteen-package catalog, a
+  two-package baseline adds eleven packages, a six-package baseline adds
+  seven, and a five-package baseline adds eight. Every added package
+  contributes one `.deb` per architecture, except `cargo-tauri`, whose
+  amd64-only target contributes a single `.deb`, and every existing package
+  stays byte-identical. The final indices list every package the new bound
+  manifest declares. The published version is authoritative, so a catalog that
+  pins an older version never overwrites a newer published one.
 - Only changed packages are rebuilt — each reviewed recipe determines its exact
   required targets (usually both architectures; cargo-tauri is amd64 only), so a
   later single-package update produces exactly its declared `.deb` files while the
@@ -165,7 +170,8 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
 - A no-op is a success: nothing is built, signed, uploaded, or pointed at, and
   a second run against the new baseline finds nothing left to do.
 - Versions only move forward. A downgrade, a missing architecture asset, a
-  missing GitHub API digest, or a non-exact stable tag stops the run.
+  missing GitHub API digest, an unreachable Codeberg archive, or a non-exact
+  stable tag stops the run.
 
 ### When an update stops
 
@@ -174,6 +180,10 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   is acceptable.
 - **Same version, different digest.** A republished tag is treated as a mutable
   release, not an unchanged one, and the run stops.
+- **A Codeberg archive is unreachable or renamed.** Codeberg publishes no
+  release digest, so its archives are hashed from the official download; an
+  outage, a renamed asset, or changed bytes stops the run instead of skipping
+  the package.
 - **The published release does not bind a valid manifest.** A release whose
   `Release` omits `X-Manifest-*`, or whose bound manifest is missing or does not
   match the signed digest and size, stops the run before any package is read.

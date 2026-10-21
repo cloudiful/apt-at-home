@@ -1,11 +1,12 @@
 """Load and validate the pinned upstream manifest.
 
-Every target pins an official download URL with its digest and the reviewed
-archive member inside it. Production is asset-only: an invented `https://` URL
-for a compiled binary would be a false claim about where its bytes came from,
-so the absence of an asset is expressed by the absence of that architecture's
-target, never by a source block. Each reviewed recipe determines its exact
-required targets through `catalog.arches_for`.
+Every target pins an official download URL from the package's reviewed source
+with its digest and the reviewed archive member inside it. Production is
+asset-only: an invented `https://` URL for a compiled binary would be a false
+claim about where its bytes came from, so the absence of an asset is expressed
+by the absence of that architecture's target, never by a source block. Each
+reviewed recipe determines its exact required targets through
+`catalog.arches_for`.
 """
 
 from __future__ import annotations
@@ -24,10 +25,15 @@ from .catalog import (
     additional_binaries_for,
     arches_for,
     archive_member,
+    asset_name,
     check_known_names,
     check_relations,
     extra_license_urls_for,
+    repo_of,
+    source_for,
+    tag_for,
 )
+from .upstream_assets import release_download_url
 
 from .download import canonical_member
 
@@ -35,7 +41,13 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _ARCHES = ("amd64", "arm64")
 _VERSION = re.compile(r"^[0-9][A-Za-z0-9.+~:-]*$")
 _BINARY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
-_URL = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/[^ ]+$")
+# The two reviewed release hosts, in their fixed download form. Credentials, a
+# port, a query, and a fragment are all outside the shape, and the canonical
+# check below binds every URL to its own recipe, release, and asset.
+_URL = re.compile(
+    r"^https://(?:github\.com|codeberg\.org)/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+    r"/releases/download/[^/?#\s]+/[^/?#\s]+$"
+)
 
 
 @dataclass(frozen=True)
@@ -134,6 +146,31 @@ def parse_manifest(raw: object) -> Manifest:
         debian_revision=debian_revision,
         packages=tuple(packages),
     )
+
+
+def _check_target_url(name: str, version: str, arch: str, url: str) -> str:
+    """Require the pinned URL to be the reviewed package's official asset.
+
+    The shape check refuses every other host form, a credential, a port, a
+    query, and a fragment. The canonical check then binds the URL to this
+    package's own source, repository, release tag, and asset, so a swapped
+    host, repository, path, or tag can never pass.
+    """
+    if not _URL.match(url):
+        raise ValueError(f"invalid pinned URL for {name} {arch}: {url}")
+    if name not in KNOWN_PACKAGES:
+        return url
+    expected = release_download_url(
+        repo_of(name),
+        tag_for(name, version),
+        asset_name(name, version, arch),
+        source=source_for(name),
+    )
+    if url != expected:
+        raise ValueError(
+            f"pinned URL for {name} {arch} is not the reviewed official asset: {url}"
+        )
+    return url
 
 
 def _parse_source(
@@ -240,8 +277,7 @@ def parse_package(raw: object) -> Package:
         sha256 = str(target_raw.get("sha256", "")).lower()
         binary = str(target_raw.get("binary", ""))
         member, install_tree, bundle_type = _parse_source(name, version, arch, target_raw)
-        if not _URL.match(url):
-            raise ValueError(f"invalid pinned URL for {name} {arch}: {url}")
+        _check_target_url(name, version, arch, url)
         if not _SHA256.match(sha256):
             raise ValueError(f"invalid sha256 for {name} {arch}")
         additional = _parse_additional_binaries(

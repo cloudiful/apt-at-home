@@ -18,7 +18,7 @@ from scripts.publish_guard import (
 )
 from scripts.release_verify import BaselineUnavailable, TrustedRelease, restore_metadata
 from scripts.storage import ObjectNotFound
-from tests.helpers import make_gpg_home_with_key
+from tests.helpers import make_gpg_home_with_key, move_package_version
 from tests.release_fixtures import build_release_objects
 
 
@@ -51,7 +51,7 @@ def _with_bumped_version(data: dict, name: str, version: str) -> dict:
     out = copy.deepcopy(data)
     for entry in out["packages"]:
         if entry["name"] == name:
-            entry["version"] = version
+            move_package_version(entry, version)
     return out
 
 
@@ -100,9 +100,9 @@ class CandidateComparisonTest(unittest.TestCase):
         data, _ = validated_document(default_manifest_path())
         for entry in data["packages"]:
             if entry["name"] == "starship":
-                entry["version"] = starship
+                move_package_version(entry, starship)
             elif entry["name"] == "zellij":
-                entry["version"] = zellij
+                move_package_version(entry, zellij)
         return parse_manifest(data)
 
     def test_an_older_package_is_refused(self) -> None:

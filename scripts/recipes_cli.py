@@ -34,6 +34,14 @@ _BUN_LIBC = MappingProxyType({
     "amd64": "libc6 (>= 2.17), libgcc-s1",
     "arm64": "libc6 (>= 2.17), libgcc-s1",
 })
+# The Forgejo CLI publishes one GNU tarball per architecture, named with its
+# own short architecture names.
+_FORGEJO_LIBC = MappingProxyType({"amd64": "x86_64", "arm64": "aarch64"})
+# The amd64 build links against OpenSSL and zlib; the arm64 build does not.
+_FORGEJO_LIBC_DEPENDS = MappingProxyType({
+    "amd64": "libc6 (>= 2.39), libgcc-s1, libssl3t64, zlib1g",
+    "arm64": "libc6 (>= 2.39), libgcc-s1",
+})
 
 
 def make_cli_recipes(recipe_type: type[Recipe]) -> dict[str, Recipe]:
@@ -109,5 +117,24 @@ def make_cli_recipes(recipe_type: type[Recipe]) -> dict[str, Recipe]:
             binary="bun",
             triples=_BUN,
             depends=_BUN_LIBC,
+        ),
+        "forgejo-cli": recipe_type(
+            name="forgejo-cli",
+            upstream="forgejo-cli",
+            repo="forgejo-contrib/forgejo-cli",
+            # The Forgejo CLI is published on Codeberg, which serves no release
+            # digest: its archives are pinned by a locally computed SHA256.
+            source="codeberg",
+            tag_prefix="v",
+            license_id="MIT OR Apache-2.0",
+            license_path="LICENSE-MIT",
+            asset="{upstream}-{triple}-linux.tar.gz",
+            member="{binary}",
+            binary="fj",
+            triples=_FORGEJO_LIBC,
+            depends=_FORGEJO_LIBC_DEPENDS,
+            # The CLI reports its version through a subcommand, not a flag.
+            smoke=("version",),
+            extra_license_paths=("LICENSE-APACHE",),
         ),
     }

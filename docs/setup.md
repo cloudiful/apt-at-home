@@ -64,6 +64,17 @@ or bucket mutation is performed here.
   When the metadata cannot be read — no pointer, no manifest, a corrupt
   document, or a storage error — the page still renders and states that the
   package list is unavailable; it never presents an older list as current.
+- The page is a React application: the Worker renders it on the server and the
+  browser hydrates it, so the package table and the install commands always
+  come from the same published catalog. Without JavaScript the document still
+  carries the table and the commands. The header holds the language menu, the
+  theme toggle and the repository link; the theme follows the saved choice or
+  the system preference, and a small script in the document head applies it
+  before the first paint.
+- The page's own code and styles are public assets: the Worker serves them
+  from `/assets/` and nothing else is public there. Every repository path —
+  `/dists`, `/pool`, `/key.asc` — stays behind the credential gate, and the
+  assets never reach the bucket.
 
 ## 3. Cloudflare Worker Builds (deploy owner)
 
@@ -75,10 +86,13 @@ repository, so no GitHub workflow deploys the Worker.
 - Set the build variable `SKIP_DEPENDENCY_INSTALL=1`. This supported switch
   stops the automatic Python/uv dependency install, so the build stays
   JavaScript-only and never resolves a Python index.
-- Build command: `npm ci && npm run typecheck && npm test`.
+- Build command: `npm ci && npm run typecheck && npm test`. The typecheck and
+  the test run the browser build first, so the generated asset manifest the
+  Worker imports always exists. Node 20 or newer is required.
 - Deploy command:
   `npx wrangler deploy --config worker/wrangler.jsonc --domains apt.example.com`
-  (replace the example hostname with the operator's own domain).
+  (replace the example hostname with the operator's own domain). The Wrangler
+  build step builds the browser assets before the Worker is bundled.
 - Disable preview URLs so only the production hostname is served.
 
 `package.json` keeps a pinned `allowScripts` map for the only two install
@@ -166,16 +180,22 @@ the exact three steps, reproduced here for operators.
   (`target/<triple>/release/zellij`), not the tarball; starship
   `.tar.gz.sha256` files cover the tarball. See `checksum_provenance` in the
   manifest.
+- `forgejo-cli` comes from Codeberg, which publishes no release digest: its
+  archives are pinned by a SHA256 this repository computes from the official
+  download, so the first pinned digest trusts that first download and every
+  later discovery recomputes it. One discovery run downloads about 18 MiB of
+  Codeberg archives, and an unreachable archive, a renamed asset, or changed
+  license bytes stops the update instead of skipping the package.
 - Neovim is the full upstream release tree, installed under `/usr` from one
   archive root. It declares `Conflicts` and `Replaces` on `neovim-runtime`, so an
   APT upgrade removes the distribution runtime through the normal solver. Its
   headless check exercises the packaged runtime and the bundled Lua tree-sitter
   parser.
-- The command-line packages are `bottom` (`btm`), `bun` (`bun`), `git-delta`
-  (`delta`), `neovim` (`nvim`), `rustfs-cli` (`rc`), `sccache`, `starship`, `uv`
-  (`uv` and `uvx`), `zellij`, and `zoxide` for both architectures, plus
-  `cargo-tauri` (`cargo-tauri` and `cargo tauri`, requires `cargo`) for amd64
-  only. Zoxide shell initialization is opt-in; users
+- The command-line packages are `bottom` (`btm`), `bun` (`bun`), `forgejo-cli`
+  (`fj`), `git-delta` (`delta`), `neovim` (`nvim`), `rustfs-cli` (`rc`),
+  `sccache`, `starship`, `uv` (`uv` and `uvx`), `zellij`, and `zoxide` for
+  both architectures, plus `cargo-tauri` (`cargo-tauri` and `cargo tauri`,
+  requires `cargo`) for amd64 only. Zoxide shell initialization is opt-in; users
   may add `eval "$(zoxide init bash)"` to their own Bash configuration. Package
   installation never edits shell configuration.
 - `bun` ships upstream's official release ZIP, whose binary is the only member

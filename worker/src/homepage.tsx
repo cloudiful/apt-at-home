@@ -9,26 +9,40 @@
  * metadata cannot be read the page still renders, with a short status instead
  * of a package table, and never with a stale or invented catalog.
  *
- * The guide is served in English or Simplified Chinese, chosen from an
- * explicit `lang` override or the browser's `Accept-Language`, and every other
- * path keeps the fail-closed authentication and storage order in `index.ts`.
+ * The page is rendered by React on the server and hydrated in the browser, so
+ * the same components produce the document and the interactive page. The
+ * guide is served in English or Simplified Chinese, chosen from an explicit
+ * `lang` override or the browser's `Accept-Language`, and every other path
+ * keeps the fail-closed authentication and storage order in `index.ts`.
  */
-import { FAVICON_DATA_URI, renderHomepageBody } from './homepage-content.js';
-import { HOMEPAGE_STYLES } from './homepage-styles.js';
+import { renderToString } from 'react-dom/server.edge';
+import { App } from '../../web/src/app';
+import { CLIENT_SCRIPT_URL, CLIENT_STYLE_URLS, THEME_INIT_URL } from './assets.js';
 import { documentLanguage, resolveLocale } from './i18n.js';
 import { loadCatalog } from './packages.js';
 import { methodNotAllowed } from './responses.js';
-import type { PackageSummary } from './packages.js';
+import type { AppProps, PackageSummary } from '../../web/src/lib/types';
 import type { Locale } from './i18n.js';
 import type { Env } from './types.js';
 
 /** Public cache lifetime for the page, in seconds. */
 const HOMEPAGE_CACHE_CONTROL = 'public, max-age=60';
 
+/** Prefix every generated identifier carries, on the server and in the browser. */
+const IDENTIFIER_PREFIX = 'apt';
+
+/** Inline favicon so the page needs no external asset or network fetch. */
+const FAVICON_DATA_URI =
+  "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%232563eb'/%3E%3Ctext%20x='16'%20y='23'%20font-family='monospace'%20font-size='19'%20font-weight='700'%20fill='%23ffffff'%20text-anchor='middle'%3EA%3C/text%3E%3C/svg%3E";
+
 const CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
-  "style-src 'unsafe-inline'",
-  'img-src data:',
+  "script-src 'self'",
+  // The dropdown positions its content with inline styles, so the style
+  // source needs the inline allowance next to the stylesheet this origin
+  // serves.
+  "style-src 'self' 'unsafe-inline'",
+  'img-src data: https://img.shields.io',
   "base-uri 'none'",
   "frame-ancestors 'none'",
 ].join('; ');
@@ -50,7 +64,7 @@ export async function handleRoot(request: Request, env: Env): Promise<Response |
   if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed();
   const locale = resolveLocale(url.searchParams.get('lang'), request.headers.get('accept-language'));
   const catalog = await loadCatalog(env);
-  const packages: readonly PackageSummary[] | undefined = catalog.ok ? catalog.packages : undefined;
+  const packages: readonly PackageSummary[] | null = catalog.ok ? catalog.packages : null;
   return homepageResponse(request.method, url.origin, locale, packages);
 }
 
@@ -58,9 +72,9 @@ function homepageResponse(
   method: string,
   origin: string,
   locale: Locale,
-  packages?: readonly PackageSummary[],
+  packages: readonly PackageSummary[] | null,
 ): Response {
-  const document = renderHomepageDocument(origin, locale, packages);
+  const document = renderHomepageDocument({ locale, origin, packages });
   const length = encoder.encode(document).byteLength;
   const headers = {
     'Content-Type': 'text/html; charset=utf-8',
@@ -77,24 +91,37 @@ function homepageResponse(
 }
 
 /** Renders the complete HTML document for one request origin and locale. */
-export function renderHomepageDocument(
-  origin: string,
-  locale: Locale,
-  packages?: readonly PackageSummary[],
-): string {
+export function renderHomepageDocument(props: AppProps): string {
+  const body = renderToString(<App {...props} />, { identifierPrefix: IDENTIFIER_PREFIX });
+  const styles = CLIENT_STYLE_URLS.map(
+    (href) => `<link rel="stylesheet" href="${href}">`,
+  ).join('\n');
   return `<!doctype html>
-<html lang="${documentLanguage(locale)}">
+<html lang="${documentLanguage(props.locale)}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <title>apt-at-home</title>
 <link rel="icon" href="${FAVICON_DATA_URI}">
-<style>${HOMEPAGE_STYLES}</style>
+<script src="${THEME_INIT_URL}"></script>
+${styles}
 </head>
 <body>
-${renderHomepageBody(origin, locale, packages)}
+<div id="app">${body}</div>
+<script id="app-props" type="application/json">${serializeProps(props)}</script>
+<script src="${CLIENT_SCRIPT_URL}" type="module"></script>
 </body>
 </html>
 `;
+}
+
+/**
+ * Serializes the props the browser hydrates with.
+ *
+ * The payload is data, not markup, and every `<` is escaped, so a value that
+ * ends the script element early can never leave the data block.
+ */
+function serializeProps(props: AppProps): string {
+  return JSON.stringify(props).replace(/</g, '\\u003c');
 }
