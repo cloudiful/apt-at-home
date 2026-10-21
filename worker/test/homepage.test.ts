@@ -1,11 +1,30 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import manifestDocument from '../../packaging/manifest.json';
 import gateway from '../src/index.js';
 import { renderHomepageDocument } from '../src/homepage.js';
 import { authorized, createEnv, FakeContext, plain } from './fakes.js';
 import { CLIENT, TOKEN, createFixture } from './harness.js';
 
 const encoder = new TextEncoder();
+
+interface ManifestPackage {
+  readonly name: string;
+  readonly targets: Readonly<Record<string, unknown>>;
+}
+
+/** The published catalog, read from the committed manifest the release binds. */
+const published = (manifestDocument as unknown as { packages: readonly ManifestPackage[] }).packages;
+
+const publishedNames = published.map((pkg) => pkg.name).sort();
+const dualArchNames = published
+  .filter((pkg) => 'amd64' in pkg.targets && 'arm64' in pkg.targets)
+  .map((pkg) => pkg.name)
+  .sort();
+const amd64OnlyNames = published
+  .filter((pkg) => 'amd64' in pkg.targets && !('arm64' in pkg.targets))
+  .map((pkg) => pkg.name)
+  .sort();
 
 describe('public root landing page', () => {
   afterEach(() => {
@@ -233,11 +252,11 @@ describe('root page content', () => {
     const fixture = await createFixture();
     const html = await (await fixture.call(plain('/'))).text();
 
-    for (const name of [
-      'bottom', 'bun', 'cargo-tauri', 'git-delta', 'kandev', 'neovim', 'rustfs-cli', 'sccache', 'starship', 'uv', 'zellij', 'zoxide',
-    ]) {
+    for (const name of publishedNames) {
       expect(html).toContain(name);
     }
+    // The roster comes from the committed manifest, so it must not be empty.
+    expect(publishedNames.length).toBeGreaterThan(0);
     expect(html).toContain('amd64');
     expect(html).toContain('arm64');
     expect(html).toContain('Before you start');
@@ -246,9 +265,9 @@ describe('root page content', () => {
     expect(html).toContain('/etc/apt/keyrings/apt-at-home.asc');
     expect(html).toContain('Signed-By: /etc/apt/keyrings/apt-at-home.asc');
     expect(html).toContain(
-      'sudo apt update &amp;&amp; sudo apt install bottom bun git-delta kandev neovim rustfs-cli sccache starship uv zellij zoxide',
+      `sudo apt update &amp;&amp; sudo apt install ${dualArchNames.join(' ')}`,
     );
-    expect(html).toContain('sudo apt install cargo-tauri');
+    expect(html).toContain(`sudo apt install ${amd64OnlyNames.join(' ')}`);
     expect(html).toContain('On amd64 only');
     // The two packages whose command differs from their Debian name say so.
     expect(html).toContain('<code>bottom</code> provides <code>btm</code>');
@@ -268,18 +287,16 @@ describe('root page content', () => {
     const fixture = await createFixture();
     const html = await (await fixture.call(plain('/?lang=zh'))).text();
 
-    for (const name of [
-      'bottom', 'bun', 'cargo-tauri', 'git-delta', 'kandev', 'neovim', 'rustfs-cli', 'sccache', 'starship', 'uv', 'zellij', 'zoxide',
-    ]) {
+    for (const name of publishedNames) {
       expect(html).toContain(name);
     }
     expect(html).toContain('完整主密钥指纹');
     expect(html).toContain('/etc/apt/keyrings/apt-at-home.asc');
     expect(html).toContain('Signed-By: /etc/apt/keyrings/apt-at-home.asc');
     expect(html).toContain(
-      'sudo apt update &amp;&amp; sudo apt install bottom bun git-delta kandev neovim rustfs-cli sccache starship uv zellij zoxide',
+      `sudo apt update &amp;&amp; sudo apt install ${dualArchNames.join(' ')}`,
     );
-    expect(html).toContain('sudo apt install cargo-tauri');
+    expect(html).toContain(`sudo apt install ${amd64OnlyNames.join(' ')}`);
     expect(html).toContain('仅 amd64');
     expect(html).toContain('<code>bottom</code> 提供 <code>btm</code>');
     expect(html).toContain('<code>git-delta</code> 提供 <code>delta</code>');

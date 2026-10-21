@@ -73,6 +73,32 @@ def catalog_document() -> dict[str, object]:
     return validated_document(default_manifest_path())[0]
 
 
+def catalog_names() -> tuple[str, ...]:
+    """The package names the committed catalog carries, in document order."""
+    return tuple(
+        str(entry["name"]) for entry in catalog_document()["packages"]  # type: ignore[index]
+    )
+
+
+def baseline_names() -> tuple[str, ...]:
+    """The package names the published baseline fixture carries."""
+    return tuple(
+        str(entry["name"]) for entry in baseline_document()["packages"]  # type: ignore[index]
+    )
+
+
+def added_names() -> tuple[str, ...]:
+    """The catalog packages the published baseline does not carry yet, sorted."""
+    return tuple(sorted(set(catalog_names()) - set(baseline_names())))
+
+
+def merge_names(baseline: dict[str, object], catalog: dict[str, object]) -> list[str]:
+    """The names a merge must produce: the baseline's, then the catalog's new ones."""
+    baseline_order = [str(entry["name"]) for entry in baseline["packages"]]  # type: ignore[index]
+    catalog_order = [str(entry["name"]) for entry in catalog["packages"]]  # type: ignore[index]
+    return baseline_order + [name for name in catalog_order if name not in baseline_order]
+
+
 def candidate_pairs(data: dict[str, object]) -> dict[str, Candidate]:
     """One unchanged candidate per package in a manifest document."""
     return {
@@ -92,10 +118,12 @@ def _catalog_candidates(**overrides: str) -> dict[str, Candidate]:
 
 class MergeCatalogTest(unittest.TestCase):
     def test_only_absent_packages_are_added(self) -> None:
-        merged = merge_catalog(baseline_document(), catalog_document())
+        baseline = baseline_document()
+        catalog = catalog_document()
+        merged = merge_catalog(baseline, catalog)
         self.assertEqual(
             [entry["name"] for entry in merged],
-            ["zellij", "starship", "git-delta", "rustfs-cli", "sccache", "neovim", "bottom", "uv", "zoxide", "kandev", "cargo-tauri", "bun"],
+            merge_names(baseline, catalog),
         )
 
     def test_a_newer_published_version_survives_the_merge(self) -> None:
@@ -106,7 +134,10 @@ class MergeCatalogTest(unittest.TestCase):
         merged = merge_catalog(baseline, catalog_document())
         starship = next(e for e in merged if e["name"] == "starship")
         self.assertEqual(starship["version"], "1.27.0")
-        self.assertEqual(len(merged), 12)
+        self.assertEqual(
+            [entry["name"] for entry in merged],
+            merge_names(baseline, catalog_document()),
+        )
 
     def test_the_committed_catalog_never_drops_a_published_package(self) -> None:
         """A catalog that lost a name cannot delete what is already published."""
@@ -116,7 +147,10 @@ class MergeCatalogTest(unittest.TestCase):
             if e["name"] != "zellij"
         ]
         merged = merge_catalog(baseline_document(), trimmed)
-        self.assertEqual(len(merged), 12)
+        self.assertEqual(
+            [entry["name"] for entry in merged],
+            merge_names(baseline_document(), trimmed),
+        )
         self.assertIn("zellij", [e["name"] for e in merged])
 
 
@@ -139,17 +173,14 @@ class PlanTest(unittest.TestCase):
             catalog_data=catalog_document(),
             candidates=_catalog_candidates(),
         )
-        # Every package sits at its pinned version, but the ten absent packages
-        # still have to be built.
-        additions = (
-            "bottom", "bun", "cargo-tauri", "git-delta", "kandev", "neovim",
-            "rustfs-cli", "sccache", "uv", "zoxide",
-        )
+        # Every package sits at its pinned version, but the packages the
+        # published baseline does not carry still have to be built.
+        additions = added_names()
         self.assertEqual(plan.changed, additions)
         self.assertEqual(plan.added, additions)
         self.assertEqual(
             sorted(p.name for p in plan.manifest.packages),
-            ["bottom", "bun", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "starship", "uv", "zellij", "zoxide"],
+            sorted(catalog_names()),
         )
         by_name = {p.name: p for p in plan.manifest.packages}
         # An added package keeps its catalog member and dependency profile.
@@ -172,14 +203,9 @@ class PlanTest(unittest.TestCase):
             catalog_data=catalog_document(),
             candidates=_catalog_candidates(starship="1.27.0", sccache="0.19.0"),
         )
-        self.assertEqual(
-            plan.changed,
-            ("bottom", "bun", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "starship", "uv", "zoxide"),
-        )
-        self.assertEqual(
-            plan.added,
-            ("bottom", "bun", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "uv", "zoxide"),
-        )
+        additions = added_names()
+        self.assertEqual(plan.changed, tuple(sorted(additions + ("starship",))))
+        self.assertEqual(plan.added, additions)
         by_name = {p.name: p for p in plan.manifest.packages}
         starship = by_name["starship"]
         self.assertTrue(starship.license_url.endswith("/v1.27.0/LICENSE"))
@@ -233,11 +259,9 @@ class PlanTest(unittest.TestCase):
         starship = next(p for p in plan.manifest.packages if p.name == "starship")
         self.assertEqual(starship.version, "1.27.0")
         self.assertNotIn("starship", plan.changed)
-        # Only the nine absent catalog packages remain to be built.
-        self.assertEqual(
-            plan.changed,
-            ("bottom", "bun", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "uv", "zoxide"),
-        )
+        # Only the catalog packages the published baseline lacks remain to be
+        # built.
+        self.assertEqual(plan.changed, added_names())
 
     def test_an_older_candidate_for_a_newer_published_version_is_refused(self) -> None:
         baseline = baseline_document()
@@ -484,7 +508,7 @@ class CliTest(unittest.TestCase):
                 storage=storage, candidates=_catalog_candidates(), fingerprint=key_id,
             )
             self.assertEqual(code, 0, msg=output)
-            expected = "bottom, cargo-tauri, git-delta, kandev, neovim, rustfs-cli, sccache, uv, zoxide"
+            expected = ", ".join(added_names())
             self.assertIn(f"adding to the catalog: {expected}", output)
             self.assertIn(f"would rebuild: {expected}", output)
             self.assertIn("dry run: no key imported", output)

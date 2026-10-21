@@ -5,7 +5,7 @@ from pathlib import Path
 
 from scripts.build import archive_cache_name
 from scripts.deb import build_deb, stage_package
-from scripts.manifest import deb_filename, load_manifest
+from scripts.manifest import deb_filename, expected_debs, load_manifest
 from tests.helpers import write_target_archive
 from tests.test_kandev_bundle import write_bundle_archive
 
@@ -128,7 +128,7 @@ class DebTest(unittest.TestCase):
                 first = build_all(manifest, pool_dir=pool, cache_dir=cache)
                 second = build_all(manifest, pool_dir=pool, cache_dir=cache)
                 self.assertEqual(first, second)
-                self.assertEqual(len(first), 23)
+                self.assertEqual(len(first), len(expected_debs(manifest)))
                 uv_contents = subprocess.run(
                     ["dpkg-deb", "-c", str(pool / "uv_0.13.0-1_amd64.deb")],
                     text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
@@ -157,7 +157,7 @@ class DebTest(unittest.TestCase):
             build_module.fetch_verified = lambda url, sha, dest: dest  # type: ignore[assignment]
             try:
                 every = build_all(manifest, pool_dir=pool, cache_dir=cache)
-                self.assertEqual(len(every), 23)
+                self.assertEqual(len(every), len(expected_debs(manifest)))
                 fresh = tmpdir / "pool-selected"
                 selected = build_all(
                     manifest, pool_dir=fresh, cache_dir=cache, packages=["zellij"]

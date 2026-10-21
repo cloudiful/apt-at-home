@@ -2,9 +2,11 @@
 
 Every case runs against an injected HTTP double, so the network is never
 touched and each rejection is asserted on the response that would cause it. The
-fixtures cover every reviewed repository, including projects whose release
-tags carry no `v` prefix and assets whose names embed the version or nest the
-binary under a versioned directory.
+payload fixtures are a small fixed representative set, not a mirror of the
+catalog: they cover the differing release-tag prefixes, asset names, archive
+members, and license sources that discovery has to get right, including a
+project whose tags carry no `v` prefix, assets whose names embed the version,
+a binary nested under a versioned directory, and a ZIP release asset.
 """
 
 import unittest
@@ -12,25 +14,20 @@ from pathlib import Path
 
 from scripts.catalog import RECIPES, archive_member, asset_name, extra_license_paths_for
 from scripts.upstream import HttpError, UrllibClient, discover, latest_stable
-from scripts.upstream_assets import license_url, license_urls_for, releases_api_url
+from scripts.upstream_assets import license_url, releases_api_url
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ZELLIJ = "zellij-org/zellij"
 
 # name -> (repo, tag, license path, {arch: asset name})
+# A representative set of upstream formats, kept independent of the catalog so
+# a new package never edits this table.
 UPSTREAMS = {
     "zellij": (
         ZELLIJ, "v0.45.1", "LICENSE.md",
         {
             "amd64": "zellij-x86_64-unknown-linux-musl.tar.gz",
             "arm64": "zellij-aarch64-unknown-linux-musl.tar.gz",
-        },
-    ),
-    "starship": (
-        "starship/starship", "v1.26.0", "LICENSE",
-        {
-            "amd64": "starship-x86_64-unknown-linux-musl.tar.gz",
-            "arm64": "starship-aarch64-unknown-linux-musl.tar.gz",
         },
     ),
     "git-delta": (
@@ -40,20 +37,6 @@ UPSTREAMS = {
             "arm64": "delta-0.20.1-aarch64-unknown-linux-gnu.tar.gz",
         },
     ),
-    "rustfs-cli": (
-        "rustfs/cli", "v0.1.36", "LICENSE-MIT",
-        {
-            "amd64": "rustfs-cli-linux-amd64-v0.1.36.tar.gz",
-            "arm64": "rustfs-cli-linux-arm64-v0.1.36.tar.gz",
-        },
-    ),
-    "sccache": (
-        "mozilla/sccache", "v0.18.0", "LICENSE",
-        {
-            "amd64": "sccache-v0.18.0-x86_64-unknown-linux-musl.tar.gz",
-            "arm64": "sccache-v0.18.0-aarch64-unknown-linux-musl.tar.gz",
-        },
-    ),
     "neovim": (
         "neovim/neovim", "v0.12.6", "LICENSE.txt",
         {
@@ -61,32 +44,11 @@ UPSTREAMS = {
             "arm64": "nvim-linux-arm64.tar.gz",
         },
     ),
-    "bottom": (
-        "ClementTsang/bottom", "0.14.9", "LICENSE",
-        {
-            "amd64": "bottom_x86_64-unknown-linux-gnu.tar.gz",
-            "arm64": "bottom_aarch64-unknown-linux-gnu.tar.gz",
-        },
-    ),
     "uv": (
         "astral-sh/uv", "0.13.0", "LICENSE-MIT",
         {
             "amd64": "uv-x86_64-unknown-linux-gnu.tar.gz",
             "arm64": "uv-aarch64-unknown-linux-gnu.tar.gz",
-        },
-    ),
-    "zoxide": (
-        "ajeetdsouza/zoxide", "v0.10.0", "LICENSE",
-        {
-            "amd64": "zoxide-0.10.0-x86_64-unknown-linux-musl.tar.gz",
-            "arm64": "zoxide-0.10.0-aarch64-unknown-linux-musl.tar.gz",
-        },
-    ),
-    "kandev": (
-        "kdlbs/kandev", "v0.97.0", "LICENSE",
-        {
-            "amd64": "kandev-linux-x64.tar.gz",
-            "arm64": "kandev-linux-arm64.tar.gz",
         },
     ),
     "bun": (
@@ -192,7 +154,7 @@ MAX_LICENSE_BYTES = 1024 * 1024
 
 
 class LatestStableTest(unittest.TestCase):
-    def test_every_reviewed_repository_resolves_both_architectures(self) -> None:
+    def test_every_fixture_upstream_resolves_both_architectures(self) -> None:
         for package, (repo, tag, _path, names) in UPSTREAMS.items():
             with self.subTest(package=package):
                 client = FakeHttp(fixture_payloads(package))
@@ -328,7 +290,7 @@ class RecipeNamingTest(unittest.TestCase):
 
 
 class DiscoverTest(unittest.TestCase):
-    def test_builds_a_complete_candidate_for_every_package(self) -> None:
+    def test_builds_a_complete_candidate_for_every_fixture_upstream(self) -> None:
         for package, (repo, tag, path, _names) in UPSTREAMS.items():
             with self.subTest(package=package):
                 client = FakeHttp(fixture_payloads(package))
@@ -339,7 +301,10 @@ class DiscoverTest(unittest.TestCase):
                     candidate.version, tag.removeprefix(RECIPES[package].tag_prefix)
                 )
                 self.assertEqual(sorted(candidate.targets), ["amd64", "arm64"])
-                self.assertEqual(candidate.license_url, license_url(repo, tag, path))
+                self.assertEqual(
+                    candidate.license_url,
+                    f"https://raw.githubusercontent.com/{repo}/{tag}/{path}",
+                )
 
     def test_changed_license_bytes_stop_the_run(self) -> None:
         for package in UPSTREAMS:
@@ -354,7 +319,10 @@ class DiscoverTest(unittest.TestCase):
     def test_uv_candidate_keeps_exact_primary_and_supplemental_provenance(self) -> None:
         client = FakeHttp(fixture_payloads("uv"))
         candidate = discover(client, "uv", vendored_license=vendored("uv"))
-        urls = license_urls_for("uv", "0.13.0")
+        urls = (
+            "https://raw.githubusercontent.com/astral-sh/uv/0.13.0/LICENSE-MIT",
+            "https://raw.githubusercontent.com/astral-sh/uv/0.13.0/LICENSE-APACHE",
+        )
         self.assertEqual(candidate.license_url, urls[0])
         self.assertEqual(candidate.extra_license_urls, urls[1:])
         self.assertEqual(
@@ -371,9 +339,9 @@ class DiscoverTest(unittest.TestCase):
         self.assertIn("supplemental license LICENSE-APACHE bytes changed", str(ctx.exception))
 
     def test_a_missing_digest_stops_before_a_candidate_is_built(self) -> None:
-        client = FakeHttp(fixture_payloads("sccache", digest=None))
+        client = FakeHttp(fixture_payloads("zellij", digest=None))
         with self.assertRaises(ValueError) as ctx:
-            discover(client, "sccache", vendored_license=vendored("sccache"))
+            discover(client, "zellij", vendored_license=vendored("zellij"))
         self.assertIn("digest", str(ctx.exception))
 
     def test_unknown_package_is_refused(self) -> None:

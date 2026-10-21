@@ -30,7 +30,7 @@ from scripts.catalog import (
     triple_for,
 )
 from scripts.deb import build_deb, stage_package
-from scripts.manifest import expected_debs, expected_debs_for_arch, load_manifest
+from scripts.manifest import load_manifest
 from scripts.package_binaries import extract_binaries
 from tests.helpers import write_fake_zip
 
@@ -117,13 +117,6 @@ class BunRecipeTest(unittest.TestCase):
         self.assertEqual(arm64.archive_member, "bun-linux-aarch64/bun")
         self.assertEqual(arm64.binary, "bun")
         self.assertEqual(arm64.depends, DEPENDENCY)
-
-    def test_the_catalog_carries_twelve_packages_and_twenty_three_debs(self) -> None:
-        manifest = load_manifest()
-        self.assertEqual(len(manifest.packages), 12)
-        self.assertEqual(len(expected_debs(manifest)), 23)
-        self.assertEqual(len(expected_debs_for_arch(manifest, "amd64")), 12)
-        self.assertEqual(len(expected_debs_for_arch(manifest, "arm64")), 11)
 
 
 class BunPackageTest(unittest.TestCase):

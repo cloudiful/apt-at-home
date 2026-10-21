@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from scripts.catalog import KNOWN_PACKAGES
 from scripts.common import sha256_bytes
 from scripts.manifest import default_manifest_path
 from scripts.release_manifest import (
@@ -148,7 +149,7 @@ class RemoteBindingTest(unittest.TestCase):
         self.assertEqual(data, json.loads(SOURCE.read_text(encoding="utf-8")))
         self.assertEqual(
             sorted(p.name for p in manifest.packages),
-            ["bottom", "bun", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "starship", "uv", "zellij", "zoxide"],
+            sorted(KNOWN_PACKAGES),
         )
         self.assertEqual(canonical_bytes(data), canonical_bytes(load_manifest_data(SOURCE)))
 

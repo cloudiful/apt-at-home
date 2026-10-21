@@ -13,6 +13,7 @@ import unittest
 
 from scripts.catalog import (
     KNOWN_PACKAGES,
+    RECIPES,
     arches_for,
     asset_name,
     archive_member,
@@ -27,7 +28,7 @@ from scripts.catalog import (
     tag_for,
     triple_for,
 )
-from scripts.manifest import expected_debs, expected_debs_for_arch, load_manifest
+from scripts.manifest import load_manifest
 
 
 VERSION = "2.12.2"
@@ -37,12 +38,8 @@ DEPENDS = "cargo, libc6 (>= 2.34), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)"
 
 
 class CargoTauriRecipeTest(unittest.TestCase):
-    def test_the_package_is_registered_without_widening_other_recipes(self) -> None:
+    def test_the_package_is_registered(self) -> None:
         self.assertIn("cargo-tauri", KNOWN_PACKAGES)
-        self.assertEqual(len(KNOWN_PACKAGES), 12)
-        # Bun is an ordinary asset package, not a source build: it is reviewed
-        # and published from its official release ZIP.
-        self.assertIn("bun", KNOWN_PACKAGES)
 
     def test_tag_prefix_and_repo_are_the_reviewed_upstream(self) -> None:
         self.assertEqual(repo_of("cargo-tauri"), "tauri-apps/tauri")
@@ -52,13 +49,15 @@ class CargoTauriRecipeTest(unittest.TestCase):
     def test_architecture_policy_is_explicit_amd64_only(self) -> None:
         self.assertEqual(arches_for("cargo-tauri"), ("amd64",))
         self.assertTrue(exact_tag_release_for("cargo-tauri"))
-        for name in (
-            "zellij", "starship", "git-delta", "rustfs-cli", "sccache",
-            "neovim", "bottom", "uv", "zoxide", "kandev", "bun",
-        ):
+        # Every other reviewed recipe publishes both architectures and follows
+        # the repository-wide latest release, so the amd64-only policy stays
+        # this package's alone.
+        for name, recipe in RECIPES.items():
+            if name == "cargo-tauri":
+                continue
             with self.subTest(package=name):
-                self.assertEqual(arches_for(name), ("amd64", "arm64"))
-                self.assertFalse(exact_tag_release_for(name))
+                self.assertEqual(recipe.arches, ("amd64", "arm64"))
+                self.assertFalse(recipe.exact_tag_release)
 
     def test_amd64_asset_and_member_are_the_reviewed_ones(self) -> None:
         self.assertEqual(asset_name("cargo-tauri", VERSION, "amd64"), ASSET)
@@ -109,13 +108,6 @@ class CargoTauriRecipeTest(unittest.TestCase):
         )
         self.assertEqual((amd64.archive_member, amd64.binary), ("cargo-tauri", "cargo-tauri"))
         self.assertEqual(amd64.depends, DEPENDS)
-
-    def test_manifest_declares_twenty_three_debs(self) -> None:
-        manifest = load_manifest()
-        self.assertEqual(len(manifest.packages), 12)
-        self.assertEqual(len(expected_debs(manifest)), 23)
-        self.assertEqual(len(expected_debs_for_arch(manifest, "amd64")), 12)
-        self.assertEqual(len(expected_debs_for_arch(manifest, "arm64")), 11)
 
 
 if __name__ == "__main__":

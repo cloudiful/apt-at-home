@@ -1,9 +1,9 @@
 """Incremental catalog updates from two realistic baselines, proven by file identity.
 
-The six-package release adds six catalog packages (6+6). A five-package
-release adds seven packages (5+7). Each run rebuilds exactly the added packages,
-keeps every published .deb byte-identical, and publishes a complete pool. Assertions name the files, so a count that happens to match never
-passes on its own.
+The six-package release and the five-package release each add the catalog
+packages they lack. Each run rebuilds exactly the added packages, keeps every
+published .deb byte-identical, and publishes a complete pool. Assertions name
+the files, so a count that happens to match never passes on its own.
 """
 
 import copy
@@ -20,6 +20,7 @@ from scripts.update_build import UpdateResult, apply_update, remove_superseded
 from scripts.update_plan import UpdatePlan, build_plan
 from tests.helpers import FakeS3, make_gpg_home_with_key
 from tests.release_fixtures import (
+    CATALOG_NAMES,
     FIVE_PUBLISHED_NAMES,
     SIX_PUBLISHED_NAMES,
     build_release_objects,
@@ -95,38 +96,54 @@ def _expected_built(names: tuple[str, ...]) -> list[str]:
     )
 
 
-class SixPublishedSixAddedTest(unittest.TestCase):
-    """Six published packages plus six catalog additions."""
+def _added_for(published: tuple[str, ...]) -> tuple[str, ...]:
+    """The catalog packages a published baseline does not carry yet, sorted."""
+    return tuple(sorted(set(CATALOG_NAMES) - set(published)))
 
-    ADDED = ("bottom", "bun", "cargo-tauri", "kandev", "uv", "zoxide")
 
-    def test_builds_exactly_the_six_additions_and_keeps_the_six_published(self) -> None:
+def _debs_for(names: tuple[str, ...]) -> int:
+    """The number of debs the named catalog packages contribute."""
+    targets = {pkg.name: len(pkg.targets) for pkg in load_manifest().packages}
+    return sum(targets[name] for name in names)
+
+
+def _packages_for(arch: str) -> int:
+    """The number of catalog packages the index for one architecture lists."""
+    return sum(1 for pkg in load_manifest().packages if arch in pkg.targets)
+
+
+class SixPublishedSubsetTest(unittest.TestCase):
+    """The six-package published baseline plus the catalog packages it lacks."""
+
+    ADDED = _added_for(SIX_PUBLISHED_NAMES)
+
+    def test_builds_exactly_the_added_packages_and_keeps_the_published_debs(self) -> None:
         run = run_incremental(self, names=SIX_PUBLISHED_NAMES, release_id="incremental-6-4")
         self.assertEqual(run.plan.added, self.ADDED)
         self.assertEqual(sorted(p.name for p in run.result.debs), _expected_built(self.ADDED))
-        self.assertEqual(len(run.result.debs), 11)
-        self.assertEqual(len(run.pool), 23)
-        self.assertEqual(len(run.published), 12)
+        self.assertEqual(len(run.result.debs), _debs_for(self.ADDED))
+        self.assertEqual(len(run.pool), _debs_for(CATALOG_NAMES))
+        self.assertEqual(len(run.published), _debs_for(SIX_PUBLISHED_NAMES))
         for name, payload in run.published.items():
             self.assertEqual(run.pool[name], payload, msg=name)
         for arch in ARCHES:
             packages = run.output / "releases" / "incremental-6-4" / "dists" / "stable" / "main" / f"binary-{arch}" / "Packages"
-            expected = 12 if arch == "amd64" else 11
+            expected = _packages_for(arch)
             self.assertEqual(len(packages.read_text().strip().split("\n\n")), expected, msg=arch)
 
 
-class FivePublishedSevenAddedTest(unittest.TestCase):
-    """Five published packages plus the seven missing catalog packages."""
+class FivePublishedSubsetTest(unittest.TestCase):
+    """The five-package published baseline plus the catalog packages it lacks."""
 
-    ADDED = ("bottom", "bun", "cargo-tauri", "kandev", "neovim", "uv", "zoxide")
+    ADDED = _added_for(FIVE_PUBLISHED_NAMES)
 
-    def test_builds_exactly_the_seven_additions_and_keeps_the_ten_published_debs(self) -> None:
+    def test_builds_exactly_the_added_packages_and_keeps_the_published_debs(self) -> None:
         run = run_incremental(self, names=FIVE_PUBLISHED_NAMES, release_id="incremental-5-5")
         self.assertEqual(run.plan.added, self.ADDED)
         self.assertEqual(sorted(p.name for p in run.result.debs), _expected_built(self.ADDED))
-        self.assertEqual(len(run.result.debs), 13)
-        self.assertEqual(len(run.published), 10)
-        self.assertEqual(len(run.pool), 23)
+        self.assertEqual(len(run.result.debs), _debs_for(self.ADDED))
+        self.assertEqual(len(run.published), _debs_for(FIVE_PUBLISHED_NAMES))
+        self.assertEqual(len(run.pool), _debs_for(CATALOG_NAMES))
         for name, payload in run.published.items():
             self.assertEqual(run.pool[name], payload, msg=name)
 

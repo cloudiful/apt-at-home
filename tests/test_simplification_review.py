@@ -52,10 +52,14 @@ class RemovedSourceContractTest(unittest.TestCase):
             with patch.dict(os.environ, {"TMPDIR": temp}), patch("scripts.smoke_runtime.run_package", return_value=[]) as probe:
                 run_installed(load_manifest(), "arm64")
         names = [call.args[0].name for call in probe.call_args_list]
-        self.assertEqual(len(names), 11)
+        # Only the packages with an arm64 target are probed, in name order, and
+        # cargo-tauri is not one of them.
+        arm_packages = sorted(
+            pkg.name for pkg in load_manifest().packages if "arm64" in pkg.targets
+        )
+        self.assertEqual(names, arm_packages)
         self.assertNotIn("cargo-tauri", names)
         self.assertIn("kandev", names)
-        self.assertIn("bun", names)
 
 
 @unittest.skipUnless(os.environ.get("APT_REVIEW_REAL") == "1", "opt-in real official cached assets")

@@ -8,7 +8,13 @@ from pathlib import Path
 
 from scripts.common import sha256_file
 from scripts.deb import build_deb
-from scripts.manifest import deb_filename, default_manifest_path, expected_debs_for_arch, load_manifest
+from scripts.manifest import (
+    deb_filename,
+    default_manifest_path,
+    expected_debs,
+    expected_debs_for_arch,
+    load_manifest,
+)
 from scripts.metadata import generate_release, write_indices
 from scripts.release_manifest import MANIFEST_NAME, manifest_binding_fields, write_manifest_artifact
 from scripts.reprepro_adapter import generate_packages
@@ -191,21 +197,17 @@ class VerifyTest(unittest.TestCase):
                 target = root / "releases" / "20260102-030405" / "dists" / "stable" / "main" / "binary-amd64" / "Packages"
                 stanzas = target.read_text().strip().split("\n\n")
                 self.assertEqual(len(stanzas), len(expected_debs_for_arch(manifest, "amd64")))
-                self.assertEqual(len(stanzas), 12)
                 # The pool still holds every .deb the manifest declares, so only
                 # the index omission can reveal the defect.
                 self.assertEqual(
                     len(list((root / "pool").glob("*.deb"))),
-                    23,
+                    len(expected_debs(manifest)),
                 )
                 # The ARM index carries one fewer package: cargo-tauri is AMD-only.
                 arm_target = root / "releases" / "20260102-030405" / "dists" / "stable" / "main" / "binary-arm64" / "Packages"
                 self.assertEqual(
                     len(arm_target.read_text().strip().split("\n\n")),
                     len(expected_debs_for_arch(manifest, "arm64")),
-                )
-                self.assertEqual(
-                    len(arm_target.read_text().strip().split("\n\n")), 11
                 )
                 target.write_text("\n\n".join(stanzas[:-1]) + "\n", encoding="utf-8")
                 resign_tree(root, "20260102-030405", key_home=home, key_id=key_id)
@@ -249,7 +251,6 @@ class VerifyTest(unittest.TestCase):
                         target = root / "releases" / "20260102-030405" / "dists" / "stable" / "main" / "binary-arm64" / "Packages"
                         stanzas = target.read_text().strip().split("\n\n")
                         self.assertEqual(len(stanzas), len(expected_debs_for_arch(manifest, "arm64")))
-                        self.assertEqual(len(stanzas), 11)
                         target.write_text("\n\n".join(mutate(stanzas)) + "\n", encoding="utf-8")
                         resign_tree(root, "20260102-030405", key_home=home, key_id=key_id)
                         with self.assertRaises(ValueError):
@@ -257,22 +258,25 @@ class VerifyTest(unittest.TestCase):
                 finally:
                     tmpdir.cleanup()
 
-    def test_partial_arch_pool_has_twelve_amd_and_eleven_arm(self) -> None:
-        """The ordinary catalog builds 23 debs: 12 AMD, 11 ARM."""
+    def test_partial_arch_pool_matches_the_manifest_targets(self) -> None:
+        """The pool holds exactly the .deb files the manifest declares."""
         manifest = load_manifest()
         tmpdir, home, key_id = make_gpg_home_with_key()
         try:
             with tempfile.TemporaryDirectory() as work:
                 root = build_complete_tree(Path(work) / "repo", "20260102-030405",
                                            key_home=home, key_id=key_id)
-                self.assertEqual(len(list((root / "pool").glob("*_amd64.deb"))), 12)
-                self.assertEqual(len(list((root / "pool").glob("*_arm64.deb"))), 11)
-                self.assertEqual(len(list((root / "pool").glob("*.deb"))), 23)
                 self.assertEqual(
-                    len(expected_debs_for_arch(manifest, "amd64")), 12
+                    len(list((root / "pool").glob("*_amd64.deb"))),
+                    len(expected_debs_for_arch(manifest, "amd64")),
                 )
                 self.assertEqual(
-                    len(expected_debs_for_arch(manifest, "arm64")), 11
+                    len(list((root / "pool").glob("*_arm64.deb"))),
+                    len(expected_debs_for_arch(manifest, "arm64")),
+                )
+                self.assertEqual(
+                    len(list((root / "pool").glob("*.deb"))),
+                    len(expected_debs(manifest)),
                 )
                 self.assertTrue(verify_tree(root))
         finally:

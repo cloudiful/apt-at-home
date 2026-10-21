@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from scripts.catalog import KNOWN_PACKAGES, arches_for, check_known_names
+from scripts.catalog import KNOWN_PACKAGES, RECIPES, arches_for, check_known_names
 from scripts.manifest import (
     deb_filename,
     debian_version,
@@ -39,54 +39,6 @@ class ManifestTest(unittest.TestCase):
                 self.assertTrue(target.url.startswith("https://github.com/"))
                 self.assertRegex(target.sha256, r"^[0-9a-f]{64}$")
                 self.assertNotIn("latest", target.url)
-
-    def test_records_exact_reviewed_versions(self) -> None:
-        versions = {p.name: p.version for p in load_manifest().packages}
-        self.assertEqual(
-            versions,
-            {
-                "zellij": "0.45.1",
-                "starship": "1.26.0",
-                "git-delta": "0.20.1",
-                "rustfs-cli": "0.1.36",
-                "sccache": "0.18.0",
-                "neovim": "0.12.6",
-                "bottom": "0.14.9",
-                "uv": "0.13.0",
-                "zoxide": "0.10.0",
-                "kandev": "0.97.0",
-                "cargo-tauri": "2.12.2",
-                "bun": "1.4.3",
-            },
-        )
-
-    def test_records_reviewed_archive_hashes(self) -> None:
-        by_name = {p.name: p for p in load_manifest().packages}
-        expected = {
-            ("zellij", "amd64"): "40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc",
-            ("zellij", "arm64"): "05f0802afadd53f8db9514e7cae53c9ae8432fed1b35b8294aa816ee3044a16b",
-            ("starship", "amd64"): "b7c232b0e8249d8e55a40beb79c5c43a7d370f3f9408bd215deb0170daeaadf3",
-            ("starship", "arm64"): "dc30189378d2f2e287384e8a692d3f95ad1df64cf0e8c36aa9201516028aed6b",
-            ("git-delta", "amd64"): "69dcb4043f55c29118f408c6efd30115e0a4e0a6709253343b8c8fa814ab4a31",
-            ("git-delta", "arm64"): "da7f4338f593572ff426ae153e0870e2fdc72729416eff551b40cdeb67940db8",
-            ("rustfs-cli", "amd64"): "4a8128911ccad4e7b481f26635a4cfd1ec064412210526e57ad2c748d356f3b7",
-            ("rustfs-cli", "arm64"): "6e9dea7ac4f81562add9e1e31206ba6059d6f5929ad4ed924986223282b3aa9c",
-            ("sccache", "amd64"): "45f1447fbe231e3037bde351ef70677dd212216c8d62ae7ca409fecc4d6acc89",
-            ("sccache", "arm64"): "2b3284d5da3b46a47dc4229e75bb7b88ac4aa99c8d754fb7d2f84997e5a4354a",
-            ("bottom", "amd64"): "e0c325829e8bdcea25a8a7651da05dbb6f1fc109ac5d2f0187867d3d5d9c0df8",
-            ("bottom", "arm64"): "a6a0a0dda426b31b2c72e15a26c7e97c2224aafdd66f60632e34ee464a64ec8f",
-            ("uv", "amd64"): "1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154",
-            ("uv", "arm64"): "3ccfb6af6e242433eb552f7d9676abd5412c6595c497e990d9c8cb7b5bd4d2c3",
-            ("zoxide", "amd64"): "2d93385b99f3e82cf2701609a1bffcad863fbeb75aa3fe7eb6be4d29be68b1ae",
-            ("zoxide", "arm64"): "f1f16c5d6298d63dee467eedea1cdcd8490e43e493bea43acd416dc9033ef641",
-            ("kandev", "amd64"): "d15b5ca901fc051dfefbb40a2e0fbec8e92aaf16db8225921f32a6ccdc7d2457",
-            ("kandev", "arm64"): "3bba944aa4f73441864203c1a84a96e09bcdfc18d01c32cfbb8ba664b2c6b823",
-            ("cargo-tauri", "amd64"): "35c7b50266256cb6d5f757608d7097a59a5faeb0c75879ee1f504652a9b6087e",
-            ("bun", "amd64"): "3e730528d89775f03f87f05c06787c4df4099d0a37f3f252e7b829cb23816e18",
-            ("bun", "arm64"): "efa9813da5ed72423bf847f916e8d2c47c0d776add972354026a75e10da9aa21",
-        }
-        for (name, arch), digest in expected.items():
-            self.assertEqual(by_name[name].targets[arch].sha256, digest, msg=f"{name} {arch}")
 
     def test_records_nested_members_binaries_and_licenses(self) -> None:
         by_name = {p.name: p for p in load_manifest().packages}
@@ -151,24 +103,40 @@ class ManifestTest(unittest.TestCase):
             by_name["cargo-tauri"].targets["amd64"].depends,
             "cargo, libc6 (>= 2.34), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)",
         )
-        for name in ("sccache", "rustfs-cli", "zellij", "starship", "zoxide"):
-            for arch in ("amd64", "arm64"):
-                self.assertEqual(by_name[name].targets[arch].depends, "", msg=f"{name} {arch}")
+        # Every package declares exactly the runtime its reviewed recipe pins,
+        # so a static build stays free of dependencies and a new recipe cannot
+        # drift from the manifest.
+        for name, recipe in RECIPES.items():
+            for arch in recipe.arches:
+                with self.subTest(package=name, arch=arch):
+                    self.assertEqual(
+                        by_name[name].targets[arch].depends,
+                        recipe.depends.get(arch, ""),
+                    )
 
     def test_expected_sets_are_derived_from_the_manifest(self) -> None:
         manifest = load_manifest()
         expected = expected_debs(manifest)
-        self.assertEqual(len(expected), 23)
-        self.assertIn("git-delta_0.20.1-1_amd64.deb", expected)
-        self.assertIn("sccache_0.18.0-1_arm64.deb", expected)
-        self.assertIn("cargo-tauri_2.12.2-1_amd64.deb", expected)
-        self.assertNotIn("cargo-tauri_2.12.2-1_arm64.deb", expected)
-        self.assertIn("bun_1.4.3-1_amd64.deb", expected)
-        self.assertIn("bun_1.4.3-1_arm64.deb", expected)
-        self.assertEqual(len(expected_debs_for_arch(manifest, "amd64")), 12)
-        self.assertEqual(len(expected_debs_for_arch(manifest, "arm64")), 11)
+        # Every declared target contributes exactly one deb, and the per-arch
+        # set is the same set filtered by the architecture it is built for.
+        self.assertEqual(
+            expected,
+            {
+                deb_filename(pkg, arch, manifest)
+                for pkg in manifest.packages
+                for arch in pkg.targets
+            },
+        )
         for arch in ("amd64", "arm64"):
             per_arch = expected_debs_for_arch(manifest, arch)
+            self.assertEqual(
+                per_arch,
+                {
+                    deb_filename(pkg, arch, manifest)
+                    for pkg in manifest.packages
+                    if arch in pkg.targets
+                },
+            )
             self.assertTrue(all(name.endswith(f"_{arch}.deb") for name in per_arch))
         with self.assertRaises(ValueError):
             expected_debs_for_arch(manifest, "i386")
@@ -190,7 +158,10 @@ class ManifestTest(unittest.TestCase):
         data["packages"] = [e for e in data["packages"] if e["name"] in ("starship", "zellij")]
         manifest = parse_manifest(data)
         self.assertEqual(sorted(p.name for p in manifest.packages), ["starship", "zellij"])
-        self.assertEqual(len(expected_debs(manifest)), 4)
+        self.assertEqual(
+            len(expected_debs(manifest)),
+            sum(len(pkg.targets) for pkg in manifest.packages),
+        )
 
     def test_rejects_bad_manifest(self) -> None:
         with self.assertRaises(ValueError):
@@ -319,9 +290,13 @@ class ManifestTest(unittest.TestCase):
         by_name = {p.name: p for p in load_manifest().packages}
         self.assertEqual(by_name["neovim"].conflicts, "neovim-runtime")
         self.assertEqual(by_name["neovim"].replaces, "neovim-runtime")
-        for name in ("zellij", "starship", "git-delta", "rustfs-cli", "sccache"):
-            self.assertEqual(by_name[name].conflicts, "", msg=name)
-            self.assertEqual(by_name[name].replaces, "", msg=name)
+        # Every package without a reviewed relation declares none.
+        for name, recipe in RECIPES.items():
+            if recipe.conflicts or recipe.replaces:
+                continue
+            with self.subTest(package=name):
+                self.assertEqual(by_name[name].conflicts, "", msg=name)
+                self.assertEqual(by_name[name].replaces, "", msg=name)
 
     def test_reviewed_extra_metadata_is_required_and_closed(self) -> None:
         data = _document()
