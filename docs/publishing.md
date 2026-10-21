@@ -74,6 +74,10 @@ uv run python -m scripts.repo verify --output dist/repo
   `Release` as `X-Manifest-SHA256` and `X-Manifest-Size`. `verify` requires both
   fields and recomputes them, so the stored copy can never stand in for the
   manifest that was actually built.
+- That stored manifest is also what the public landing page reads: the Worker
+  serves the package table and the install commands from the manifest of the
+  release `current.json` names, so the page shows the published truth and never
+  a manifest baked into the Worker.
 - System prerequisites for `build`: `reprepro` generates the `Packages`
   indices and `dpkg-deb` (shipped by `dpkg`) assembles the packages.
 - Credentials never appear in CLI arguments; the signing key comes from
@@ -196,6 +200,12 @@ uv run python -m scripts.repo publish --output dist/repo --bucket <name>
   publish the newer one.
 - Never deletes: old `pool` files and `indices` entries are retained so
   previous by-hash URLs keep working after a pointer move.
+- A publish moves the pointer, and the public landing page follows it: the page
+  reads the pointer and the manifest of the release it names at request time
+  and caches them for a minute, so a new package list becomes visible within
+  roughly two minutes, without a Worker redeploy. When that metadata cannot be
+  read, the page says the package list is unavailable instead of showing an
+  older list.
 - Never overwrites immutable bytes with different content; a colliding
   `Release` id or pool object aborts before the pointer moves.
 - `key.asc` replacement needs `--allow-key-rotation` with operator

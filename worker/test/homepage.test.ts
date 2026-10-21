@@ -1,44 +1,35 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import manifestDocument from '../../packaging/manifest.json';
 import gateway from '../src/index.js';
 import { renderHomepageDocument } from '../src/homepage.js';
 import { authorized, createEnv, FakeContext, plain } from './fakes.js';
-import { CLIENT, TOKEN, createFixture } from './harness.js';
+import {
+  CLIENT,
+  RELEASE_ID,
+  SYNTHETIC_PACKAGES,
+  TOKEN,
+  createFixture,
+  seedManifest,
+} from './harness.js';
 
 const encoder = new TextEncoder();
 
-interface ManifestPackage {
-  readonly name: string;
-  readonly targets: Readonly<Record<string, unknown>>;
-}
-
-/** The published catalog, read from the committed manifest the release binds. */
-const published = (manifestDocument as unknown as { packages: readonly ManifestPackage[] }).packages;
-
-const publishedNames = published.map((pkg) => pkg.name).sort();
-const dualArchNames = published
-  .filter((pkg) => 'amd64' in pkg.targets && 'arm64' in pkg.targets)
-  .map((pkg) => pkg.name)
-  .sort();
-const amd64OnlyNames = published
-  .filter((pkg) => 'amd64' in pkg.targets && !('arm64' in pkg.targets))
-  .map((pkg) => pkg.name)
-  .sort();
+/** The metadata keys the root page is allowed to read. */
+const METADATA_KEYS = ['current.json', `releases/${RELEASE_ID}/manifest.json`];
 
 describe('public root landing page', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('serves GET / as a public HTML page without reading storage or the cache', async () => {
+  it('serves GET / as a public HTML page from the published catalog', async () => {
     const fixture = await createFixture();
     vi.stubGlobal('caches', { default: fixture.cache.asBinding() });
     const response = await fixture.call(plain('/'));
 
     expect(response.status).toBe(200);
     expect(response.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
-    expect(response.headers.get('Cache-Control')).toBe('public, max-age=3600');
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=60');
     expect(response.headers.get('Content-Security-Policy')).toContain("default-src 'none'");
     expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
     expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
@@ -46,7 +37,7 @@ describe('public root landing page', () => {
     expect(response.headers.get('WWW-Authenticate')).toBeNull();
 
     expect(await response.text()).toContain('<title>apt-at-home</title>');
-    expect(fixture.bucket.calls).toEqual([]);
+    expect(fixture.bucket.keysFor('get')).toEqual(METADATA_KEYS);
     expect(fixture.cache.lookups).toEqual([]);
     expect(fixture.cache.writes).toEqual([]);
   });
@@ -73,12 +64,12 @@ describe('public root landing page', () => {
     },
   );
 
-  it('never consults the bucket or the cache, even on a repeated request', async () => {
+  it('reuses the published catalog on a repeated request', async () => {
     const fixture = await createFixture();
     vi.stubGlobal('caches', { default: fixture.cache.asBinding() });
     await fixture.call(plain('/'));
     await fixture.call(plain('/?lang=zh'));
-    expect(fixture.bucket.calls).toEqual([]);
+    expect(fixture.bucket.keysFor('get')).toEqual(METADATA_KEYS);
     expect(fixture.cache.lookups).toEqual([]);
     expect(fixture.cache.writes).toEqual([]);
   });
@@ -89,7 +80,7 @@ describe('public root landing page', () => {
     const wrong = await fixture.call(authorized('/', 'unknown-device', 'wrong-token'));
     expect(anonymous.status).toBe(200);
     expect(wrong.status).toBe(200);
-    expect(fixture.bucket.calls).toEqual([]);
+    expect(fixture.bucket.keysFor('get')).toEqual(METADATA_KEYS);
   });
 
   it('serves the root even when the credential secret is missing or unusable', async () => {
@@ -104,7 +95,7 @@ describe('public root landing page', () => {
       expect(response.status).toBe(200);
       expect(response.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
     }
-    expect(fixture.bucket.calls).toEqual([]);
+    expect(fixture.bucket.keysFor('get')).toEqual(METADATA_KEYS);
   });
 
   it('ignores unrelated query values and never reflects them', async () => {
@@ -221,7 +212,7 @@ describe('root page locale negotiation', () => {
       const head = await fixture.call(plain(path, { method: 'HEAD' }));
       expect(head.status, path).toBe(200);
       expect([...head.headers], path).toEqual([...get.headers]);
-      expect(await head.text()).toBe('');
+      expect(await head.text(), path).toBe('');
     }
   });
 
@@ -248,66 +239,181 @@ describe('root page content', () => {
     }
   });
 
-  it('documents the three public installation steps in English', async () => {
+  it('renders the installation steps as titles and commands without repeated intros', async () => {
+    const fixture = await createFixture();
+    const removed = [
+      'Download the armored public key into the keyring apt trusts for this repository:',
+      'Write the Deb822 source entry, signed by the key installed above:',
+      'The architecture is selected automatically from the local dpkg',
+      'Update the package index',
+      '将 armored 公钥下载到 apt 信任的密钥环：',
+      '写入 Deb822 源条目，使用上面安装的公钥签名：',
+      '架构按本机 dpkg 自动选择',
+      '更新软件包索引',
+    ];
+    const kept: Record<string, readonly string[]> = {
+      '/': [
+        'Install the signing key',
+        'Add the repository',
+        'Update and install',
+        'sudo install -d -m0755 /etc/apt/keyrings',
+        'sudo tee /etc/apt/sources.list.d/apt-at-home.sources',
+        'sudo apt update &amp;&amp; sudo apt install alpha',
+        'Only on amd64:',
+      ],
+      '/?lang=zh': [
+        '安装签名公钥',
+        '添加软件源',
+        '更新并安装',
+        'sudo install -d -m0755 /etc/apt/keyrings',
+        'sudo tee /etc/apt/sources.list.d/apt-at-home.sources',
+        'sudo apt update &amp;&amp; sudo apt install alpha',
+        '仅 amd64：',
+      ],
+    };
+
+    for (const [path, titles] of Object.entries(kept)) {
+      const html = await (await fixture.call(plain(path))).text();
+      for (const gone of removed) {
+        expect(html, path).not.toContain(gone);
+      }
+      for (const keptText of titles) {
+        expect(html, path).toContain(keptText);
+      }
+    }
+  });
+
+  it('keeps only the update command when the catalog is unavailable', async () => {
+    const fixture = await createFixture();
+    fixture.bucket.entries.delete(`releases/${RELEASE_ID}/manifest.json`);
+    const html = await (await fixture.call(plain('/'))).text();
+
+    expect(html).toContain('<pre><code>sudo apt update</code></pre>');
+    expect(html).not.toContain('Update the package index');
+    expect(html).toContain('sudo install -d -m0755 /etc/apt/keyrings');
+  });
+
+  it('lists the published packages with their versions and architectures', async () => {
     const fixture = await createFixture();
     const html = await (await fixture.call(plain('/'))).text();
 
-    for (const name of publishedNames) {
-      expect(html).toContain(name);
-    }
-    // The roster comes from the committed manifest, so it must not be empty.
-    expect(publishedNames.length).toBeGreaterThan(0);
-    expect(html).toContain('amd64');
-    expect(html).toContain('arm64');
-    expect(html).toContain('Before you start');
-    expect(html).toContain('Installation steps');
-    expect(html).toContain('full primary fingerprint');
-    expect(html).toContain('/etc/apt/keyrings/apt-at-home.asc');
-    expect(html).toContain('Signed-By: /etc/apt/keyrings/apt-at-home.asc');
-    expect(html).toContain(
-      `sudo apt update &amp;&amp; sudo apt install ${dualArchNames.join(' ')}`,
-    );
-    expect(html).toContain(`sudo apt install ${amd64OnlyNames.join(' ')}`);
-    expect(html).toContain('On amd64 only');
-    // The two packages whose command differs from their Debian name say so.
-    expect(html).toContain('<code>bottom</code> provides <code>btm</code>');
-    expect(html).toContain('<code>git-delta</code> provides <code>delta</code>');
-    expect(html).toContain('<code>rustfs-cli</code> provides <code>rc</code>');
-    expect(html).toContain('<code>uv</code> provides <code>uv</code> and <code>uvx</code>');
-    expect(html).toContain('<code>cargo-tauri</code>');
-    expect(html).toContain('amd64 only');
-    expect(html).toContain('<code>kandev</code> package installs the standard server bundle');
-    expect(html).toContain('run <code>kandev</code> to start it');
-    expect(html).toContain('Zoxide Bash integration is optional');
-    expect(html).toContain('installation does not edit it');
-    expect(html).toContain('https://github.com/cloudiful/apt-at-home');
+    expect(html).toContain('<caption class="sr-only">Published packages</caption>');
+    expect(html).toContain('<th scope="col">Package</th>');
+    expect(html).toContain('<th scope="col">Upstream version</th>');
+    expect(html).toContain('<th scope="col">Architecture</th>');
+    expect(html).toContain('<th scope="row">alpha</th>');
+    expect(html).toContain('<th scope="row">beta</th>');
+    expect(html).toContain('<th scope="row">gamma</th>');
+    expect(html).toContain('<td>1.2.3</td>');
+    expect(html).toContain('<td>0.4.0</td>');
+    expect(html).toContain('<td>2.0.0</td>');
+    expect(html).toContain('<td>amd64, arm64</td>');
+    expect(html).toContain('<td>amd64</td>');
+    expect(html).toContain('<td>arm64</td>');
   });
 
-  it('documents the same guide in Chinese', async () => {
+  it('labels the table for assistive technology without repeating it visibly', async () => {
     const fixture = await createFixture();
-    const html = await (await fixture.call(plain('/?lang=zh'))).text();
-
-    for (const name of publishedNames) {
-      expect(html).toContain(name);
+    for (const [path, caption] of [
+      ['/', 'Published packages'],
+      ['/?lang=zh', '已发布的软件包'],
+    ] as const) {
+      const html = await (await fixture.call(plain(path))).text();
+      expect(html, path).toContain(`<caption class="sr-only">${caption}</caption>`);
+      expect(html, path).not.toContain('<caption>');
+      expect(html, path).not.toContain('display: none');
     }
-    expect(html).toContain('完整主密钥指纹');
+  });
+
+  it('ends with one documentation link and no policy prose', async () => {
+    const fixture = await createFixture();
+    for (const [path, label] of [
+      ['/', 'Documentation'],
+      ['/?lang=zh', '文档'],
+    ] as const) {
+      const html = await (await fixture.call(plain(path))).text();
+      const footer = html.slice(html.indexOf('<footer>'), html.indexOf('</footer>'));
+      expect(footer, path).toContain(
+        `<a href="https://github.com/cloudiful/apt-at-home">${label}</a>`,
+      );
+      expect(footer.match(/<a /g) ?? [], path).toHaveLength(1);
+      expect(html, path).not.toContain('public test mode');
+      expect(html, path).not.toContain('公开测试模式');
+      expect(html, path).not.toContain('docs/setup.md');
+    }
+  });
+
+  it('keeps the platform label and drops the lede and the prerequisites block', async () => {
+    const fixture = await createFixture();
+    for (const path of ['/', '/?lang=zh']) {
+      const html = await (await fixture.call(plain(path))).text();
+      expect(html, path).toContain('Debian 13');
+      expect(html, path).not.toContain('class="lede"');
+      expect(html, path).not.toContain('Before you start');
+      expect(html, path).not.toContain('开始之前');
+      expect(html, path).not.toContain('prerequisites');
+    }
+  });
+
+  it('builds the install commands from the same published catalog', async () => {
+    const fixture = await createFixture();
+    const html = await (await fixture.call(plain('/'))).text();
+
+    expect(html).toContain('sudo apt update &amp;&amp; sudo apt install alpha');
+    expect(html).toContain('Only on amd64:');
+    expect(html).toContain('<pre><code>sudo apt install beta</code></pre>');
+    expect(html).toContain('Only on arm64:');
+    expect(html).toContain('<pre><code>sudo apt install gamma</code></pre>');
+    expect(html).not.toContain('sudo apt install alpha beta');
+  });
+
+  it('shows the short status and no table when the catalog cannot be read', async () => {
+    const fixture = await createFixture();
+    fixture.bucket.entries.delete(`releases/${RELEASE_ID}/manifest.json`);
+    const html = await (await fixture.call(plain('/'))).text();
+
+    expect(html).toContain('role="status"');
+    expect(html).toContain('The published package list is unavailable right now.');
+    expect(html).not.toContain('<table>');
+    expect(html).not.toContain('sudo apt install');
+    expect(html).toContain('<pre><code>sudo apt update</code></pre>');
     expect(html).toContain('/etc/apt/keyrings/apt-at-home.asc');
-    expect(html).toContain('Signed-By: /etc/apt/keyrings/apt-at-home.asc');
-    expect(html).toContain(
-      `sudo apt update &amp;&amp; sudo apt install ${dualArchNames.join(' ')}`,
+  });
+
+  it('never renders an untrusted manifest value', async () => {
+    const fixture = await createFixture();
+    fixture.bucket.seed(
+      `releases/${RELEASE_ID}/manifest.json`,
+      JSON.stringify({
+        packages: [
+          {
+            name: '<script>alert(1)</script>',
+            version: '1.0.0',
+            targets: { amd64: {} },
+          },
+        ],
+      }),
+      { contentType: 'application/json' },
     );
-    expect(html).toContain(`sudo apt install ${amd64OnlyNames.join(' ')}`);
-    expect(html).toContain('仅 amd64');
-    expect(html).toContain('<code>bottom</code> 提供 <code>btm</code>');
-    expect(html).toContain('<code>git-delta</code> 提供 <code>delta</code>');
-    expect(html).toContain('<code>rustfs-cli</code> 提供 <code>rc</code>');
-    expect(html).toContain('<code>uv</code> 提供 <code>uv</code> 和 <code>uvx</code>');
-    expect(html).toContain('<code>cargo-tauri</code>');
-    expect(html).toContain('<code>kandev</code> 安装标准服务器套件');
-    expect(html).toContain('运行 <code>kandev</code> 才会启动服务器');
-    expect(html).toContain('zoxide 的 Bash 集成是可选的');
-    expect(html).toContain('安装不会修改该配置');
-    expect(html).toContain('https://github.com/cloudiful/apt-at-home');
+    const html = await (await fixture.call(plain('/'))).text();
+
+    expect(html).not.toContain('<script>');
+    expect(html).not.toContain('alert(1)');
+    expect(html).toContain('The published package list is unavailable right now.');
+    expect(html).not.toContain('<table>');
+  });
+
+  it('picks up a newly published package without a template change', async () => {
+    const fixture = await createFixture();
+    seedManifest(fixture.bucket, RELEASE_ID, [
+      ...SYNTHETIC_PACKAGES,
+      { name: 'delta', version: '3.1.4', architectures: ['amd64', 'arm64'] },
+    ]);
+    const html = await (await fixture.call(plain('/'))).text();
+
+    expect(html).toContain('<th scope="row">delta</th>');
+    expect(html).toContain('<td>3.1.4</td>');
+    expect(html).toContain('sudo apt update &amp;&amp; sudo apt install alpha delta');
   });
 
   it('serves an anonymous key download without unsafe shortcuts', async () => {

@@ -2,6 +2,9 @@
  * Shared fixture for the gateway tests: a private bucket holding one published
  * release for both architectures, plus the pointer, by-hash indexes and a
  * package file.
+ *
+ * The published release carries a synthetic manifest, so the tests never
+ * depend on the roster the repository happens to publish today.
  */
 import gateway from '../src/index.js';
 import { FakeBucket, FakeCache, FakeContext, createEnv, credentialSecret, sha256Hex } from './fakes.js';
@@ -18,6 +21,54 @@ export const RELEASE_BODY = 'Suite: stable\nOrigin: apt-at-home\n';
 export const AMD64_PACKAGES = 'Package: zellij\nArchitecture: amd64\nVersion: 0.45.1-1\n';
 export const ARM64_PACKAGES = 'Package: starship\nArchitecture: arm64\nVersion: 1.26.0-1\n';
 export const PACKAGE_BODY = 'debian-package-archive-bytes';
+
+/** One synthetic package of a published release. */
+export interface SyntheticPackage {
+  readonly name: string;
+  readonly version: string;
+  readonly architectures: readonly ('amd64' | 'arm64')[];
+}
+
+/** The catalog the fixture release publishes. */
+export const SYNTHETIC_PACKAGES: readonly SyntheticPackage[] = [
+  { name: 'alpha', version: '1.2.3', architectures: ['amd64', 'arm64'] },
+  { name: 'beta', version: '0.4.0', architectures: ['amd64'] },
+  { name: 'gamma', version: '2.0.0', architectures: ['arm64'] },
+];
+
+/** The catalog the next published release carries. */
+export const NEXT_RELEASE_PACKAGES: readonly SyntheticPackage[] = [
+  { name: 'alpha', version: '2.0.0', architectures: ['amd64', 'arm64'] },
+  { name: 'delta', version: '3.1.4', architectures: ['amd64', 'arm64'] },
+];
+
+/** Renders a release manifest document for the given packages. */
+export function manifestJson(packages: readonly SyntheticPackage[]): string {
+  return JSON.stringify({
+    manifest_version: 1,
+    packages: packages.map((pkg) => ({
+      name: pkg.name,
+      version: pkg.version,
+      targets: Object.fromEntries(
+        pkg.architectures.map((architecture) => [
+          architecture,
+          { url: 'https://example.invalid/release.tar.gz', sha256: '0'.repeat(64) },
+        ]),
+      ),
+    })),
+  });
+}
+
+/** Stores the manifest of one published release in the bucket. */
+export function seedManifest(
+  bucket: FakeBucket,
+  releaseId: string,
+  packages: readonly SyntheticPackage[],
+): void {
+  bucket.seed(`releases/${releaseId}/manifest.json`, manifestJson(packages), {
+    contentType: 'application/json',
+  });
+}
 
 export interface Fixture {
   readonly bucket: FakeBucket;
@@ -44,6 +95,8 @@ export async function createFixture(): Promise<Fixture> {
 
   seedRelease(bucket, RELEASE_ID, RELEASE_BODY, AMD64_PACKAGES, ARM64_PACKAGES);
   seedIndexes(bucket, amd64Digest, arm64Digest);
+  seedManifest(bucket, RELEASE_ID, SYNTHETIC_PACKAGES);
+  seedManifest(bucket, NEXT_RELEASE_ID, NEXT_RELEASE_PACKAGES);
   bucket.seed('current.json', JSON.stringify({ release: RELEASE_ID }), {
     contentType: 'application/json',
   });

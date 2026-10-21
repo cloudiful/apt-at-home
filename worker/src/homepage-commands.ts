@@ -6,7 +6,13 @@
  * live here once and the per-locale content modules supply only prose. The
  * origin is escaped here before it reaches any command or attribute, so a
  * crafted hostname can never inject markup into the page.
+ *
+ * The install commands are derived from the published catalog rather than
+ * written out: the package names come from the manifest the publisher already
+ * validated, and the reader only ever sees names the shell accepts as plain
+ * arguments.
  */
+import type { PackageSummary } from './packages.js';
 
 /** Escapes a value for interpolation into element text or a quoted attribute. */
 export function escapeHtml(value: string): string {
@@ -21,7 +27,6 @@ export function escapeHtml(value: string): string {
 /** Localized prose for the signing-key step; the command block is shared. */
 export interface KeyStepCopy {
   readonly title: string;
-  readonly intro: string;
   readonly fingerprintSummary: string;
   readonly fingerprintNote: string;
 }
@@ -29,15 +34,13 @@ export interface KeyStepCopy {
 /** Localized prose for the sources step. */
 export interface SourcesStepCopy {
   readonly title: string;
-  readonly intro: string;
-  readonly architectureNote: string;
 }
 
 /** Localized prose for the update-and-install step. */
 export interface InstallStepCopy {
   readonly title: string;
-  readonly intro: string;
   readonly amd64Intro: string;
+  readonly arm64Intro: string;
 }
 
 /** Localized prose for the collapsed device-credential details. */
@@ -59,13 +62,18 @@ export interface InstallStepsCopy {
  * Renders the ordered installation steps for one request origin.
  *
  * The origin is HTML-escaped here and reused in every command block, so the
- * locale modules never interpolate request data themselves.
+ * locale modules never interpolate request data themselves. Each step is a
+ * title and its commands: the commands say what to run, so no step repeats
+ * itself in an introductory paragraph.
  */
-export function renderInstallSteps(origin: string, copy: InstallStepsCopy): string {
+export function renderInstallSteps(
+  origin: string,
+  copy: InstallStepsCopy,
+  packages?: readonly PackageSummary[],
+): string {
   const o = escapeHtml(origin);
   return `      <li>
         <h3>${copy.key.title}</h3>
-        <p>${copy.key.intro}</p>
         <pre><code>sudo install -d -m0755 /etc/apt/keyrings
 sudo curl --fail --show-error --output /etc/apt/keyrings/apt-at-home.asc ${o}/key.asc
 sudo chmod 0644 /etc/apt/keyrings/apt-at-home.asc</code></pre>
@@ -77,7 +85,6 @@ sudo chmod 0644 /etc/apt/keyrings/apt-at-home.asc</code></pre>
       </li>
       <li>
         <h3>${copy.sources.title}</h3>
-        <p>${copy.sources.intro}</p>
         <pre><code>sudo tee /etc/apt/sources.list.d/apt-at-home.sources &gt;/dev/null &lt;&lt;'EOF'
 Types: deb
 URIs: ${o}
@@ -85,15 +92,60 @@ Suites: stable
 Components: main
 Signed-By: /etc/apt/keyrings/apt-at-home.asc
 EOF</code></pre>
-        <p>${copy.sources.architectureNote}</p>
       </li>
       <li>
         <h3>${copy.install.title}</h3>
-        <p>${copy.install.intro}</p>
-        <pre><code>sudo apt update &amp;&amp; sudo apt install bottom bun git-delta kandev neovim rustfs-cli sccache starship uv zellij zoxide</code></pre>
-        <p>${copy.install.amd64Intro}</p>
-        <pre><code>sudo apt install cargo-tauri</code></pre>
+${renderInstallCommands(copy.install, packages)}
       </li>`;
+}
+
+/**
+ * Renders the install commands for the published catalog.
+ *
+ * Packages that exist for both architectures are installed with one command;
+ * packages that exist for one architecture only get their own command, so the
+ * page never suggests installing a package the architecture does not carry.
+ * Without a catalog the page keeps the update command and drops the package
+ * list, because there is no trustworthy list to show.
+ */
+function renderInstallCommands(
+  copy: InstallStepCopy,
+  packages: readonly PackageSummary[] | undefined,
+): string {
+  if (packages === undefined || packages.length === 0) {
+    return `        <pre><code>sudo apt update</code></pre>`;
+  }
+
+  const shared = packages.filter(
+    (pkg) => pkg.architectures.includes('amd64') && pkg.architectures.includes('arm64'),
+  );
+  const amd64Only = packages.filter(
+    (pkg) => pkg.architectures.includes('amd64') && !pkg.architectures.includes('arm64'),
+  );
+  const arm64Only = packages.filter(
+    (pkg) => pkg.architectures.includes('arm64') && !pkg.architectures.includes('amd64'),
+  );
+
+  const blocks: string[] = [];
+  blocks.push(
+    shared.length > 0
+      ? `        <pre><code>sudo apt update &amp;&amp; sudo apt install ${names(shared)}</code></pre>`
+      : `        <pre><code>sudo apt update</code></pre>`,
+  );
+  if (amd64Only.length > 0) {
+    blocks.push(`        <p>${copy.amd64Intro}</p>`);
+    blocks.push(`        <pre><code>sudo apt install ${names(amd64Only)}</code></pre>`);
+  }
+  if (arm64Only.length > 0) {
+    blocks.push(`        <p>${copy.arm64Intro}</p>`);
+    blocks.push(`        <pre><code>sudo apt install ${names(arm64Only)}</code></pre>`);
+  }
+  return blocks.join('\n');
+}
+
+/** Joins validated package names into one shell argument list. */
+function names(packages: readonly PackageSummary[]): string {
+  return packages.map((pkg) => pkg.name).join(' ');
 }
 
 /**

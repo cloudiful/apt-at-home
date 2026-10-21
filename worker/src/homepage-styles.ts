@@ -9,6 +9,8 @@
  * The step list and code blocks are bounded deliberately: the grid track and
  * every list item may shrink below their content, so an unbroken command line
  * scrolls inside its own code block instead of widening the whole document.
+ * The package table is bounded the same way: it scrolls inside its own
+ * container on a narrow screen and never widens the page.
  */
 export const HOMEPAGE_STYLES = `:root {
   color-scheme: light dark;
@@ -72,9 +74,10 @@ h3 {
 p {
   margin: 0.5rem 0;
 }
-.lede {
+.platform {
   margin: 0;
   color: var(--muted);
+  font-size: 0.9rem;
 }
 .locale {
   display: flex;
@@ -154,6 +157,53 @@ a:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+caption {
+  padding-bottom: 0.5rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: left;
+}
+th,
+td {
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+thead th {
+  border-bottom: 2px solid var(--border);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+tbody th {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.status {
+  margin: 0;
+  color: var(--muted);
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 footer {
   margin-top: 2rem;
   color: var(--muted);
@@ -175,6 +225,9 @@ footer {
   }
   pre code {
     font-size: 0.78rem;
+  }
+  table {
+    font-size: 0.85rem;
   }
 }
 `;

@@ -46,15 +46,24 @@ or bucket mutation is performed here.
 - Check credentials before any storage or cache access (the gateway already
   does this). Invalid configuration fails closed with `503`, and the bucket is
   never exposed publicly.
-- The exact root path `/` is the one public exception: `GET`/`HEAD /` serves a
-  static installation guide before the credential check, so a misconfigured
-  runtime still explains how to bootstrap a client. The guide follows the
-  browser's `Accept-Language` (English by default), and `?lang=en` or `?lang=zh`
-  overrides it. Every other path stays
-  behind the credential gate, and a `503` there means the runtime credentials
-  secret is missing or unusable — fix it under Worker → Settings → Variables
-  and Secrets. The guide only installs anything after the first successful
-  release publishes the repository.
+- The exact root path `/` is the one public exception: `GET`/`HEAD /` serves the
+  public landing page before the credential check, so a misconfigured runtime
+  still explains how to bootstrap a client. The page follows the browser's
+  `Accept-Language` (English by default), and `?lang=en` or `?lang=zh`
+  overrides it. It reads only the published release metadata — the release
+  pointer and the manifest of the release it names — and never the credential
+  secret, so it exposes nothing beyond the published package list. Every other
+  path stays behind the credential gate, and a `503` there means the runtime
+  credentials secret is missing or unusable — fix it under Worker → Settings →
+  Variables and Secrets. The guide only installs anything after the first
+  successful release publishes the repository.
+- The landing page lists the packages of the current published release, read
+  from the manifest that release carries, so a publish changes the page without
+  a Worker redeploy. The metadata is cached for one minute and the page for
+  another minute, so a new release becomes visible within roughly two minutes.
+  When the metadata cannot be read — no pointer, no manifest, a corrupt
+  document, or a storage error — the page still renders and states that the
+  package list is unavailable; it never presents an older list as current.
 
 ## 3. Cloudflare Worker Builds (deploy owner)
 
@@ -178,6 +187,9 @@ the exact three steps, reproduced here for operators.
   artifact path reaches R2 and counts against the Worker and storage request
   quotas. Treat the hostname as a public resource and watch usage; re-enable the
   credential gate (`AUTH_REQUIRED: "true"`) to stop anonymous traffic.
+- The public landing page reads the release pointer and the release manifest on
+  a cold cache, so it reaches R2 as well; those reads are cached for one
+  minute.
 - A Worker-side WAF, rate limit, or alert cannot guarantee blocking of
   malicious invocations on the free tier; treat them as defense in depth.
 - Keep tokens per-device and rotatable, watch Worker request logs for `401`

@@ -61,6 +61,12 @@ function toStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
 export class FakeBucket {
   readonly entries = new Map<string, StoredEntry>();
   readonly calls: BucketCall[] = [];
+  /** Keys whose read rejects, standing in for a failing storage request. */
+  readonly failures = new Map<string, Error>();
+  /** Keys whose read never answers, standing in for a stalled request. */
+  readonly stalled = new Set<string>();
+  /** Keys whose next read answers late, with the delay in milliseconds. */
+  readonly delays = new Map<string, number>();
 
   seed(
     key: string,
@@ -71,12 +77,36 @@ export class FakeBucket {
     this.entries.set(key, { bytes, ...options });
   }
 
+  /** Makes every read of one key reject with the given error. */
+  fail(key: string, error: Error): void {
+    this.failures.set(key, error);
+  }
+
+  /** Makes every read of one key hang forever. */
+  stall(key: string): void {
+    this.stalled.add(key);
+  }
+
+  /**
+   * Makes the next read of one key answer late.
+   *
+   * The stored bytes are captured when the read is requested, so a later
+   * change to the bucket cannot change what the delayed read returns. That is
+   * what a storage request already in flight sees, and it is what makes an
+   * abandoned answer observable.
+   */
+  delay(key: string, ms: number): void {
+    this.delays.set(key, ms);
+  }
+
   keysFor(operation: 'head' | 'get'): string[] {
     return this.calls.filter((call) => call.op === operation).map((call) => call.key);
   }
 
   head(key: string): Promise<R2Object | null> {
     this.calls.push({ op: 'head', key });
+    const failure = this.failures.get(key);
+    if (failure !== undefined) return Promise.reject(failure);
     const entry = this.entries.get(key);
     return Promise.resolve(
       entry === undefined ? null : (toObject(key, entry) as unknown as R2Object),
@@ -85,6 +115,9 @@ export class FakeBucket {
 
   get(key: string, options?: R2GetOptions): Promise<R2ObjectBody | null> {
     this.calls.push({ op: 'get', key });
+    const failure = this.failures.get(key);
+    if (failure !== undefined) return Promise.reject(failure);
+    if (this.stalled.has(key)) return new Promise<R2ObjectBody | null>(() => undefined);
     const entry = this.entries.get(key);
     if (entry === undefined) return Promise.resolve(null);
     const requested = options?.range as { offset: number; length: number } | undefined;
@@ -96,7 +129,12 @@ export class FakeBucket {
       body: toStream(bytes),
       text: async () => new TextDecoder().decode(bytes),
     };
-    return Promise.resolve(body as unknown as R2ObjectBody);
+    const delay = this.delays.get(key);
+    if (delay === undefined) return Promise.resolve(body as unknown as R2ObjectBody);
+    this.delays.delete(key);
+    return new Promise<R2ObjectBody | null>((resolve) => {
+      setTimeout(() => resolve(body as unknown as R2ObjectBody), delay);
+    });
   }
 
   asBinding(): R2Bucket {

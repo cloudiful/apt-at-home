@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import gateway from '../src/index.js';
 import { resolveAuthMode } from '../src/auth.js';
 import { FakeContext, authorized, createEnv, credentialSecret, plain } from './fakes.js';
-import { CLIENT, TOKEN, createFixture } from './harness.js';
+import { CLIENT, RELEASE_ID, TOKEN, createFixture } from './harness.js';
 
 const PACKAGE_PATH = '/pool/zellij_0.45.1-1_amd64.deb';
 
@@ -151,7 +151,11 @@ describe('public artifact mode', () => {
       );
       expect(response.status, String(raw)).toBe(200);
     }
-    expect(fixture.bucket.calls).toEqual([]);
+    expect(fixture.bucket.keysFor('get')).toEqual([
+      'current.json',
+      `releases/${RELEASE_ID}/manifest.json`,
+    ]);
+    expect(fixture.bucket.keysFor('head')).toEqual([]);
   });
 
   it('reinstates auth on a warmed cache when the flag returns to required', async () => {

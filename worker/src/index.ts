@@ -5,8 +5,8 @@
  * validated, then the request is authenticated, and only then may the release
  * pointer, the cache or the bucket be touched. A rejected request therefore
  * reveals nothing about whether an object exists. The exact root path is the
- * single public exception: it is answered with a static landing page before any
- * of this runs, and no other path is affected.
+ * single public exception: it is answered before any of this runs, and it
+ * reads only the published release metadata, never the credential secret.
  */
 import { challengeHeaders, isAuthorized, parseCredentialConfig, resolveAuthMode } from './auth.js';
 import { cacheLookup, cacheStore, isCacheableBody, shouldBypassCache, toClientResponse } from './cache.js';
@@ -31,7 +31,7 @@ import type { Env, ResolvedObject } from './types.js';
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const root = handleRoot(request);
+    const root = await handleRoot(request, env);
     if (root !== null) return root;
 
     const authMode = resolveAuthMode(env.AUTH_REQUIRED);
