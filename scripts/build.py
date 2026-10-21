@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from .archive_tree import inventory_tree
-from .catalog import required_paths_for, tag_for
+from .catalog import archive_suffix_for, required_paths_for, tag_for
 from .common import sha256_file
 from .deb import build_deb, stage_package
 from .download import fetch_verified
@@ -55,6 +55,16 @@ def _stage_target(
     )
 
 
+def archive_cache_name(pkg: Package, arch: str) -> str:
+    """Return the cache file name for one pinned upstream archive.
+
+    The name carries the official asset's own suffix, so the cached file keeps
+    the format the build extracts: a gzipped tarball or a ZIP.
+    """
+    suffix = archive_suffix_for(pkg.name, pkg.version, arch)
+    return f"{pkg.name}-{pkg.version}-{arch}{suffix}"
+
+
 def build_all(
     manifest: Manifest,
     *,
@@ -82,7 +92,7 @@ def build_all(
                 continue
             for arch in sorted(pkg.targets):
                 target = pkg.targets[arch]
-                archive = cache_dir / f"{pkg.name}-{pkg.version}-{arch}.tar.gz"
+                archive = cache_dir / archive_cache_name(pkg, arch)
                 fetch_verified(target.url, target.sha256, archive)
                 # Nothing in the archive is executed during the host build.
                 stage = _stage_target(pkg, arch, manifest, archive, tmpdir)

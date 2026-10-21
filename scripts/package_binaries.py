@@ -34,7 +34,11 @@ def _members(target: ArchTarget) -> list[tuple[str, str]]:
 
 
 def extract_binaries(archive: Path, target: ArchTarget, destination: Path) -> dict[str, Path]:
-    """Extract each exact reviewed flat member without executing its contents."""
+    """Extract each exact reviewed flat member without executing its contents.
+
+    The archive is a gzipped tarball or a ZIP: the format follows the official
+    asset's suffix, and both refuse everything but the one pinned regular file.
+    """
     sources: dict[str, Path] = {}
     for name, member in _members(target):
         source = destination / name

@@ -1,6 +1,6 @@
 """Ordinary `cargo-tauri` recipe: official amd64 asset only.
 
-The eleventh package follows the highest stable `tauri-cli-vN.N.N` tag and
+The `cargo-tauri` recipe follows the highest stable `tauri-cli-vN.N.N` tag and
 that exact release's official amd64 asset. Only the reviewed tag prefix, asset
 name, member, binary, license sources, architecture policy, and exact-tag
 policy are pinned here; versions and digests come from the manifest and
@@ -39,8 +39,10 @@ DEPENDS = "cargo, libc6 (>= 2.34), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)"
 class CargoTauriRecipeTest(unittest.TestCase):
     def test_the_package_is_registered_without_widening_other_recipes(self) -> None:
         self.assertIn("cargo-tauri", KNOWN_PACKAGES)
-        self.assertEqual(len(KNOWN_PACKAGES), 11)
-        self.assertNotIn("bun", KNOWN_PACKAGES)
+        self.assertEqual(len(KNOWN_PACKAGES), 12)
+        # Bun is an ordinary asset package, not a source build: it is reviewed
+        # and published from its official release ZIP.
+        self.assertIn("bun", KNOWN_PACKAGES)
 
     def test_tag_prefix_and_repo_are_the_reviewed_upstream(self) -> None:
         self.assertEqual(repo_of("cargo-tauri"), "tauri-apps/tauri")
@@ -52,7 +54,7 @@ class CargoTauriRecipeTest(unittest.TestCase):
         self.assertTrue(exact_tag_release_for("cargo-tauri"))
         for name in (
             "zellij", "starship", "git-delta", "rustfs-cli", "sccache",
-            "neovim", "bottom", "uv", "zoxide", "kandev",
+            "neovim", "bottom", "uv", "zoxide", "kandev", "bun",
         ):
             with self.subTest(package=name):
                 self.assertEqual(arches_for(name), ("amd64", "arm64"))
@@ -108,12 +110,12 @@ class CargoTauriRecipeTest(unittest.TestCase):
         self.assertEqual((amd64.archive_member, amd64.binary), ("cargo-tauri", "cargo-tauri"))
         self.assertEqual(amd64.depends, DEPENDS)
 
-    def test_manifest_declares_twenty_one_debs(self) -> None:
+    def test_manifest_declares_twenty_three_debs(self) -> None:
         manifest = load_manifest()
-        self.assertEqual(len(manifest.packages), 11)
-        self.assertEqual(len(expected_debs(manifest)), 21)
-        self.assertEqual(len(expected_debs_for_arch(manifest, "amd64")), 11)
-        self.assertEqual(len(expected_debs_for_arch(manifest, "arm64")), 10)
+        self.assertEqual(len(manifest.packages), 12)
+        self.assertEqual(len(expected_debs(manifest)), 23)
+        self.assertEqual(len(expected_debs_for_arch(manifest, "amd64")), 12)
+        self.assertEqual(len(expected_debs_for_arch(manifest, "arm64")), 11)
 
 
 if __name__ == "__main__":

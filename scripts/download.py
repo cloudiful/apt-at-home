@@ -69,12 +69,19 @@ def fetch_verified(url: str, expected_sha256: str, dest: Path) -> Path:
 def safe_extract_member(archive: Path, member_name: str, dest: Path) -> Path:
     """Extract exactly one declared regular-file member of an archive.
 
-    The member is selected by exact canonical path, never by basename guess, so
-    an archive can only ever contribute the file the manifest pinned. Links,
-    directories, devices, traversal, and a second entry claiming the same path
-    are all refused rather than skipped.
+    The archive format follows the official asset's suffix: a `.zip` asset is
+    read as a ZIP, every other reviewed asset as a gzipped tarball. The member
+    is selected by exact canonical path, never by basename guess, so an archive
+    can only ever contribute the file the manifest pinned. Links, directories,
+    devices, traversal, and a second entry claiming the same path are all
+    refused rather than skipped.
     """
     wanted = canonical_member(member_name)
+    if archive.suffix == ".zip":
+        # Imported here because the ZIP reader reuses this module's member rule.
+        from .archive_zip import safe_extract_zip_member
+
+        return safe_extract_zip_member(archive, wanted, dest)
     with tarfile.open(archive, "r:gz") as tar:
         matches: list[tarfile.TarInfo] = []
         for item in tar.getmembers():

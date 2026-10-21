@@ -95,7 +95,7 @@ class MergeCatalogTest(unittest.TestCase):
         merged = merge_catalog(baseline_document(), catalog_document())
         self.assertEqual(
             [entry["name"] for entry in merged],
-            ["zellij", "starship", "git-delta", "rustfs-cli", "sccache", "neovim", "bottom", "uv", "zoxide", "kandev", "cargo-tauri"],
+            ["zellij", "starship", "git-delta", "rustfs-cli", "sccache", "neovim", "bottom", "uv", "zoxide", "kandev", "cargo-tauri", "bun"],
         )
 
     def test_a_newer_published_version_survives_the_merge(self) -> None:
@@ -106,7 +106,7 @@ class MergeCatalogTest(unittest.TestCase):
         merged = merge_catalog(baseline, catalog_document())
         starship = next(e for e in merged if e["name"] == "starship")
         self.assertEqual(starship["version"], "1.27.0")
-        self.assertEqual(len(merged), 11)
+        self.assertEqual(len(merged), 12)
 
     def test_the_committed_catalog_never_drops_a_published_package(self) -> None:
         """A catalog that lost a name cannot delete what is already published."""
@@ -116,7 +116,7 @@ class MergeCatalogTest(unittest.TestCase):
             if e["name"] != "zellij"
         ]
         merged = merge_catalog(baseline_document(), trimmed)
-        self.assertEqual(len(merged), 11)
+        self.assertEqual(len(merged), 12)
         self.assertIn("zellij", [e["name"] for e in merged])
 
 
@@ -139,16 +139,17 @@ class PlanTest(unittest.TestCase):
             catalog_data=catalog_document(),
             candidates=_catalog_candidates(),
         )
-        # Every package sits at its pinned version, but the nine absent packages
+        # Every package sits at its pinned version, but the ten absent packages
         # still have to be built.
         additions = (
-            "bottom", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "uv", "zoxide",
+            "bottom", "bun", "cargo-tauri", "git-delta", "kandev", "neovim",
+            "rustfs-cli", "sccache", "uv", "zoxide",
         )
         self.assertEqual(plan.changed, additions)
         self.assertEqual(plan.added, additions)
         self.assertEqual(
             sorted(p.name for p in plan.manifest.packages),
-            ["bottom", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "starship", "uv", "zellij", "zoxide"],
+            ["bottom", "bun", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "starship", "uv", "zellij", "zoxide"],
         )
         by_name = {p.name: p for p in plan.manifest.packages}
         # An added package keeps its catalog member and dependency profile.
@@ -173,11 +174,11 @@ class PlanTest(unittest.TestCase):
         )
         self.assertEqual(
             plan.changed,
-            ("bottom", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "starship", "uv", "zoxide"),
+            ("bottom", "bun", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "starship", "uv", "zoxide"),
         )
         self.assertEqual(
             plan.added,
-            ("bottom", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "uv", "zoxide"),
+            ("bottom", "bun", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "uv", "zoxide"),
         )
         by_name = {p.name: p for p in plan.manifest.packages}
         starship = by_name["starship"]
@@ -235,7 +236,7 @@ class PlanTest(unittest.TestCase):
         # Only the nine absent catalog packages remain to be built.
         self.assertEqual(
             plan.changed,
-            ("bottom", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "uv", "zoxide"),
+            ("bottom", "bun", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "uv", "zoxide"),
         )
 
     def test_an_older_candidate_for_a_newer_published_version_is_refused(self) -> None:

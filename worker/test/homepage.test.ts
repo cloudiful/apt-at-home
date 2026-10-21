@@ -234,7 +234,7 @@ describe('root page content', () => {
     const html = await (await fixture.call(plain('/'))).text();
 
     for (const name of [
-      'bottom', 'cargo-tauri', 'git-delta', 'kandev', 'neovim', 'rustfs-cli', 'sccache', 'starship', 'uv', 'zellij', 'zoxide',
+      'bottom', 'bun', 'cargo-tauri', 'git-delta', 'kandev', 'neovim', 'rustfs-cli', 'sccache', 'starship', 'uv', 'zellij', 'zoxide',
     ]) {
       expect(html).toContain(name);
     }
@@ -246,7 +246,7 @@ describe('root page content', () => {
     expect(html).toContain('/etc/apt/keyrings/apt-at-home.asc');
     expect(html).toContain('Signed-By: /etc/apt/keyrings/apt-at-home.asc');
     expect(html).toContain(
-      'sudo apt update &amp;&amp; sudo apt install bottom git-delta kandev neovim rustfs-cli sccache starship uv zellij zoxide',
+      'sudo apt update &amp;&amp; sudo apt install bottom bun git-delta kandev neovim rustfs-cli sccache starship uv zellij zoxide',
     );
     expect(html).toContain('sudo apt install cargo-tauri');
     expect(html).toContain('On amd64 only');
@@ -269,7 +269,7 @@ describe('root page content', () => {
     const html = await (await fixture.call(plain('/?lang=zh'))).text();
 
     for (const name of [
-      'bottom', 'cargo-tauri', 'git-delta', 'kandev', 'neovim', 'rustfs-cli', 'sccache', 'starship', 'uv', 'zellij', 'zoxide',
+      'bottom', 'bun', 'cargo-tauri', 'git-delta', 'kandev', 'neovim', 'rustfs-cli', 'sccache', 'starship', 'uv', 'zellij', 'zoxide',
     ]) {
       expect(html).toContain(name);
     }
@@ -277,7 +277,7 @@ describe('root page content', () => {
     expect(html).toContain('/etc/apt/keyrings/apt-at-home.asc');
     expect(html).toContain('Signed-By: /etc/apt/keyrings/apt-at-home.asc');
     expect(html).toContain(
-      'sudo apt update &amp;&amp; sudo apt install bottom git-delta kandev neovim rustfs-cli sccache starship uv zellij zoxide',
+      'sudo apt update &amp;&amp; sudo apt install bottom bun git-delta kandev neovim rustfs-cli sccache starship uv zellij zoxide',
     );
     expect(html).toContain('sudo apt install cargo-tauri');
     expect(html).toContain('仅 amd64');

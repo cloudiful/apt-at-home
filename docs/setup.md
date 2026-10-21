@@ -151,7 +151,7 @@ the exact three steps, reproduced here for operators.
   pin fails before any upload, pointer, or key mutation — even with
   `--allow-key-rotation`. Rotation succeeds only when the replacement key
   matches the explicitly updated pin.
-- Checksum provenance: tarball SHA256 values in `packaging/manifest.json`
+- Checksum provenance: archive SHA256 values in `packaging/manifest.json`
   were verified by direct download against the GitHub API digests. Zellij
   upstream `.sha256sum` files cover the inner binary
   (`target/<triple>/release/zellij`), not the tarball; starship
@@ -162,12 +162,15 @@ the exact three steps, reproduced here for operators.
   APT upgrade removes the distribution runtime through the normal solver. Its
   headless check exercises the packaged runtime and the bundled Lua tree-sitter
   parser.
-- The command-line packages are `bottom` (`btm`), `git-delta` (`delta`),
-  `neovim` (`nvim`), `rustfs-cli` (`rc`), `sccache`, `starship`, `uv` (`uv` and
-  `uvx`), `zellij`, and `zoxide` for both architectures, plus `cargo-tauri`
-  (`cargo-tauri` and `cargo tauri`, requires `cargo`) for amd64 only. Zoxide shell initialization is opt-in; users
+- The command-line packages are `bottom` (`btm`), `bun` (`bun`), `git-delta`
+  (`delta`), `neovim` (`nvim`), `rustfs-cli` (`rc`), `sccache`, `starship`, `uv`
+  (`uv` and `uvx`), `zellij`, and `zoxide` for both architectures, plus
+  `cargo-tauri` (`cargo-tauri` and `cargo tauri`, requires `cargo`) for amd64
+  only. Zoxide shell initialization is opt-in; users
   may add `eval "$(zoxide init bash)"` to their own Bash configuration. Package
   installation never edits shell configuration.
+- `bun` ships upstream's official release ZIP, whose binary is the only member
+  the package installs; upstream's `bunx` command stays available as `bun x`.
 
 ## 6. WAF, limits, and alerts (limitations)
 

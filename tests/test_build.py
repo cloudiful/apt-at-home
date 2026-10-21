@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from scripts.build import archive_cache_name
 from scripts.deb import build_deb, stage_package
 from scripts.manifest import deb_filename, load_manifest
 from tests.helpers import write_target_archive
@@ -113,7 +114,7 @@ class DebTest(unittest.TestCase):
             cache.mkdir(parents=True, exist_ok=True)
             for pkg in manifest.packages:
                 for arch in sorted(pkg.targets):
-                    archive = cache / f"{pkg.name}-{pkg.version}-{arch}.tar.gz"
+                    archive = cache / archive_cache_name(pkg, arch)
                     _write_build_archive(archive, pkg, arch, f"fake-{pkg.name}-{arch}".encode())
             from scripts import build as build_module
 
@@ -127,7 +128,7 @@ class DebTest(unittest.TestCase):
                 first = build_all(manifest, pool_dir=pool, cache_dir=cache)
                 second = build_all(manifest, pool_dir=pool, cache_dir=cache)
                 self.assertEqual(first, second)
-                self.assertEqual(len(first), 21)
+                self.assertEqual(len(first), 23)
                 uv_contents = subprocess.run(
                     ["dpkg-deb", "-c", str(pool / "uv_0.13.0-1_amd64.deb")],
                     text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
@@ -149,14 +150,14 @@ class DebTest(unittest.TestCase):
             cache.mkdir(parents=True, exist_ok=True)
             for pkg in manifest.packages:
                 for arch in sorted(pkg.targets):
-                    archive = cache / f"{pkg.name}-{pkg.version}-{arch}.tar.gz"
+                    archive = cache / archive_cache_name(pkg, arch)
                     _write_build_archive(archive, pkg, arch, f"fake-{pkg.name}-{arch}".encode())
 
             original = build_module.fetch_verified
             build_module.fetch_verified = lambda url, sha, dest: dest  # type: ignore[assignment]
             try:
                 every = build_all(manifest, pool_dir=pool, cache_dir=cache)
-                self.assertEqual(len(every), 21)
+                self.assertEqual(len(every), 23)
                 fresh = tmpdir / "pool-selected"
                 selected = build_all(
                     manifest, pool_dir=fresh, cache_dir=cache, packages=["zellij"]
@@ -189,7 +190,7 @@ class DebTest(unittest.TestCase):
             def write_archive(payload: bytes) -> None:
                 pkg = next(p for p in manifest.packages if p.name == "starship")
                 for arch in ("amd64", "arm64"):
-                    archive = cache / f"{pkg.name}-{pkg.version}-{arch}.tar.gz"
+                    archive = cache / archive_cache_name(pkg, arch)
                     write_target_archive(archive, pkg, arch, payload)
 
             build_module.fetch_verified = lambda url, sha, dest: dest  # type: ignore[assignment]

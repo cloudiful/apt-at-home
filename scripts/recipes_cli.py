@@ -24,6 +24,16 @@ _MUSL = MappingProxyType({
     "amd64": "x86_64-unknown-linux-musl",
     "arm64": "aarch64-unknown-linux-musl",
 })
+# Bun publishes one ZIP per architecture, with its own short triple names.
+_BUN = MappingProxyType({
+    "amd64": "x64",
+    "arm64": "aarch64",
+})
+# Bun's Linux binaries link against glibc 2.17 and libgcc.
+_BUN_LIBC = MappingProxyType({
+    "amd64": "libc6 (>= 2.17), libgcc-s1",
+    "arm64": "libc6 (>= 2.17), libgcc-s1",
+})
 
 
 def make_cli_recipes(recipe_type: type[Recipe]) -> dict[str, Recipe]:
@@ -84,5 +94,20 @@ def make_cli_recipes(recipe_type: type[Recipe]) -> dict[str, Recipe]:
                 "arm64": "libc6 (>= 2.34)",
             }),
             bundle_type="kandev-standard",
+        ),
+        "bun": recipe_type(
+            name="bun",
+            upstream="bun",
+            repo="oven-sh/bun",
+            tag_prefix="bun-v",
+            # Upstream's notice is a combined one: Bun itself is MIT, and the
+            # published binary statically links LGPL-2.1 and other components.
+            license_id="MIT AND LGPL-2.1-or-later",
+            license_path="LICENSE.md",
+            asset="{upstream}-linux-{triple}.zip",
+            member="{prefix}/{binary}",
+            binary="bun",
+            triples=_BUN,
+            depends=_BUN_LIBC,
         ),
     }

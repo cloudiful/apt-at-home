@@ -6,10 +6,11 @@ import io
 import subprocess
 import tarfile
 import tempfile
+import zipfile
 from pathlib import Path
 
 from scripts.archive_tree import inventory_tree
-from scripts.catalog import parsers_for, required_paths_for
+from scripts.catalog import archive_suffix_for, parsers_for, required_paths_for
 from scripts.deb import stage_package
 from scripts.manifest import Manifest, Package
 
@@ -63,8 +64,24 @@ def make_gpg_home_with_key() -> tuple[tempfile.TemporaryDirectory[str], Path, st
     return tmpdir, home, key_id
 
 
+def archive_stem(name: str) -> str:
+    """Return a cached archive file name without its reviewed archive suffix.
+
+    The suffix follows the official asset, so a cached file is a tarball, a
+    `.tgz`, or a ZIP; the stem is the `<package>-<version>-<arch>` part.
+    """
+    for suffix in (".tar.gz", ".tgz", ".zip"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    raise ValueError(f"unsupported release archive name: {name}")
+
+
 def write_target_archive(dest: Path, pkg: Package, arch: str, payload: bytes) -> Path:
-    """Write the fake upstream archive for one pinned target, flat or tree-shaped."""
+    """Write the fake upstream archive for one pinned target, flat or tree-shaped.
+
+    The archive keeps the format the official asset uses, so a ZIP-backed
+    package is exercised through the ZIP path.
+    """
     if arch not in pkg.targets:
         raise ValueError(f"{pkg.name} publishes no {arch} release asset")
     target = pkg.targets[arch]
@@ -76,6 +93,11 @@ def write_target_archive(dest: Path, pkg: Package, arch: str, payload: bytes) ->
             top=target.install_tree,
             required=required,
             payload=payload,
+        )
+    if archive_suffix_for(pkg.name, pkg.version, arch) == ".zip":
+        return write_fake_zip(
+            dest, member=target.archive_member, payload=payload,
+            additional_members=tuple(target.additional_binaries),
         )
     return write_fake_archive(
         dest, member=target.archive_member, payload=payload,
@@ -96,7 +118,10 @@ def stage_fixture_target(
     if arch not in pkg.targets:
         raise ValueError(f"{pkg.name} publishes no {arch} release asset")
     target = pkg.targets[arch]
-    archive = write_target_archive(root / "src" / f"{pkg.name}-{arch}.tar.gz", pkg, arch, payload)
+    archive = write_target_archive(
+        root / "src" / f"{pkg.name}-{arch}{archive_suffix_for(pkg.name, pkg.version, arch)}",
+        pkg, arch, payload,
+    )
     if target.install_tree:
         inventory = inventory_tree(archive, target.install_tree)
         return stage_package(
@@ -125,7 +150,7 @@ def fixture_targets(manifest: Manifest) -> list[tuple[Package, str]]:
 
     cargo-tauri contributes only its AMD target; every other package contributes
     both. Fixture builders must iterate this rather than a global arch tuple,
-    so the pool holds 11 AMD and 10 ARM debs for the current catalog.
+    so the pool holds 12 AMD and 11 ARM debs for the current catalog.
     """
     return [
         (pkg, arch)
@@ -187,6 +212,30 @@ def write_fake_archive(
     with tarfile.open(dest, "w:gz") as tar:
         for name in (member, *additional_members):
             _add_file(tar, name, payload, mode=0o755)
+    return dest
+
+
+def write_fake_zip(
+    dest: Path, *, member: str, payload: bytes, additional_members: tuple[str, ...] = ()
+) -> Path:
+    """Write a ZIP holding the exact pinned flat command members.
+
+    The archive mirrors an official release ZIP: the member keeps its directory
+    prefix, and the prefix is stored as a directory entry beside it.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as archive:
+        prefix = member.rsplit("/", 1)[0] if "/" in member else ""
+        if prefix:
+            directory = zipfile.ZipInfo(f"{prefix}/")
+            directory.external_attr = (0o040755 << 16) | 0o10
+            directory.compress_type = zipfile.ZIP_STORED
+            archive.writestr(directory, b"")
+        for name in (member, *additional_members):
+            info = zipfile.ZipInfo(name)
+            info.external_attr = 0o100755 << 16
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, payload)
     return dest
 
 

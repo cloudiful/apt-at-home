@@ -4,9 +4,9 @@ The published release, the reprepro indices, the GPG signature, and the pointer
 ordering are all real; only the upstream archive download is stubbed, so the
 test proves the update mechanics rather than GitHub's availability. The
 headline case is the one production will run first: a published two-package
-release meeting the full catalog, which must add nine packages, build exactly
-seventeen .deb files (cargo-tauri is AMD-only), keep the four published ones
-byte-identical, and publish a complete twenty-one-file release.
+release meeting the full catalog, which must add ten packages, build exactly
+nineteen .deb files (cargo-tauri is AMD-only), keep the four published ones
+byte-identical, and publish a complete twenty-three-file release.
 """
 
 import json
@@ -25,7 +25,7 @@ from scripts.restore_packages import restore_pool
 from scripts.storage import MAX_DEB_BYTES, ObjectNotFound
 from scripts.update_build import apply_update
 from scripts.update_plan import build_plan
-from tests.helpers import FakeS3, make_gpg_home_with_key, write_target_archive
+from tests.helpers import FakeS3, archive_stem, make_gpg_home_with_key, write_target_archive
 from tests.test_kandev_bundle import write_bundle_archive
 from tests.release_fixtures import (
     PUBLISHED_NAMES,
@@ -76,7 +76,7 @@ def _stub_archive():
     """Serve any requested archive with the exact member its manifest pins."""
 
     def fetch(url: str, expected_sha256: str, dest: Path) -> Path:
-        stem = dest.name[: -len(".tar.gz")]
+        stem = archive_stem(dest.name)
         manifest = load_manifest()
         name = next(
             pkg.name
@@ -114,7 +114,7 @@ class UpdateBuildTest(unittest.TestCase):
         store.seed(build_release_objects(work / "published", key_home=key_home, key_id=key_id))
         return store
 
-    def test_the_catalog_addition_builds_eighteen_debs_and_keeps_the_four_published(self) -> None:
+    def test_the_catalog_addition_builds_nineteen_debs_and_keeps_the_four_published(self) -> None:
         tmpdir, home, key_id = make_gpg_home_with_key()
         try:
             with tempfile.TemporaryDirectory() as tmp:
@@ -139,7 +139,8 @@ class UpdateBuildTest(unittest.TestCase):
                     candidates=_fixture_candidates(),
                 )
                 additions = (
-                    "bottom", "cargo-tauri", "git-delta", "kandev", "neovim", "rustfs-cli", "sccache", "uv", "zoxide",
+                    "bottom", "bun", "cargo-tauri", "git-delta", "kandev", "neovim",
+                    "rustfs-cli", "sccache", "uv", "zoxide",
                 )
                 self.assertEqual(plan.changed, additions)
 
@@ -161,8 +162,8 @@ class UpdateBuildTest(unittest.TestCase):
                 self.assertEqual(result.release_id, "catalog-release")
 
                 pool = {p.name: p.read_bytes() for p in (output / "pool").glob("*.deb")}
-                self.assertEqual(len(pool), 21)
-                # Exactly the nine added packages were built for their reviewed
+                self.assertEqual(len(pool), 23)
+                # Exactly the ten added packages were built for their reviewed
                 # architectures: cargo-tauri contributes only its AMD target.
                 self.assertEqual(
                     sorted(path.name for path in result.debs),
@@ -173,7 +174,7 @@ class UpdateBuildTest(unittest.TestCase):
                         for arch in sorted(pkg.targets)
                     ),
                 )
-                self.assertEqual(len(result.debs), 17)
+                self.assertEqual(len(result.debs), 19)
                 # Every published package stays byte-identical.
                 for name, payload in published_pool.items():
                     self.assertEqual(pool[name], payload, msg=name)
@@ -183,7 +184,7 @@ class UpdateBuildTest(unittest.TestCase):
                         output / "releases" / "catalog-release" / "dists" / "stable"
                         / "main" / f"binary-{arch}" / "Packages"
                     ).read_text()
-                    expected_count = 11 if arch == "amd64" else 10
+                    expected_count = 12 if arch == "amd64" else 11
                     self.assertEqual(len(text.strip().split("\n\n")), expected_count, msg=arch)
                     self.assertIn("Version: 0.20.1-1", text)
                     # The Debian name and the installed command differ for rc.
@@ -211,11 +212,11 @@ class UpdateBuildTest(unittest.TestCase):
                     self.assertEqual(extracted.returncode, 0, msg=extracted.stderr)
                     check_copyright(uv, uv_root)
 
-                # The new release binds the complete eleven-package manifest.
+                # The new release binds the complete twelve-package manifest.
                 bound = json.loads(
                     (output / "releases" / "catalog-release" / "manifest.json").read_text()
                 )
-                self.assertEqual(len(bound["packages"]), 11)
+                self.assertEqual(len(bound["packages"]), 12)
                 self.assertIn("releases/catalog-release/manifest.json", store.client.puts)
                 # The pointer is the last object written.
                 self.assertEqual(store.client.puts[-1], "current.json")
@@ -253,7 +254,7 @@ class UpdateBuildTest(unittest.TestCase):
                 uploaded_before = list(store.client.puts)
                 follow_up = restore_metadata(store, fingerprint=key_id)
                 self.assertEqual(follow_up.release_id, "catalog-release")
-                self.assertEqual(len(follow_up.manifest.packages), 11)
+                self.assertEqual(len(follow_up.manifest.packages), 12)
                 second = build_plan(
                     baseline_release_id=follow_up.release_id,
                     baseline_data=follow_up.manifest_data,

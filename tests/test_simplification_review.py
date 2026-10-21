@@ -17,7 +17,7 @@ from scripts.manifest import load_manifest, parse_manifest, expected_debs
 class RemovedSourceContractTest(unittest.TestCase):
     def test_asset_target_rejects_removed_source_build_field(self):
         data = json.loads(Path("packaging/manifest.json").read_text())
-        for name in ("cargo-tauri", "zellij"):
+        for name in ("cargo-tauri", "zellij", "bun"):
             with self.subTest(package=name):
                 altered = copy.deepcopy(data)
                 entry = next(p for p in altered["packages"] if p["name"] == name)
@@ -52,15 +52,16 @@ class RemovedSourceContractTest(unittest.TestCase):
             with patch.dict(os.environ, {"TMPDIR": temp}), patch("scripts.smoke_runtime.run_package", return_value=[]) as probe:
                 run_installed(load_manifest(), "arm64")
         names = [call.args[0].name for call in probe.call_args_list]
-        self.assertEqual(len(names), 10)
+        self.assertEqual(len(names), 11)
         self.assertNotIn("cargo-tauri", names)
         self.assertIn("kandev", names)
+        self.assertIn("bun", names)
 
 
 @unittest.skipUnless(os.environ.get("APT_REVIEW_REAL") == "1", "opt-in real official cached assets")
 class RealArtifactReviewTest(unittest.TestCase):
     def test_signed_21_old20_repeat_amd(self):
-        from scripts.build import build_all
+        from scripts.build import archive_cache_name, build_all
         from scripts.common import sha256_file
         from scripts.release_build import build_release
         from scripts.smoke import check_pool
@@ -75,7 +76,7 @@ class RealArtifactReviewTest(unittest.TestCase):
         cache = Path("dist/cache/upstream")
         for pkg in manifest.packages:
             for arch, target in pkg.targets.items():
-                archive = cache / f"{pkg.name}-{pkg.version}-{arch}.tar.gz"
+                archive = cache / archive_cache_name(pkg, arch)
                 self.assertEqual(sha256_file(archive), target.sha256)
         with tempfile.TemporaryDirectory(prefix="apt-review-key-") as temp:
             home = Path(temp)

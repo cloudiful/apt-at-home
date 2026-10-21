@@ -1,7 +1,7 @@
 """Incremental catalog updates from two realistic baselines, proven by file identity.
 
-The six-package release adds five catalog packages (6+5). A five-package
-release adds six packages (5+6). Each run rebuilds exactly the added packages,
+The six-package release adds six catalog packages (6+6). A five-package
+release adds seven packages (5+7). Each run rebuilds exactly the added packages,
 keeps every published .deb byte-identical, and publishes a complete pool. Assertions name the files, so a count that happens to match never
 passes on its own.
 """
@@ -95,38 +95,38 @@ def _expected_built(names: tuple[str, ...]) -> list[str]:
     )
 
 
-class SixPublishedFourAddedTest(unittest.TestCase):
-    """Six published packages plus five catalog additions."""
+class SixPublishedSixAddedTest(unittest.TestCase):
+    """Six published packages plus six catalog additions."""
 
-    ADDED = ("bottom", "cargo-tauri", "kandev", "uv", "zoxide")
+    ADDED = ("bottom", "bun", "cargo-tauri", "kandev", "uv", "zoxide")
 
-    def test_builds_exactly_the_four_additions_and_keeps_the_six_published(self) -> None:
+    def test_builds_exactly_the_six_additions_and_keeps_the_six_published(self) -> None:
         run = run_incremental(self, names=SIX_PUBLISHED_NAMES, release_id="incremental-6-4")
         self.assertEqual(run.plan.added, self.ADDED)
         self.assertEqual(sorted(p.name for p in run.result.debs), _expected_built(self.ADDED))
-        self.assertEqual(len(run.result.debs), 9)
-        self.assertEqual(len(run.pool), 21)
+        self.assertEqual(len(run.result.debs), 11)
+        self.assertEqual(len(run.pool), 23)
         self.assertEqual(len(run.published), 12)
         for name, payload in run.published.items():
             self.assertEqual(run.pool[name], payload, msg=name)
         for arch in ARCHES:
             packages = run.output / "releases" / "incremental-6-4" / "dists" / "stable" / "main" / f"binary-{arch}" / "Packages"
-            expected = 11 if arch == "amd64" else 10
+            expected = 12 if arch == "amd64" else 11
             self.assertEqual(len(packages.read_text().strip().split("\n\n")), expected, msg=arch)
 
 
-class FivePublishedFiveAddedTest(unittest.TestCase):
-    """Five published packages plus the six missing catalog packages."""
+class FivePublishedSevenAddedTest(unittest.TestCase):
+    """Five published packages plus the seven missing catalog packages."""
 
-    ADDED = ("bottom", "cargo-tauri", "kandev", "neovim", "uv", "zoxide")
+    ADDED = ("bottom", "bun", "cargo-tauri", "kandev", "neovim", "uv", "zoxide")
 
-    def test_builds_exactly_the_five_additions_and_keeps_the_ten_published_debs(self) -> None:
+    def test_builds_exactly_the_seven_additions_and_keeps_the_ten_published_debs(self) -> None:
         run = run_incremental(self, names=FIVE_PUBLISHED_NAMES, release_id="incremental-5-5")
         self.assertEqual(run.plan.added, self.ADDED)
         self.assertEqual(sorted(p.name for p in run.result.debs), _expected_built(self.ADDED))
-        self.assertEqual(len(run.result.debs), 11)
+        self.assertEqual(len(run.result.debs), 13)
         self.assertEqual(len(run.published), 10)
-        self.assertEqual(len(run.pool), 21)
+        self.assertEqual(len(run.pool), 23)
         for name, payload in run.published.items():
             self.assertEqual(run.pool[name], payload, msg=name)
 

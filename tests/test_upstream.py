@@ -89,6 +89,13 @@ UPSTREAMS = {
             "arm64": "kandev-linux-arm64.tar.gz",
         },
     ),
+    "bun": (
+        "oven-sh/bun", "bun-v1.4.3", "LICENSE.md",
+        {
+            "amd64": "bun-linux-x64.zip",
+            "arm64": "bun-linux-aarch64.zip",
+        },
+    ),
 }
 
 

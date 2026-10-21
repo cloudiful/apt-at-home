@@ -56,6 +56,7 @@ class ManifestTest(unittest.TestCase):
                 "zoxide": "0.10.0",
                 "kandev": "0.97.0",
                 "cargo-tauri": "2.12.2",
+                "bun": "1.4.3",
             },
         )
 
@@ -81,6 +82,8 @@ class ManifestTest(unittest.TestCase):
             ("kandev", "amd64"): "d15b5ca901fc051dfefbb40a2e0fbec8e92aaf16db8225921f32a6ccdc7d2457",
             ("kandev", "arm64"): "3bba944aa4f73441864203c1a84a96e09bcdfc18d01c32cfbb8ba664b2c6b823",
             ("cargo-tauri", "amd64"): "35c7b50266256cb6d5f757608d7097a59a5faeb0c75879ee1f504652a9b6087e",
+            ("bun", "amd64"): "3e730528d89775f03f87f05c06787c4df4099d0a37f3f252e7b829cb23816e18",
+            ("bun", "arm64"): "efa9813da5ed72423bf847f916e8d2c47c0d776add972354026a75e10da9aa21",
         }
         for (name, arch), digest in expected.items():
             self.assertEqual(by_name[name].targets[arch].sha256, digest, msg=f"{name} {arch}")
@@ -155,13 +158,15 @@ class ManifestTest(unittest.TestCase):
     def test_expected_sets_are_derived_from_the_manifest(self) -> None:
         manifest = load_manifest()
         expected = expected_debs(manifest)
-        self.assertEqual(len(expected), 21)
+        self.assertEqual(len(expected), 23)
         self.assertIn("git-delta_0.20.1-1_amd64.deb", expected)
         self.assertIn("sccache_0.18.0-1_arm64.deb", expected)
         self.assertIn("cargo-tauri_2.12.2-1_amd64.deb", expected)
         self.assertNotIn("cargo-tauri_2.12.2-1_arm64.deb", expected)
-        self.assertEqual(len(expected_debs_for_arch(manifest, "amd64")), 11)
-        self.assertEqual(len(expected_debs_for_arch(manifest, "arm64")), 10)
+        self.assertIn("bun_1.4.3-1_amd64.deb", expected)
+        self.assertIn("bun_1.4.3-1_arm64.deb", expected)
+        self.assertEqual(len(expected_debs_for_arch(manifest, "amd64")), 12)
+        self.assertEqual(len(expected_debs_for_arch(manifest, "arm64")), 11)
         for arch in ("amd64", "arm64"):
             per_arch = expected_debs_for_arch(manifest, arch)
             self.assertTrue(all(name.endswith(f"_{arch}.deb") for name in per_arch))

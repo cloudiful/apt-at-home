@@ -20,12 +20,18 @@ __all__ = [
     "KNOWN_PACKAGES",
     "RECIPES",
     "Recipe",
+    "archive_suffix_for",
     "arches_for",
     "exact_tag_release_for",
     "tag_prefix_for",
 ]
 
 ARCHES = ("amd64", "arm64")
+
+# The archive formats the reviewed recipes publish: a gzipped tarball or a ZIP.
+# The suffix is part of the official asset name, so it decides both the archive
+# member prefix and the format the build extracts.
+_ARCHIVE_SUFFIXES = (".tar.gz", ".tgz", ".zip")
 
 # Every package name this repository may publish, derived from the recipes so a
 # recipe and the accepted name set can never drift apart.
@@ -121,11 +127,27 @@ def asset_name(package_name: str, version: str, arch: str) -> str:
     return recipe.asset.format(**fields)
 
 
+def archive_suffix_for(package_name: str, version: str, arch: str) -> str:
+    """Return the archive suffix this package's official release asset uses."""
+    asset = asset_name(package_name, version, arch)
+    for suffix in _ARCHIVE_SUFFIXES:
+        if asset.endswith(suffix):
+            return suffix
+    raise ValueError(f"{package_name} {arch} release asset has no reviewed suffix: {asset}")
+
+
+def _asset_prefix(asset: str) -> str:
+    """Return the asset name without its archive suffix."""
+    for suffix in _ARCHIVE_SUFFIXES:
+        if asset.endswith(suffix):
+            return asset[: -len(suffix)]
+    raise ValueError(f"unsupported release asset suffix: {asset}")
+
+
 def archive_member(package_name: str, version: str, arch: str) -> str:
     """Return the exact archive member that holds this package's binary."""
     recipe = recipe_for(package_name)
-    raw_asset = asset_name(package_name, version, arch)
-    prefix = raw_asset.removesuffix(".tar.gz").removesuffix(".tgz")
+    prefix = _asset_prefix(asset_name(package_name, version, arch))
     member = recipe.member.format(
         prefix=prefix, binary=recipe.binary, upstream=recipe.upstream
     )
@@ -139,7 +161,7 @@ def additional_binaries_for(package_name: str, version: str, arch: str) -> dict[
     """Return exact reviewed archive members and installed names beyond the primary."""
     recipe = recipe_for(package_name)
     raw_asset = asset_name(package_name, version, arch)
-    prefix = raw_asset.removesuffix(".tar.gz").removesuffix(".tgz")
+    prefix = _asset_prefix(raw_asset)
     primary = archive_member(package_name, version, arch)
     members: dict[str, str] = {}
     names = {recipe.binary}
@@ -177,7 +199,7 @@ def install_tree_for(package_name: str, version: str, arch: str) -> str:
     if not recipe.install_tree:
         return ""
     raw_asset = asset_name(package_name, version, arch)
-    prefix = raw_asset.removesuffix(".tar.gz").removesuffix(".tgz")
+    prefix = _asset_prefix(raw_asset)
     return recipe.install_tree.format(prefix=prefix)
 
 

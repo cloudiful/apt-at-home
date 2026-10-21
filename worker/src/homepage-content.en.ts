@@ -7,7 +7,7 @@
 import type { HomepageCopy } from './homepage-content.js';
 
 export const homepageCopy: HomepageCopy = {
-  lede: 'A public, test-mode APT repository for Debian 13, publishing <strong>bottom</strong>, <strong>git-delta</strong>, <strong>kandev</strong>, <strong>neovim</strong>, <strong>rustfs-cli</strong>, <strong>sccache</strong>, <strong>starship</strong>, <strong>uv</strong>, <strong>zellij</strong>, and <strong>zoxide</strong> packages for amd64 and arm64, plus <strong>cargo-tauri</strong> for amd64 only.',
+  lede: 'A public, test-mode APT repository for Debian 13, publishing <strong>bottom</strong>, <strong>bun</strong>, <strong>git-delta</strong>, <strong>kandev</strong>, <strong>neovim</strong>, <strong>rustfs-cli</strong>, <strong>sccache</strong>, <strong>starship</strong>, <strong>uv</strong>, <strong>zellij</strong>, and <strong>zoxide</strong> packages for amd64 and arm64, plus <strong>cargo-tauri</strong> for amd64 only.',
   languageLabel: 'Language',
   prerequisites: {
     heading: 'Before you start',

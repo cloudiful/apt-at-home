@@ -25,7 +25,7 @@ from scripts.release_manifest import load_manifest_data
 from scripts.repo import main
 from scripts.sign import export_public_key, sign_release
 from scripts.storage import ObjectNotFound
-from tests.helpers import FakeS3, make_gpg_home_with_key, write_target_archive
+from tests.helpers import FakeS3, archive_stem, make_gpg_home_with_key, write_target_archive
 from tests.test_kandev_bundle import write_bundle_archive
 from tests.release_fixtures import build_release_objects
 
@@ -60,7 +60,7 @@ def _fake_fetch(url: str, expected_sha256: str, dest: Path) -> Path:
     candidate release carries byte-identical pool files and the
     immutable-overwrite guard stays satisfied.
     """
-    stem = dest.name[: -len(".tar.gz")]
+    stem = archive_stem(dest.name)
     manifest = load_manifest()
     name = next(
         pkg.name
