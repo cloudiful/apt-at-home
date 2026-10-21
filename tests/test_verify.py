@@ -203,7 +203,8 @@ class VerifyTest(unittest.TestCase):
                     len(list((root / "pool").glob("*.deb"))),
                     len(expected_debs(manifest)),
                 )
-                # The ARM index carries one fewer package: cargo-tauri is AMD-only.
+                # Each architecture index lists exactly the manifest targets
+                # declared for it.
                 arm_target = root / "releases" / "20260102-030405" / "dists" / "stable" / "main" / "binary-arm64" / "Packages"
                 self.assertEqual(
                     len(arm_target.read_text().strip().split("\n\n")),
@@ -282,17 +283,19 @@ class VerifyTest(unittest.TestCase):
         finally:
             tmpdir.cleanup()
 
-    def test_absent_arm_target_is_refused_not_invented(self) -> None:
-        """Staging cargo-tauri for ARM must fail rather than invent bytes."""
+    def test_absent_target_is_refused_not_invented(self) -> None:
+        """Staging a package for an architecture it does not declare must fail."""
+        from dataclasses import replace
+
         from tests.helpers import stage_fixture_target as _stage
 
         manifest = load_manifest()
         cargo = next(p for p in manifest.packages if p.name == "cargo-tauri")
-        self.assertEqual(sorted(cargo.targets), ["amd64"])
+        absent = replace(cargo, targets={"amd64": cargo.targets["amd64"]})
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             with self.assertRaises(ValueError) as ctx:
-                _stage(root, cargo, "arm64", manifest, b"fake", root / "stages")
+                _stage(root, absent, "arm64", manifest, b"fake", root / "stages")
             self.assertIn("publishes no arm64", str(ctx.exception))
 
 

@@ -225,11 +225,50 @@ export class FakeAssets {
   }
 }
 
+/**
+ * Programmable stand-in for a first-class rate limit binding.
+ *
+ * Each key gets its own fixed window in the fake, so tests can assert exact
+ * boundaries; the real binding is approximate and location-local.
+ */
+export class FakeRateLimiter {
+  readonly calls: string[] = [];
+  readonly counts = new Map<string, number>();
+  /** Error thrown by every check while set, standing in for a failing binding. */
+  failure: Error | null = null;
+
+  constructor(readonly allowed: number = 1_000_000) {}
+
+  async limit(options: { key: string }): Promise<{ success: boolean }> {
+    this.calls.push(options.key);
+    if (this.failure !== null) throw this.failure;
+    const used = (this.counts.get(options.key) ?? 0) + 1;
+    this.counts.set(options.key, used);
+    return { success: used <= this.allowed };
+  }
+
+  keysFor(identity: string): string[] {
+    return this.calls.filter((key) => key.includes(identity));
+  }
+
+  asBinding(): RateLimit {
+    return this as unknown as RateLimit;
+  }
+}
+
+/** Optional per-request limiter bindings; `null` omits one binding. */
+export interface LimiterOverrides {
+  readonly index?: FakeRateLimiter | null;
+  readonly download?: FakeRateLimiter | null;
+  readonly package?: FakeRateLimiter | null;
+}
+
 export function createEnv(
   bucket: FakeBucket,
   credentials: unknown,
   authRequired?: unknown,
   assets?: FakeAssets,
+  limiters: LimiterOverrides = {},
 ): Env {
   const env = { BUCKET: bucket.asBinding(), CREDENTIALS: credentials } as unknown as Record<
     string,
@@ -237,6 +276,15 @@ export function createEnv(
   >;
   if (authRequired !== undefined) env['AUTH_REQUIRED'] = authRequired;
   env['ASSETS'] = (assets ?? new FakeAssets()).asBinding();
+  if (limiters.index !== null) {
+    env['INDEX_LIMITER'] = (limiters.index ?? new FakeRateLimiter()).asBinding();
+  }
+  if (limiters.download !== null) {
+    env['DOWNLOAD_LIMITER'] = (limiters.download ?? new FakeRateLimiter()).asBinding();
+  }
+  if (limiters.package !== null) {
+    env['PACKAGE_LIMITER'] = (limiters.package ?? new FakeRateLimiter()).asBinding();
+  }
   return env as unknown as Env;
 }
 

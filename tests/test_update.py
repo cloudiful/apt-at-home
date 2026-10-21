@@ -22,7 +22,11 @@ from scripts.upstream import Candidate
 from scripts.upstream_assets import (
     asset_name, license_urls_for, release_download_url,
 )
-from tests.release_fixtures import published_manifest, published_manifest_data
+from tests.release_fixtures import (
+    historical_cargo_baseline_data,
+    published_manifest,
+    published_manifest_data,
+)
 from tests.helpers import move_package_version
 
 
@@ -349,6 +353,96 @@ class PlanTest(unittest.TestCase):
         self.assertIn("license", str(ctx.exception))
 
 
+class SameVersionArchitectureExpansionTest(unittest.TestCase):
+    """A published amd64-only baseline gains the reviewed arm64 target in place."""
+
+    def _baseline(self) -> dict[str, object]:
+        return historical_cargo_baseline_data()
+
+    def _cargo_entry(self, data: dict[str, object]) -> dict[str, object]:
+        packages = data["packages"]
+        assert isinstance(packages, list)
+        return next(e for e in packages if e.get("name") == "cargo-tauri")
+
+    def _plan(self, *, baseline: dict[str, object] | None = None, candidates=None):
+        return build_plan(
+            baseline_release_id="20260102-030405",
+            baseline_data=baseline if baseline is not None else self._baseline(),
+            catalog_data=catalog_document(),
+            candidates=_catalog_candidates() if candidates is None else candidates,
+        )
+
+    def test_only_the_new_target_is_planned_for_the_same_version(self) -> None:
+        plan = self._plan()
+        self.assertEqual(plan.changed, ("cargo-tauri",))
+        self.assertEqual(plan.added, ())
+        cargo = next(p for p in plan.manifest.packages if p.name == "cargo-tauri")
+        self.assertEqual(cargo.version, "2.12.3")
+        self.assertEqual(set(cargo.targets), {"amd64", "arm64"})
+
+    def test_the_published_amd64_target_is_preserved_field_by_field(self) -> None:
+        baseline_entry = self._cargo_entry(self._baseline())
+        baseline_amd64 = baseline_entry["targets"]["amd64"]
+        cargo = next(
+            p for p in self._plan().manifest.packages if p.name == "cargo-tauri"
+        )
+        published = cargo.targets["amd64"]
+        self.assertEqual(published.url, baseline_amd64["url"])
+        self.assertEqual(published.sha256, baseline_amd64["sha256"])
+        self.assertEqual(published.archive_member, baseline_amd64["archive_member"])
+        self.assertEqual(published.binary, baseline_amd64["binary"])
+        self.assertEqual(published.depends, baseline_amd64["depends"])
+        self.assertIn("liblzma5 (>= 5.8.1)", published.depends)
+        # Only the new arm64 target carries the reviewed arm64 runtime.
+        self.assertEqual(
+            cargo.targets["arm64"].depends,
+            "cargo, libc6 (>= 2.18), libgcc-s1 (>= 14.2.0)",
+        )
+
+    def test_a_changed_published_amd64_field_is_refused(self) -> None:
+        cases = {
+            "sha256": "cd" * 32,
+            "archive_member": "other-member",
+            "binary": "other-binary",
+            "depends": "libc6 (>= 2.34)",
+        }
+        for field, value in cases.items():
+            with self.subTest(field=field):
+                baseline = self._baseline()
+                self._cargo_entry(baseline)["targets"]["amd64"][field] = value
+                with self.assertRaises(ValueError) as ctx:
+                    self._plan(baseline=baseline)
+                self.assertIn("immutable", str(ctx.exception))
+
+    def test_a_published_target_from_another_asset_is_refused(self) -> None:
+        baseline = self._baseline()
+        self._cargo_entry(baseline)["targets"]["amd64"]["url"] = (
+            "https://github.com/tauri-apps/tauri/releases/download/"
+            "tauri-cli-v2.12.3/cargo-tauri-aarch64-unknown-linux-gnu.tgz"
+        )
+        with self.assertRaises(ValueError) as ctx:
+            self._plan(baseline=baseline)
+        self.assertIn("official asset", str(ctx.exception))
+
+    def test_a_missing_arm_asset_stops_the_expansion(self) -> None:
+        from dataclasses import replace as dataclass_replace
+
+        candidates = _catalog_candidates()
+        original = candidates["cargo-tauri"]
+        candidates["cargo-tauri"] = dataclass_replace(
+            original,
+            targets={
+                arch: target
+                for arch, target in original.targets.items()
+                if arch != "arm64"
+            },
+        )
+        with self.assertRaises(ValueError) as ctx:
+            self._plan(candidates=candidates)
+        self.assertIn("arm64", str(ctx.exception))
+        self.assertIn("discovered", str(ctx.exception))
+
+
 class CodebergPlanTest(unittest.TestCase):
     """A package from a source without release digests still plans and freezes."""
 
@@ -394,13 +488,15 @@ class CodebergPlanTest(unittest.TestCase):
 class DiscoverExactTagTest(unittest.TestCase):
     """The updater derives cargo-tauri from its exact stable tag, not repo latest."""
 
-    def test_exact_tag_discovery_supplies_amd64_without_repo_wide_latest(self) -> None:
+    def test_exact_tag_discovery_supplies_both_reviewed_assets(self) -> None:
         from scripts import update as update_module
 
         repo = "tauri-apps/tauri"
-        tag = "tauri-cli-v2.12.2"
-        amd_asset = "cargo-tauri-x86_64-unknown-linux-gnu.tgz"
-        amd_sha = "a" * 64
+        tag = "tauri-cli-v2.12.3"
+        assets = {
+            "amd64": ("cargo-tauri-x86_64-unknown-linux-gnu.tgz", "a" * 64),
+            "arm64": ("cargo-tauri-aarch64-unknown-linux-gnu.tgz", "b" * 64),
+        }
         license_mit = Path("packaging/licenses/cargo-tauri/LICENSE.txt").read_bytes()
         license_apache = Path(
             "packaging/licenses/cargo-tauri/LICENSE-APACHE-2.0"
@@ -426,13 +522,16 @@ class DiscoverExactTagTest(unittest.TestCase):
                 if f"/releases/tags/{tag}" in url:
                     return {
                         "tag_name": tag, "draft": False, "prerelease": False,
-                        "assets": [{
-                            "name": amd_asset,
-                            "browser_download_url": (
-                                f"https://github.com/{repo}/releases/download/{tag}/{amd_asset}"
-                            ),
-                            "digest": f"sha256:{amd_sha}",
-                        }],
+                        "assets": [
+                            {
+                                "name": asset,
+                                "browser_download_url": (
+                                    f"https://github.com/{repo}/releases/download/{tag}/{asset}"
+                                ),
+                                "digest": f"sha256:{digest}",
+                            }
+                            for asset, digest in assets.values()
+                        ],
                     }
                 raise AssertionError(f"unexpected JSON URL: {url}")
 
@@ -448,19 +547,20 @@ class DiscoverExactTagTest(unittest.TestCase):
         ):
             result = update_module._discover(ExactTagClient())
         candidate = result["cargo-tauri"]
-        self.assertEqual(candidate.version, "2.12.2")
+        self.assertEqual(candidate.version, "2.12.3")
         self.assertEqual(candidate.tag, tag)
-        self.assertIn("amd64", candidate.targets)
-        self.assertNotIn("arm64", candidate.targets)
+        self.assertEqual(sorted(candidate.targets), ["amd64", "arm64"])
 
     def test_exact_tag_discovery_reaches_beyond_unrelated_first_page(self) -> None:
         """A full first page of unrelated tags never hides the CLI release."""
         from scripts import update as update_module
 
         repo = "tauri-apps/tauri"
-        tag = "tauri-cli-v2.12.2"
-        amd_asset = "cargo-tauri-x86_64-unknown-linux-gnu.tgz"
-        amd_sha = "a" * 64
+        tag = "tauri-cli-v2.12.3"
+        assets = {
+            "amd64": ("cargo-tauri-x86_64-unknown-linux-gnu.tgz", "a" * 64),
+            "arm64": ("cargo-tauri-aarch64-unknown-linux-gnu.tgz", "b" * 64),
+        }
         license_mit = Path("packaging/licenses/cargo-tauri/LICENSE.txt").read_bytes()
         license_apache = Path(
             "packaging/licenses/cargo-tauri/LICENSE-APACHE-2.0"
@@ -483,13 +583,16 @@ class DiscoverExactTagTest(unittest.TestCase):
                 if f"/releases/tags/{tag}" in url:
                     return {
                         "tag_name": tag, "draft": False, "prerelease": False,
-                        "assets": [{
-                            "name": amd_asset,
-                            "browser_download_url": (
-                                f"https://github.com/{repo}/releases/download/{tag}/{amd_asset}"
-                            ),
-                            "digest": f"sha256:{amd_sha}",
-                        }],
+                        "assets": [
+                            {
+                                "name": asset,
+                                "browser_download_url": (
+                                    f"https://github.com/{repo}/releases/download/{tag}/{asset}"
+                                ),
+                                "digest": f"sha256:{digest}",
+                            }
+                            for asset, digest in assets.values()
+                        ],
                     }
                 raise AssertionError(f"unexpected JSON URL: {url}")
 
@@ -507,9 +610,8 @@ class DiscoverExactTagTest(unittest.TestCase):
             result = update_module._discover(client)
         candidate = result["cargo-tauri"]
         self.assertEqual(candidate.tag, tag)
-        self.assertEqual(candidate.version, "2.12.2")
-        self.assertIn("amd64", candidate.targets)
-        self.assertNotIn("arm64", candidate.targets)
+        self.assertEqual(candidate.version, "2.12.3")
+        self.assertEqual(sorted(candidate.targets), ["amd64", "arm64"])
         self.assertTrue(any("page=2" in url for url in client.tags_requests))
 
 

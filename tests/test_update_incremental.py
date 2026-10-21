@@ -148,43 +148,70 @@ class FivePublishedSubsetTest(unittest.TestCase):
             self.assertEqual(run.pool[name], payload, msg=name)
 
 
-class PartialArchSupersededTest(unittest.TestCase):
-    """An unchanged AMD-only package keeps its pool file; a changed one drops it."""
+class PartialTargetSupersededTest(unittest.TestCase):
+    """Cleanup is per target: a kept architecture stays, a rebuilt one drops."""
 
-    def _plan(self, changed: tuple[str, ...]):
-        from scripts.manifest import parse_manifest as _parse
-        from scripts.release_manifest import load_manifest_data as _load_data
-        from scripts.manifest import default_manifest_path as _default_path
+    def _plan(self, changed: tuple[str, ...], baseline, final):
+        return UpdatePlan(
+            baseline_release_id="r1",
+            baseline_manifest=baseline,
+            manifest_data={},
+            manifest=final,
+            changed=changed,
+            versions={},
+        )
 
-        document = _load_data(_default_path())
-        manifest = _parse(document)
-        package = next(p for p in manifest.packages if p.name == "cargo-tauri")
+    def _pool(self, package, manifest) -> Path:
         pool = Path(self.enterContext(tempfile.TemporaryDirectory())) / "pool"
         pool.mkdir()
-        for name in (deb_filename(package, "amd64", manifest),):
-            (pool / name).write_bytes(b"published")
-        plan = UpdatePlan(
-            baseline_release_id="r1",
-            baseline_manifest=manifest,
-            manifest_data=document,
-            manifest=manifest,
-            changed=changed,
-            versions={"cargo-tauri": package.version},
+        for arch in package.targets:
+            (pool / deb_filename(package, arch, manifest)).write_bytes(b"published")
+        return pool
+
+    def test_a_new_architecture_keeps_the_published_target_object(self) -> None:
+        from tests.release_fixtures import historical_cargo_baseline
+
+        manifest = load_manifest()
+        baseline = historical_cargo_baseline()
+        published_cargo = next(
+            p for p in baseline.packages if p.name == "cargo-tauri"
         )
-        return plan, pool
-
-    def test_an_unchanged_amd_only_package_keeps_its_published_deb(self) -> None:
-        plan, pool = self._plan(())
+        pool = self._pool(published_cargo, baseline)
+        plan = self._plan(("cargo-tauri",), baseline, manifest)
         self.assertEqual(remove_superseded(plan, pool), [])
-        self.assertEqual(len(list(pool.glob("*.deb"))), 1)
+        self.assertEqual(
+            [path.name for path in pool.iterdir()],
+            ["cargo-tauri_2.12.3-1_amd64.deb"],
+        )
 
-    def test_a_rebuilt_amd_only_package_drops_its_published_deb(self) -> None:
-        plan, pool = self._plan(("cargo-tauri",))
+    def test_a_rebuilt_target_drops_its_published_deb(self) -> None:
+        from dataclasses import replace
+
+        manifest = load_manifest()
+        cargo = next(p for p in manifest.packages if p.name == "cargo-tauri")
+        rebuilt = replace(
+            cargo,
+            targets={
+                arch: replace(target, depends=target.depends + ", zlib1g")
+                for arch, target in cargo.targets.items()
+            },
+        )
+        final = replace(manifest, packages=(rebuilt,))
+        pool = self._pool(cargo, manifest)
+        plan = self._plan(("cargo-tauri",), manifest, final)
         self.assertEqual(
             sorted(remove_superseded(plan, pool)),
-            ["cargo-tauri_2.12.2-1_amd64.deb"],
+            ["cargo-tauri_2.12.3-1_amd64.deb", "cargo-tauri_2.12.3-1_arm64.deb"],
         )
         self.assertEqual(list(pool.glob("*.deb")), [])
+
+    def test_an_unchanged_package_keeps_every_published_target(self) -> None:
+        manifest = load_manifest()
+        cargo = next(p for p in manifest.packages if p.name == "cargo-tauri")
+        pool = self._pool(cargo, manifest)
+        plan = self._plan((), manifest, manifest)
+        self.assertEqual(remove_superseded(plan, pool), [])
+        self.assertEqual(len(list(pool.glob("*.deb"))), 2)
 
 
 if __name__ == "__main__":

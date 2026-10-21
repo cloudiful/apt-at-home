@@ -28,14 +28,14 @@ class RemovedSourceContractTest(unittest.TestCase):
     def test_cli_tag_discovery_reaches_beyond_unrelated_first_page(self):
         from scripts.upstream import latest_stable
         from scripts.upstream_assets import release_tag_api_url
+        from scripts.catalog import asset_name
         pkg = next(p for p in load_manifest().packages if p.name == "cargo-tauri")
-        target = pkg.targets["amd64"]
-        tag = "tauri-cli-v2.12.2"
+        tag = "tauri-cli-v2.12.3"
 
         class PagedClient:
             def get_json(self, url):
                 if url == release_tag_api_url("tauri-apps/tauri", tag):
-                    return {"tag_name": tag, "draft": False, "prerelease": False, "assets": [{"name": "cargo-tauri-x86_64-unknown-linux-gnu.tgz", "browser_download_url": target.url, "digest": "sha256:" + target.sha256}]}
+                    return {"tag_name": tag, "draft": False, "prerelease": False, "assets": [{"name": asset_name("cargo-tauri", pkg.version, arch), "browser_download_url": target.url, "digest": "sha256:" + target.sha256} for arch, target in pkg.targets.items()]}
                 if "page=2" in url:
                     return [{"name": tag}]
                 if "/tags?" in url:
@@ -44,18 +44,31 @@ class RemovedSourceContractTest(unittest.TestCase):
 
         _, selected, assets = latest_stable(PagedClient(), "cargo-tauri")
         self.assertEqual(selected, tag)
-        self.assertEqual(set(assets), {"amd64"})
+        self.assertEqual(set(assets), {"amd64", "arm64"})
 
-    def test_arm_native_smoke_never_probes_absent_cargo_tauri(self):
+    def test_arm_native_smoke_never_probes_a_missing_target(self):
+        from dataclasses import replace
+
         from scripts.smoke_runtime import run_installed
+
+        manifest = load_manifest()
+        cargo = next(p for p in manifest.packages if p.name == "cargo-tauri")
+        # A package that declares no arm64 target is skipped rather than probed;
+        # cargo-tauri now publishes both, so the absence is modeled explicitly.
+        absent = replace(cargo, targets={"amd64": cargo.targets["amd64"]})
+        synthetic = replace(
+            manifest,
+            packages=tuple(
+                absent if p.name == "cargo-tauri" else p for p in manifest.packages
+            ),
+        )
         with tempfile.TemporaryDirectory(prefix="apt-review-arm-") as temp:
             with patch.dict(os.environ, {"TMPDIR": temp}), patch("scripts.smoke_runtime.run_package", return_value=[]) as probe:
-                run_installed(load_manifest(), "arm64")
+                run_installed(synthetic, "arm64")
         names = [call.args[0].name for call in probe.call_args_list]
-        # Only the packages with an arm64 target are probed, in name order, and
-        # cargo-tauri is not one of them.
+        # Only the packages with an arm64 target are probed, in name order.
         arm_packages = sorted(
-            pkg.name for pkg in load_manifest().packages if "arm64" in pkg.targets
+            pkg.name for pkg in synthetic.packages if "arm64" in pkg.targets
         )
         self.assertEqual(names, arm_packages)
         self.assertNotIn("cargo-tauri", names)
@@ -96,15 +109,20 @@ class RealArtifactReviewTest(unittest.TestCase):
             findings = verify_tree(output, expected_fingerprint=fingerprint)
             print("SIGNED21", findings)
         self.assertEqual(len(list((output / "pool").glob("*_amd64.deb"))), 13)
-        self.assertEqual(len(list((output / "pool").glob("*_arm64.deb"))), 12)
+        self.assertEqual(len(list((output / "pool").glob("*_arm64.deb"))), 13)
         for name, digest in baseline.items():
             self.assertEqual(sha256_file(output / "pool" / name), digest, name)
             self.assertEqual(sha256_file(Path("dist/repo/pool") / name), digest)
         print("OLD20_BYTE_IDENTICAL", json.dumps(baseline, sort_keys=True))
         repeat = build_all(manifest, pool_dir=output / "repeat", cache_dir=cache, packages=("cargo-tauri",))
-        self.assertEqual(len(repeat), 1)
-        cargo = output / "pool" / repeat[0].name
-        self.assertEqual(sha256_file(cargo), sha256_file(repeat[0]))
+        self.assertEqual(len(repeat), 2)
+        cargo = output / "pool" / next(
+            path.name for path in repeat if path.name.endswith("_amd64.deb")
+        )
+        for path in repeat:
+            self.assertEqual(
+                sha256_file(output / "pool" / path.name), sha256_file(path)
+            )
         print("REPEAT_AMD", cargo.name, sha256_file(cargo))
         print("STATIC_POOL", check_pool(manifest, output / "pool", ("amd64", "arm64")))
         print("CARGO_METADATA", subprocess.check_output(["dpkg-deb", "-f", str(cargo)], text=True))

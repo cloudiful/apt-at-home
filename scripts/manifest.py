@@ -33,7 +33,7 @@ from .catalog import (
     source_for,
     tag_for,
 )
-from .upstream_assets import release_download_url
+from .upstream_assets import release_download_url, version_key
 
 from .download import canonical_member
 
@@ -47,6 +47,15 @@ _BINARY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 _URL = re.compile(
     r"^https://(?:github\.com|codeberg\.org)/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
     r"/releases/download/[^/?#\s]+/[^/?#\s]+$"
+)
+
+# The one reviewed architecture gap in published history: cargo-tauri publishes
+# its official arm64 asset only from 2.12.3, so an earlier or equal published
+# release of that package declares its amd64 target alone. The allowance is a
+# property of the recorded baseline, never a switch a document may request, and
+# it names the exact target set an old baseline carries.
+_HISTORICAL_ARCH_GAPS: Mapping[str, tuple[str, frozenset[str]]] = MappingProxyType(
+    {"cargo-tauri": ("2.12.3", frozenset({"amd64"}))}
 )
 
 
@@ -104,6 +113,41 @@ def load_manifest(path: Path | None = None) -> Manifest:
 
 
 def parse_manifest(raw: object) -> Manifest:
+    """Validate a current manifest; every reviewed target must be declared."""
+    return _parse_manifest(raw, allow_historical_gap=False)
+
+
+def parse_baseline_manifest(raw: object) -> Manifest:
+    """Validate a published baseline, which may predate a reviewed arch asset.
+
+    Only the recorded historical gap is tolerated: a package listed in
+    `_HISTORICAL_ARCH_GAPS` may omit one reviewed target when its version is at
+    or below the recorded ceiling and its declared targets are exactly the set
+    that baseline shipped. Every other missing, extra, or malformed target is
+    refused, so a generic missing-architecture escape does not exist here.
+    """
+    return _parse_manifest(raw, allow_historical_gap=True)
+
+
+def _historical_arch_gap(
+    name: str, version: str, required: tuple[str, ...], present: set[str]
+) -> bool:
+    """Whether this package's published baseline may lack a reviewed target."""
+    gap = _HISTORICAL_ARCH_GAPS.get(name)
+    if gap is None:
+        return False
+    ceiling, baseline_targets = gap
+    if present != set(baseline_targets):
+        return False
+    if set(required) <= present:
+        return False
+    try:
+        return version_key(version) <= version_key(ceiling)
+    except ValueError:
+        return False
+
+
+def _parse_manifest(raw: object, *, allow_historical_gap: bool) -> Manifest:
     if not isinstance(raw, dict):
         raise ValueError("manifest root must be an object")
     for key in ("maintainer", "section", "priority", "debian_revision", "packages"):
@@ -125,7 +169,10 @@ def parse_manifest(raw: object) -> Manifest:
         pkg = parse_package(entry)
         required = arches_for(pkg.name) if pkg.name in KNOWN_PACKAGES else tuple(sorted(pkg.targets))
         missing = sorted(set(required) - set(pkg.targets))
-        if missing:
+        if missing and not (
+            allow_historical_gap
+            and _historical_arch_gap(pkg.name, pkg.version, required, set(pkg.targets))
+        ):
             raise ValueError(f"package {pkg.name} missing arch target: {', '.join(missing)}")
         extra = sorted(set(pkg.targets) - set(required))
         if extra:

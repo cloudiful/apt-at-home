@@ -227,12 +227,12 @@ class PublishCommandTest(unittest.TestCase):
 
 
 class OrdinaryCargoTauriTest(unittest.TestCase):
-    """cargo-tauri is an ordinary AMD-only official-binary package."""
+    """cargo-tauri is an ordinary official-binary package for both architectures."""
 
-    def test_cargo_tauri_has_no_arm_target_and_build_rejects_source_flags(self) -> None:
+    def test_cargo_tauri_publishes_both_reviewed_targets_without_source_flags(self) -> None:
         manifest = load_manifest()
         cargo = next(p for p in manifest.packages if p.name == "cargo-tauri")
-        self.assertEqual(sorted(cargo.targets), ["amd64"])
+        self.assertEqual(sorted(cargo.targets), ["amd64", "arm64"])
         # The production CLI no longer accepts source routing flags.
         import subprocess as _subprocess
 

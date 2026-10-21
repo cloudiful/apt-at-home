@@ -8,7 +8,10 @@
  * single public exception: it is answered before any of this runs, and it
  * reads only the published release metadata, never the credential secret. The
  * public browser assets are the second exception: they are plain files this
- * Worker serves itself, and they never reach the bucket either.
+ * Worker serves itself, and they never reach the bucket either. Between the
+ * public exceptions and the credential work, a valid artifact GET or HEAD that
+ * carries a trusted client address passes the per-IP request budgets; an
+ * exhausted budget answers `429` without touching any of the above.
  */
 import { challengeHeaders, isAuthorized, parseCredentialConfig, resolveAuthMode } from './auth.js';
 import { cacheLookup, cacheStore, isCacheableBody, shouldBypassCache, toClientResponse } from './cache.js';
@@ -20,11 +23,13 @@ import {
   resolveDirectPath,
   resolveReleasePath,
 } from './paths.js';
+import { isRateLimited } from './rate-limit.js';
 import {
   cacheControlFor,
   methodNotAllowed,
   notFound,
   serviceUnavailable,
+  tooManyRequests,
   unauthorized,
 } from './responses.js';
 import { POINTER_KEY } from './types.js';
@@ -39,6 +44,16 @@ export default {
     const root = await handleRoot(request, env);
     if (root !== null) return root;
 
+    const classified = classifyPath(new URL(request.url).pathname);
+    const artifactMethod = request.method === 'GET' || request.method === 'HEAD';
+    if (
+      artifactMethod &&
+      classified !== null &&
+      (await isRateLimited(env, request, classified))
+    ) {
+      return tooManyRequests(request.method);
+    }
+
     const authMode = resolveAuthMode(env.AUTH_REQUIRED);
     if (!authMode.ok) return serviceUnavailable();
 
@@ -50,11 +65,10 @@ export default {
         return unauthorized(challengeHeaders());
       }
     }
-    if (request.method !== 'GET' && request.method !== 'HEAD') {
+    if (!artifactMethod) {
       return methodNotAllowed();
     }
 
-    const classified = classifyPath(new URL(request.url).pathname);
     if (classified === null) return notFound();
 
     const target = await resolveTarget(env, classified);

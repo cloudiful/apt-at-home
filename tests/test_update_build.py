@@ -5,15 +5,21 @@ ordering are all real; only the upstream archive download is stubbed, so the
 test proves the update mechanics rather than GitHub's availability. The
 headline case is the one production will run first: a published two-package
 release meeting the full catalog, which must add every catalog package it
-lacks, build exactly their .deb files (cargo-tauri is AMD-only), keep the
-published ones byte-identical, and publish a complete release.
+lacks, build exactly their declared .deb files, keep the published ones
+byte-identical, and publish a complete release.
+
+`TargetSelectionTest` proves the same per-target selection with mocked build
+steps, so the architecture-expansion and cleanup rules stay runnable on a host
+without reprepro.
 """
 
+import copy
 import json
 import os
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -23,7 +29,7 @@ from scripts.release_verify import restore_metadata
 from scripts.smoke_package import check_copyright, check_package
 from scripts.restore_packages import restore_pool
 from scripts.storage import MAX_DEB_BYTES, ObjectNotFound
-from scripts.update_build import apply_update
+from scripts.update_build import apply_update, remove_superseded
 from scripts.update_plan import build_plan
 from tests.helpers import FakeS3, archive_stem, make_gpg_home_with_key, write_target_archive
 from tests.test_kandev_bundle import write_bundle_archive
@@ -32,6 +38,7 @@ from tests.release_fixtures import (
     PUBLISHED_NAMES,
     RELEASE_ID,
     build_release_objects,
+    historical_cargo_baseline_data,
     published_manifest,
     published_manifest_data,
 )
@@ -180,7 +187,7 @@ class UpdateBuildTest(unittest.TestCase):
                 pool = {p.name: p.read_bytes() for p in (output / "pool").glob("*.deb")}
                 self.assertEqual(len(pool), _debs_for(CATALOG_NAMES))
                 # Exactly the added packages were built for their reviewed
-                # architectures: cargo-tauri contributes only its AMD target.
+                # architectures.
                 self.assertEqual(
                     sorted(path.name for path in result.debs),
                     sorted(
@@ -365,6 +372,215 @@ class UpdateBuildTest(unittest.TestCase):
                     restore_pool(restored, store, root / "out")
         finally:
             tmpdir.cleanup()
+
+
+class TargetSelectionTest(unittest.TestCase):
+    """Per-target cleanup and build selection without a reprepro integration run."""
+
+    def _plan(self, *, candidates=None):
+        return build_plan(
+            baseline_release_id=RELEASE_ID,
+            baseline_data=historical_cargo_baseline_data(CATALOG_NAMES),
+            catalog_data=copy.deepcopy(catalog_document()),
+            candidates=_catalog_candidates() if candidates is None else candidates,
+        )
+
+    def _seed_pool(self, root: Path, plan) -> tuple[Path, dict[str, bytes]]:
+        pool = root / "out" / "pool"
+        pool.mkdir(parents=True, exist_ok=True)
+        published: dict[str, bytes] = {}
+        for pkg in plan.baseline_manifest.packages:
+            for arch in pkg.targets:
+                name = deb_filename(pkg, arch, plan.baseline_manifest)
+                payload = f"published-{pkg.name}-{arch}".encode()
+                (pool / name).write_bytes(payload)
+                published[name] = payload
+        return pool, published
+
+    def _apply(self, plan, root: Path) -> tuple[object, dict[str, object]]:
+        recorded: dict[str, object] = {}
+
+        def fake_build_all(manifest, *, pool_dir, cache_dir):
+            recorded["build_manifest"] = manifest
+            built: list[Path] = []
+            for pkg in manifest.packages:
+                for arch in pkg.targets:
+                    path = pool_dir / deb_filename(pkg, arch, manifest)
+                    path.write_bytes(f"built-{pkg.name}-{arch}".encode())
+                    built.append(path)
+            return built
+
+        def fake_build_release(**kwargs):
+            recorded["build_release"] = kwargs
+            return []
+
+        with mock.patch("scripts.update_build.restore_pool"), mock.patch(
+            "scripts.update_build.build_all", side_effect=fake_build_all
+        ), mock.patch(
+            "scripts.update_build.build_release", side_effect=fake_build_release
+        ), mock.patch(
+            "scripts.update_build.verify_tree"
+        ), mock.patch(
+            "scripts.update_build.publish_tree", return_value=[]
+        ):
+            result = apply_update(
+                plan=plan,
+                release=object(),  # restore_pool is stubbed; trust was proven earlier
+                source=object(),
+                output_root=root / "out",
+                cache_dir=root / "cache",
+                release_id="target-release",
+                bucket="test-bucket",
+                fingerprint="A" * 40,
+            )
+        return result, recorded
+
+    def test_the_architecture_expansion_builds_only_arm64_and_keeps_amd64_bytes(self) -> None:
+        plan = self._plan()
+        self.assertEqual(plan.changed, ("cargo-tauri",))
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        pool, published = self._seed_pool(root, plan)
+        result, recorded = self._apply(plan, root)
+
+        manifest = recorded["build_manifest"]
+        self.assertEqual([pkg.name for pkg in manifest.packages], ["cargo-tauri"])
+        self.assertEqual(sorted(manifest.packages[0].targets), ["arm64"])
+        self.assertEqual(
+            sorted(path.name for path in result.debs),
+            ["cargo-tauri_2.12.3-1_arm64.deb"],
+        )
+        published_amd64 = published["cargo-tauri_2.12.3-1_amd64.deb"]
+        self.assertEqual(
+            (pool / "cargo-tauri_2.12.3-1_amd64.deb").read_bytes(), published_amd64
+        )
+        self.assertEqual(
+            (pool / "cargo-tauri_2.12.3-1_arm64.deb").read_bytes(),
+            b"built-cargo-tauri-arm64",
+        )
+        release = recorded["build_release"]
+        self.assertEqual(release["packages"], ())
+        self.assertEqual(release["manifest_document"], plan.manifest_data)
+        # Every other published pool object survives untouched.
+        for name, payload in published.items():
+            if name == "cargo-tauri_2.12.3-1_amd64.deb":
+                continue
+            self.assertEqual((pool / name).read_bytes(), payload, msg=name)
+
+    def test_a_version_upgrade_rebuilds_every_target_of_that_package_only(self) -> None:
+        plan = self._plan(candidates=_catalog_candidates(starship="1.27.0"))
+        self.assertEqual(plan.changed, ("cargo-tauri", "starship"))
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        pool, published = self._seed_pool(root, plan)
+        result, recorded = self._apply(plan, root)
+
+        manifest = recorded["build_manifest"]
+        by_name = {pkg.name: pkg for pkg in manifest.packages}
+        self.assertEqual(sorted(by_name), ["cargo-tauri", "starship"])
+        self.assertEqual(sorted(by_name["starship"].targets), ["amd64", "arm64"])
+        self.assertEqual(sorted(by_name["cargo-tauri"].targets), ["arm64"])
+        self.assertEqual(
+            sorted(path.name for path in result.debs),
+            [
+                "cargo-tauri_2.12.3-1_arm64.deb",
+                "starship_1.27.0-1_amd64.deb",
+                "starship_1.27.0-1_arm64.deb",
+            ],
+        )
+        # The superseded starship targets are gone; so is nothing else.
+        self.assertNotIn("starship_1.26.0-1_amd64.deb", [p.name for p in pool.iterdir()])
+        self.assertNotIn("starship_1.26.0-1_arm64.deb", [p.name for p in pool.iterdir()])
+        for name, payload in published.items():
+            if name.startswith("starship_") or name == "cargo-tauri_2.12.3-1_amd64.deb":
+                continue
+            self.assertEqual((pool / name).read_bytes(), payload, msg=name)
+        self.assertEqual(
+            (pool / "cargo-tauri_2.12.3-1_amd64.deb").read_bytes(),
+            published["cargo-tauri_2.12.3-1_amd64.deb"],
+        )
+
+
+class RemoveSupersededTest(unittest.TestCase):
+    """Cleanup drops only a target whose reviewed bytes actually changed."""
+
+    def _manifest_pair(self):
+        from scripts.manifest import default_manifest_path, parse_manifest
+        from scripts.release_manifest import load_manifest_data
+
+        document = load_manifest_data(default_manifest_path())
+        manifest = parse_manifest(document)
+        cargo = next(p for p in manifest.packages if p.name == "cargo-tauri")
+        historical = replace(
+            cargo,
+            targets={"amd64": cargo.targets["amd64"]},
+        )
+        return manifest, cargo, historical
+
+    def _pool(self, manifest, package) -> Path:
+        pool = Path(self.enterContext(tempfile.TemporaryDirectory())) / "pool"
+        pool.mkdir()
+        for arch in package.targets:
+            (pool / deb_filename(package, arch, manifest)).write_bytes(b"published")
+        return pool
+
+    def test_an_unchanged_target_survives_a_changed_package(self) -> None:
+        from scripts.update_plan import UpdatePlan
+        from tests.release_fixtures import historical_cargo_baseline
+
+        manifest, cargo, _ = self._manifest_pair()
+        pool = self._pool(manifest, cargo)
+        plan = UpdatePlan(
+            baseline_release_id="r1",
+            baseline_manifest=historical_cargo_baseline(),
+            manifest_data={},
+            manifest=manifest,
+            changed=("cargo-tauri",),
+            versions={"cargo-tauri": cargo.version},
+        )
+        # Only arm64 is new, so the published amd64 pool object is kept.
+        self.assertEqual(remove_superseded(plan, pool), [])
+        self.assertEqual(len(list(pool.glob("*.deb"))), 2)
+
+    def test_a_rebuilt_target_is_dropped(self) -> None:
+        from scripts.update_plan import UpdatePlan
+
+        manifest, cargo, historical = self._manifest_pair()
+        baseline = replace(manifest, packages=(historical,))
+        pool = self._pool(manifest, cargo)
+        plan = UpdatePlan(
+            baseline_release_id="r1",
+            baseline_manifest=baseline,
+            manifest_data={},
+            manifest=manifest,
+            changed=("cargo-tauri",),
+            versions={"cargo-tauri": cargo.version},
+        )
+        # The package is "changed" but every baseline target is unchanged, so
+        # nothing is dropped even though the name is listed.
+        self.assertEqual(remove_superseded(plan, pool), [])
+
+        newer = replace(
+            cargo,
+            version="2.13.0",
+            targets={
+                arch: replace(target, depends=target.depends + ", zlib1g")
+                for arch, target in cargo.targets.items()
+            },
+        )
+        rebuilt = replace(manifest, packages=(newer,))
+        pool2 = self._pool(manifest, cargo)
+        plan2 = UpdatePlan(
+            baseline_release_id="r1",
+            baseline_manifest=manifest,
+            manifest_data={},
+            manifest=rebuilt,
+            changed=("cargo-tauri",),
+            versions={"cargo-tauri": newer.version},
+        )
+        self.assertEqual(
+            sorted(remove_superseded(plan2, pool2)),
+            ["cargo-tauri_2.12.3-1_amd64.deb", "cargo-tauri_2.12.3-1_arm64.deb"],
+        )
+        self.assertEqual(list(pool2.glob("*.deb")), [])
 
 
 if __name__ == "__main__":

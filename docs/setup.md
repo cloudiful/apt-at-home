@@ -191,13 +191,14 @@ the exact three steps, reproduced here for operators.
   APT upgrade removes the distribution runtime through the normal solver. Its
   headless check exercises the packaged runtime and the bundled Lua tree-sitter
   parser.
-- The command-line packages are `bottom` (`btm`), `bun` (`bun`), `forgejo-cli`
-  (`fj`), `git-delta` (`delta`), `neovim` (`nvim`), `rustfs-cli` (`rc`),
-  `sccache`, `starship`, `uv` (`uv` and `uvx`), `zellij`, and `zoxide` for
-  both architectures, plus `cargo-tauri` (`cargo-tauri` and `cargo tauri`,
-  requires `cargo`) for amd64 only. Zoxide shell initialization is opt-in; users
-  may add `eval "$(zoxide init bash)"` to their own Bash configuration. Package
-  installation never edits shell configuration.
+- The command-line packages are `bottom` (`btm`), `bun` (`bun`), `cargo-tauri`
+  (`cargo-tauri` and `cargo tauri`, requires `cargo`), `forgejo-cli` (`fj`),
+  `git-delta` (`delta`), `neovim` (`nvim`), `rustfs-cli` (`rc`), `sccache`,
+  `starship`, `uv` (`uv` and `uvx`), `zellij`, and `zoxide` for both
+  architectures. The arm64 `cargo-tauri` build needs glibc 2.18 and the amd64
+  build keeps its glibc 2.34 and liblzma requirements. Zoxide shell
+  initialization is opt-in; users may add `eval "$(zoxide init bash)"` to their
+  own Bash configuration. Package installation never edits shell configuration.
 - `bun` ships upstream's official release ZIP, whose binary is the only member
   the package installs; upstream's `bunx` command stays available as `bun x`.
 
@@ -207,11 +208,51 @@ the exact three steps, reproduced here for operators.
   artifact path reaches R2 and counts against the Worker and storage request
   quotas. Treat the hostname as a public resource and watch usage; re-enable the
   credential gate (`AUTH_REQUIRED: "true"`) to stop anonymous traffic.
+- The gateway applies three per-IP request budgets to artifact `GET`/`HEAD`
+  requests through first-class Wrangler bindings in `worker/wrangler.jsonc`:
+
+  | Budget | Binding | Attempts per minute | Covers |
+  | --- | --- | --- | --- |
+  | Metadata | `INDEX_LIMITER` | 120 | `/key.asc`, `dists/` metadata and by-hash indexes |
+  | Downloads | `DOWNLOAD_LIMITER` | 30 | every `/pool/<flat filename>.deb` request |
+  | Per package | `PACKAGE_LIMITER` | 6 | one canonical `/pool/<flat filename>.deb` |
+
+  The package budgets are counted per canonical file name, not per package
+  name: a version or architecture is a separate file bucket, while an encoded
+  alias or a query string still counts against the same file. Pool requests are
+  checked against the download budget first and then the per-file budget; a
+  denial in either case answers `429` with `Retry-After: 60`, `no-store`, and no
+  authentication challenge. That delay is advisory, not the counter's exact
+  reset.
+- Only the Cloudflare-resolved `CF-Connecting-IP` header identifies a client.
+  Cookies, `X-Forwarded-For`, and authorization values never select a bucket,
+  and the address is neither persisted nor logged by the gateway. A request
+  without that address — local or internal invocation — skips throttling rather
+  than sharing one bucket.
+- The budgets are best-effort abuse protection, not an authorization gate and
+  not a hard quota. A missing or failing binding fails open: that budget is
+  skipped, the request continues through the normal authentication and storage
+  flow, and every other healthy budget still applies. Counters are kept per
+  Cloudflare location, are eventually consistent, and use a one-minute window,
+  so they do not measure daily usage, per-user totals, or devices behind NAT;
+  IPv6 clients are counted per address. Limiting is checked inside the Worker
+  invocation, so it cannot prevent that invocation from being billed.
+- Change a budget by editing its `simple` value in `worker/wrangler.jsonc` and
+  redeploying; the committed file is the source of truth. The namespace IDs are
+  reserved for this project and must stay stable across deployments. Do not
+  reuse them in another Worker in the same account; confirm that before a
+  separately authorized production deploy.
 - The public landing page reads the release pointer and the release manifest on
   a cold cache, so it reaches R2 as well; those reads are cached for one
-  minute.
-- A Worker-side WAF, rate limit, or alert cannot guarantee blocking of
+  minute. A Worker-side WAF, rate limit, or alert cannot guarantee blocking of
   malicious invocations on the free tier; treat them as defense in depth.
+- For a local check, run
+  `bun x wrangler dev --config worker/wrangler.jsonc --local --port 8787 --persist-to .cache/ai/rate-limit/state`
+  and request only known-missing files so no bulk download starts:
+  `/pool/rate-limit-probe_1.0-1_amd64.deb` answers `404` and then `429` once its
+  per-file budget is spent, and repeated `/key.asc` requests exercise the
+  metadata budget. Local counters are approximate and reset with the local
+  window or the persisted state directory.
 - Keep tokens per-device and rotatable, watch Worker request logs for `401`
   bursts while the gate is enabled, and rotate any token that may have leaked.
 - There is deliberately no `Valid-Until` on `Release`; clients do not expire

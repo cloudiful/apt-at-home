@@ -66,10 +66,10 @@ def _arch(arch: str) -> str:
 def arches_for(package_name: str) -> tuple[str, ...]:
     """Return the reviewed architectures this package publishes for.
 
-    The default is both repository architectures; cargo-tauri is the one
-    ordinary package with an explicit amd64-only policy because upstream
-    publishes no official arm64 asset for it. Support is never inferred from
-    triples alone, because rustfs-cli uses no triple placeholders.
+    The default is both repository architectures; a recipe narrows the set only
+    when its upstream publishes no official asset for one architecture. Support
+    is never inferred from triples alone, because rustfs-cli uses no triple
+    placeholders.
     """
     return recipe_for(package_name).arches
 

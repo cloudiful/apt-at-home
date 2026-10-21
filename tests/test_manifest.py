@@ -8,6 +8,7 @@ from scripts.manifest import (
     expected_debs,
     expected_debs_for_arch,
     load_manifest,
+    parse_baseline_manifest,
     parse_manifest,
 )
 from scripts.release_manifest import load_manifest_data
@@ -111,13 +112,15 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(kandev.targets["arm64"].bundle_type, "kandev-standard")
         self.assertEqual(kandev.license, "AGPL-3.0-or-later")
         cargo = by_name["cargo-tauri"]
-        self.assertEqual(set(cargo.targets), {"amd64"})
+        self.assertEqual(set(cargo.targets), {"amd64", "arm64"})
         self.assertEqual(cargo.targets["amd64"].archive_member, "cargo-tauri")
+        self.assertEqual(cargo.targets["arm64"].archive_member, "cargo-tauri")
         self.assertEqual(cargo.targets["amd64"].binary, "cargo-tauri")
+        self.assertEqual(cargo.targets["arm64"].binary, "cargo-tauri")
         self.assertEqual(cargo.license, "MIT OR Apache-2.0")
         self.assertEqual(
             cargo.extra_license_urls,
-            ("https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.2/LICENSE-APACHE-2.0",),
+            ("https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.3/LICENSE-APACHE-2.0",),
         )
 
     def test_declares_dependencies_only_where_the_binary_needs_them(self) -> None:
@@ -139,6 +142,10 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(
             by_name["cargo-tauri"].targets["amd64"].depends,
             "cargo, libc6 (>= 2.34), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)",
+        )
+        self.assertEqual(
+            by_name["cargo-tauri"].targets["arm64"].depends,
+            "cargo, libc6 (>= 2.18), libgcc-s1 (>= 14.2.0)",
         )
         # Every package declares exactly the runtime its reviewed recipe pins,
         # so a static build stays free of dependencies and a new recipe cannot
@@ -235,12 +242,21 @@ class ManifestTest(unittest.TestCase):
             parse_manifest(data)
         self.assertIn("missing arch target", str(ctx.exception))
 
-    def test_rejects_an_extra_unsupported_architecture(self) -> None:
+    def test_rejects_a_target_that_is_not_the_reviewed_arch_asset(self) -> None:
+        """A duplicated target never passes as another architecture's asset."""
         data = _document()
         cargo = next(e for e in data["packages"] if e["name"] == "cargo-tauri")
         cargo["targets"]["arm64"] = copy.deepcopy(cargo["targets"]["amd64"])
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as ctx:
             parse_manifest(data)
+        self.assertIn("official asset", str(ctx.exception))
+
+        unknown = _document()
+        entry = next(e for e in unknown["packages"] if e["name"] == "zellij")
+        entry["targets"]["riscv64"] = copy.deepcopy(entry["targets"]["amd64"])
+        with self.assertRaises(ValueError) as ctx:
+            parse_manifest(unknown)
+        self.assertIn("unsupported arch", str(ctx.exception))
 
     def test_rejects_unknown_asset_target_fields_including_removed_source_build(self) -> None:
         for name in ("cargo-tauri", "zellij"):
@@ -373,6 +389,97 @@ class ManifestTest(unittest.TestCase):
             manifest.packages[0].targets["amd64"].depends,
             "libc6 (>= 2.18), libgcc-s1, zlib1g",
         )
+
+
+class HistoricalBaselineTest(unittest.TestCase):
+    """The published cargo-tauri gap is the only missing-target baseline allowed."""
+
+    def _historical(self) -> dict:
+        """The current document with cargo-tauri's pre-2.12.3-amd64 shape."""
+        data = _document()
+        cargo = next(e for e in data["packages"] if e["name"] == "cargo-tauri")
+        del cargo["targets"]["arm64"]
+        return data
+
+    def test_a_current_manifest_still_requires_every_reviewed_target(self) -> None:
+        with self.assertRaisesRegex(ValueError, "missing arch target: arm64"):
+            parse_manifest(self._historical())
+
+    def test_the_recorded_cargo_tauri_gap_is_a_valid_baseline(self) -> None:
+        manifest = parse_baseline_manifest(self._historical())
+        cargo = next(p for p in manifest.packages if p.name == "cargo-tauri")
+        self.assertEqual(set(cargo.targets), {"amd64"})
+        self.assertEqual(cargo.version, "2.12.3")
+
+    def test_an_older_cargo_tauri_gap_is_also_accepted(self) -> None:
+        data = self._historical()
+        cargo = next(e for e in data["packages"] if e["name"] == "cargo-tauri")
+        cargo["version"] = "2.12.2"
+        cargo["license_url"] = (
+            "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.2/LICENSE-MIT"
+        )
+        cargo["extra_license_urls"] = [
+            "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.2/LICENSE-APACHE-2.0"
+        ]
+        target = cargo["targets"]["amd64"]
+        target["url"] = (
+            "https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.2/"
+            "cargo-tauri-x86_64-unknown-linux-gnu.tgz"
+        )
+        target["sha256"] = "35c7b50266256cb6d5f757608d7097a59a5faeb0c75879ee1f504652a9b6087e"
+        manifest = parse_baseline_manifest(data)
+        self.assertEqual(
+            next(p for p in manifest.packages if p.name == "cargo-tauri").version,
+            "2.12.2",
+        )
+
+    def test_a_newer_cargo_tauri_version_without_arm64_is_refused(self) -> None:
+        data = self._historical()
+        cargo = next(e for e in data["packages"] if e["name"] == "cargo-tauri")
+        cargo["version"] = "2.13.0"
+        cargo["license_url"] = (
+            "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.13.0/LICENSE-MIT"
+        )
+        cargo["extra_license_urls"] = [
+            "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.13.0/LICENSE-APACHE-2.0"
+        ]
+        target = cargo["targets"]["amd64"]
+        target["url"] = (
+            "https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.13.0/"
+            "cargo-tauri-x86_64-unknown-linux-gnu.tgz"
+        )
+        target["sha256"] = "ab" * 32
+        with self.assertRaisesRegex(ValueError, "missing arch target: arm64"):
+            parse_baseline_manifest(data)
+
+    def test_an_unrelated_package_cannot_lose_a_target_in_a_baseline(self) -> None:
+        for name in ("starship", "zellij", "neovim"):
+            with self.subTest(package=name):
+                data = _document()
+                entry = next(e for e in data["packages"] if e["name"] == name)
+                del entry["targets"]["arm64"]
+                with self.assertRaisesRegex(ValueError, "missing arch target: arm64"):
+                    parse_baseline_manifest(data)
+
+    def test_the_gap_only_matches_its_exact_recorded_target_set(self) -> None:
+        only_arm = _document()
+        cargo = next(e for e in only_arm["packages"] if e["name"] == "cargo-tauri")
+        del cargo["targets"]["amd64"]
+        with self.assertRaises(ValueError):
+            parse_baseline_manifest(only_arm)
+
+        empty = _document()
+        cargo = next(e for e in empty["packages"] if e["name"] == "cargo-tauri")
+        cargo["targets"] = {}
+        with self.assertRaisesRegex(ValueError, "missing arch target"):
+            parse_baseline_manifest(empty)
+
+    def test_an_extra_target_is_refused_through_the_baseline_parser_too(self) -> None:
+        data = self._historical()
+        cargo = next(e for e in data["packages"] if e["name"] == "cargo-tauri")
+        cargo["targets"]["riscv64"] = copy.deepcopy(cargo["targets"]["amd64"])
+        with self.assertRaises(ValueError):
+            parse_baseline_manifest(data)
 
 
 if __name__ == "__main__":

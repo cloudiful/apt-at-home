@@ -259,22 +259,29 @@
     },
     {
       "name": "cargo-tauri",
-      "version": "2.12.2",
+      "version": "2.12.3",
       "homepage": "https://tauri.app",
       "description": "command line interface for building Tauri apps",
       "license": "MIT OR Apache-2.0",
       "copyright": "Copyright (c) Tauri Programme within The Commons Conservancy and the tauri-cli contributors",
-      "license_url": "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.2/LICENSE-MIT",
+      "license_url": "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.3/LICENSE-MIT",
       "extra_license_urls": [
-        "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.2/LICENSE-APACHE-2.0"
+        "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.3/LICENSE-APACHE-2.0"
       ],
       "targets": {
         "amd64": {
-          "url": "https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.2/cargo-tauri-x86_64-unknown-linux-gnu.tgz",
-          "sha256": "35c7b50266256cb6d5f757608d7097a59a5faeb0c75879ee1f504652a9b6087e",
+          "url": "https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.3/cargo-tauri-x86_64-unknown-linux-gnu.tgz",
+          "sha256": "2f635874cbb0103878cd04794aab9f1fec9adf3950ca7c4b1be7f1d845244501",
           "archive_member": "cargo-tauri",
           "binary": "cargo-tauri",
           "depends": "cargo, libc6 (>= 2.34), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)"
+        },
+        "arm64": {
+          "url": "https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.3/cargo-tauri-aarch64-unknown-linux-gnu.tgz",
+          "sha256": "13baa60bb1bfa8567c1e021b1192bbb0d5baa60949f03650492eecfb22c8f8e0",
+          "archive_member": "cargo-tauri",
+          "binary": "cargo-tauri",
+          "depends": "cargo, libc6 (>= 2.18), libgcc-s1 (>= 14.2.0)"
         }
       }
     },

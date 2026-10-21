@@ -20,6 +20,11 @@ interface WranglerConfig {
     readonly public_bucket?: boolean;
     readonly preview_bucket?: boolean;
   }>;
+  readonly ratelimits?: ReadonlyArray<{
+    readonly name: string;
+    readonly namespace_id: string;
+    readonly simple: { readonly limit: number; readonly period: number };
+  }>;
 }
 
 /** Reads the deployment base config exactly as committed. */
@@ -73,6 +78,33 @@ describe('deployment base config', () => {
 
   it('preserves dashboard plaintext vars across deployments', () => {
     expect(readConfig().keep_vars).toBe(true);
+  });
+
+  it('binds exactly the three independent artifact request budgets', () => {
+    expect(readConfig().ratelimits).toEqual([
+      {
+        name: 'INDEX_LIMITER',
+        namespace_id: '100101',
+        simple: { limit: 120, period: 60 },
+      },
+      {
+        name: 'DOWNLOAD_LIMITER',
+        namespace_id: '100102',
+        simple: { limit: 30, period: 60 },
+      },
+      {
+        name: 'PACKAGE_LIMITER',
+        namespace_id: '100103',
+        simple: { limit: 6, period: 60 },
+      },
+    ]);
+  });
+
+  it('keeps the budget namespace ids stable and distinct', () => {
+    const limits = readConfig().ratelimits ?? [];
+    const namespaces = limits.map((entry) => entry.namespace_id);
+    expect(new Set(namespaces).size).toBe(3);
+    expect(namespaces).toEqual(['100101', '100102', '100103']);
   });
 
   it('names the worker entry point that the gateway exports', () => {

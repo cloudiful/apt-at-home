@@ -65,9 +65,8 @@ class Recipe:
     bundle_type: str = ""
     required: tuple[str, ...] = ()
     # The architectures this package publishes for, reviewed per package.
-    # The default covers every dual-architecture package; cargo-tauri is the
-    # one ordinary package with an explicit amd64-only policy because upstream
-    # publishes no official arm64 asset for it.
+    # The default covers every dual-architecture package; a recipe may narrow
+    # it when upstream publishes no official asset for one architecture.
     arches: tuple[str, ...] = ("amd64", "arm64")
     # When true, discovery selects the highest stable tag with this recipe's
     # own tag prefix from the repository's tag list and fetches that exact
@@ -198,11 +197,14 @@ _BASE_RECIPES: dict[str, Recipe] = {
         asset="{upstream}-{triple}.tgz",
         member="{binary}",
         binary="cargo-tauri",
-        triples=MappingProxyType({"amd64": "x86_64-unknown-linux-gnu"}),
+        triples=MappingProxyType({
+            "amd64": "x86_64-unknown-linux-gnu",
+            "arm64": "aarch64-unknown-linux-gnu",
+        }),
         depends=MappingProxyType({
             "amd64": "cargo, libc6 (>= 2.34), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)",
+            "arm64": "cargo, libc6 (>= 2.18), libgcc-s1 (>= 14.2.0)",
         }),
-        arches=("amd64",),
         exact_tag_release=True,
         extra_license_paths=("LICENSE-APACHE-2.0",),
     ),

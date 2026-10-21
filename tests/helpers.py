@@ -143,8 +143,8 @@ def stage_fixture_target(
 
     A flat target stages its fake binary; a tree target stages a fake archive of its
     required paths, so the fixture matches the production payload shape exactly.
-    Only an architecture in `pkg.targets` may be staged: cargo-tauri is AMD-only,
-    so requesting its absent ARM target is refused rather than invented.
+    Only an architecture in `pkg.targets` may be staged: a request for an
+    architecture the manifest does not declare is refused rather than invented.
     """
     if arch not in pkg.targets:
         raise ValueError(f"{pkg.name} publishes no {arch} release asset")
@@ -179,9 +179,9 @@ def stage_fixture_target(
 def fixture_targets(manifest: Manifest) -> list[tuple[Package, str]]:
     """Every (package, arch) the manifest actually declares, in stable order.
 
-    cargo-tauri contributes only its AMD target; every other package contributes
-    both. Fixture builders must iterate this rather than a global arch tuple,
-    so the pool holds 13 AMD and 12 ARM debs for the current catalog.
+    Fixture builders must iterate this rather than a global arch tuple, so the
+    pool holds exactly the targets the manifest declares even when one recipe
+    publishes fewer architectures than another.
     """
     return [
         (pkg, arch)

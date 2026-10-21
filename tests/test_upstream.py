@@ -370,16 +370,22 @@ class CargoTauriTagSpecificTest(unittest.TestCase):
     def _client(self, *, tag_payload: dict | None = None, tags: list[dict] | None = None) -> FakeHttp:
         repo = "tauri-apps/tauri"
         tag = "tauri-cli-v2.12.2"
-        name = "cargo-tauri-x86_64-unknown-linux-gnu.tgz"
+        assets = [
+            ("cargo-tauri-x86_64-unknown-linux-gnu.tgz", "ab" * 32),
+            ("cargo-tauri-aarch64-unknown-linux-gnu.tgz", "cd" * 32),
+        ]
         release = tag_payload if tag_payload is not None else {
             "tag_name": tag, "draft": False, "prerelease": False,
-            "assets": [{
-                "name": name,
-                "browser_download_url": (
-                    f"https://github.com/{repo}/releases/download/{tag}/{name}"
-                ),
-                "digest": "sha256:" + "ab" * 32,
-            }],
+            "assets": [
+                {
+                    "name": name,
+                    "browser_download_url": (
+                        f"https://github.com/{repo}/releases/download/{tag}/{name}"
+                    ),
+                    "digest": f"sha256:{digest}",
+                }
+                for name, digest in assets
+            ],
         }
         vendor = REPO_ROOT / "packaging" / "licenses" / "cargo-tauri"
         from scripts.upstream_assets import release_tag_api_url, tags_api_url
@@ -398,12 +404,12 @@ class CargoTauriTagSpecificTest(unittest.TestCase):
             ).read_bytes(),
         })
 
-    def test_tag_specific_release_supplies_amd64_without_repo_wide_latest(self) -> None:
+    def test_tag_specific_release_supplies_both_reviewed_assets_without_repo_wide_latest(self) -> None:
         from scripts.upstream import latest_stable
 
         repo, tag, assets = latest_stable(self._client(), "cargo-tauri")
         self.assertEqual((repo, tag), ("tauri-apps/tauri", "tauri-cli-v2.12.2"))
-        self.assertEqual(sorted(assets), ["amd64"])
+        self.assertEqual(sorted(assets), ["amd64", "arm64"])
         # Repository-wide latest is never read for the exact-tag package.
         self.assertNotIn(
             "https://api.github.com/repos/tauri-apps/tauri/releases/latest",
@@ -429,20 +435,25 @@ class CargoTauriTagSpecificTest(unittest.TestCase):
 
         repo = "tauri-apps/tauri"
         tag = "tauri-cli-v2.12.2"
-        name = "cargo-tauri-x86_64-unknown-linux-gnu.tgz"
         vendor = REPO_ROOT / "packaging" / "licenses" / "cargo-tauri"
         client = FakeHttp({
             tags_api_url(repo): [{"name": f"tauri-v2.0.{n}"} for n in range(100)],
             tags_api_url(repo, page=2): [{"name": tag}],
             release_tag_api_url(repo, tag): {
                 "tag_name": tag, "draft": False, "prerelease": False,
-                "assets": [{
-                    "name": name,
-                    "browser_download_url": (
-                        f"https://github.com/{repo}/releases/download/{tag}/{name}"
-                    ),
-                    "digest": "sha256:" + "ab" * 32,
-                }],
+                "assets": [
+                    {
+                        "name": name,
+                        "browser_download_url": (
+                            f"https://github.com/{repo}/releases/download/{tag}/{name}"
+                        ),
+                        "digest": f"sha256:{digest}",
+                    }
+                    for name, digest in (
+                        ("cargo-tauri-x86_64-unknown-linux-gnu.tgz", "ab" * 32),
+                        ("cargo-tauri-aarch64-unknown-linux-gnu.tgz", "cd" * 32),
+                    )
+                ],
             },
             license_url(repo, tag, "LICENSE-MIT"): (vendor / "LICENSE.txt").read_bytes(),
             license_url(repo, tag, "LICENSE-APACHE-2.0"): (
@@ -451,7 +462,7 @@ class CargoTauriTagSpecificTest(unittest.TestCase):
         })
         _repo, selected, assets = latest_stable(client, "cargo-tauri")
         self.assertEqual(selected, tag)
-        self.assertEqual(sorted(assets), ["amd64"])
+        self.assertEqual(sorted(assets), ["amd64", "arm64"])
         self.assertIn(tags_api_url(repo, page=2), client.requests)
 
     def test_full_pages_without_a_completed_page_fail_closed(self) -> None:

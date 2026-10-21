@@ -9,6 +9,9 @@
 const IMMUTABLE_CACHE_CONTROL = 'private, max-age=31536000, immutable';
 const REVALIDATED_CACHE_CONTROL = 'private, no-cache';
 const NO_STORE = 'no-store';
+/** Advisory delay for a limited client; not the counter's exact reset. */
+const RETRY_AFTER_SECONDS = '60';
+const TOO_MANY_REQUESTS_BODY = 'Too Many Requests\n';
 
 const GENERIC_BODY = 'error\n';
 const GENERIC_CONTENT_TYPE = 'text/plain; charset=utf-8';
@@ -47,6 +50,23 @@ export function serviceUnavailable(): Response {
 /** Only GET and HEAD are served, and only to an authenticated client. */
 export function methodNotAllowed(): Response {
   return errorResponse(405, { Allow: 'GET, HEAD' });
+}
+
+/**
+ * The artifact request budget is exhausted. The client is told to wait, but
+ * nothing here is cacheable and no authentication challenge is offered, so a
+ * throttled request is indistinguishable from a plain refusal.
+ */
+export function tooManyRequests(method: string): Response {
+  return new Response(method === 'HEAD' ? null : TOO_MANY_REQUESTS_BODY, {
+    status: 429,
+    headers: {
+      'Content-Type': GENERIC_CONTENT_TYPE,
+      'Cache-Control': NO_STORE,
+      'Retry-After': RETRY_AFTER_SECONDS,
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
 }
 
 /** Builds a response for a resolved object. */

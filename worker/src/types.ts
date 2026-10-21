@@ -15,6 +15,14 @@ export interface Env {
    * value fails closed with `503`.
    */
   readonly AUTH_REQUIRED?: string;
+  /**
+   * Per-minute artifact request budgets. Optional so local and test
+   * environments can omit them; a missing or failing binding skips only its
+   * own check and never fails the request.
+   */
+  readonly INDEX_LIMITER?: RateLimit;
+  readonly DOWNLOAD_LIMITER?: RateLimit;
+  readonly PACKAGE_LIMITER?: RateLimit;
 }
 
 /** Key of the object that selects the currently published release. */

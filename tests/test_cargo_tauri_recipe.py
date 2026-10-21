@@ -1,10 +1,10 @@
-"""Ordinary `cargo-tauri` recipe: official amd64 asset only.
+"""Ordinary `cargo-tauri` recipe: both official Linux assets of one stable tag.
 
 The `cargo-tauri` recipe follows the highest stable `tauri-cli-vN.N.N` tag and
-that exact release's official amd64 asset. Only the reviewed tag prefix, asset
-name, member, binary, license sources, architecture policy, and exact-tag
+that exact release's official Linux assets. Only the reviewed tag prefix, asset
+names, member, binary, license sources, architecture policy, and exact-tag
 policy are pinned here; versions and digests come from the manifest and
-upstream. Absence on ARM is normal: the recipe declares amd64 only.
+upstream.
 """
 
 from __future__ import annotations
@@ -31,10 +31,12 @@ from scripts.catalog import (
 from scripts.manifest import load_manifest
 
 
-VERSION = "2.12.2"
-TAG = "tauri-cli-v2.12.2"
-ASSET = "cargo-tauri-x86_64-unknown-linux-gnu.tgz"
-DEPENDS = "cargo, libc6 (>= 2.34), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)"
+VERSION = "2.12.3"
+TAG = "tauri-cli-v2.12.3"
+AMD64_ASSET = "cargo-tauri-x86_64-unknown-linux-gnu.tgz"
+ARM64_ASSET = "cargo-tauri-aarch64-unknown-linux-gnu.tgz"
+AMD64_DEPENDS = "cargo, libc6 (>= 2.34), libgcc-s1 (>= 14.2.0), liblzma5 (>= 5.8.1)"
+ARM64_DEPENDS = "cargo, libc6 (>= 2.18), libgcc-s1 (>= 14.2.0)"
 
 
 class CargoTauriRecipeTest(unittest.TestCase):
@@ -46,29 +48,32 @@ class CargoTauriRecipeTest(unittest.TestCase):
         self.assertEqual(tag_for("cargo-tauri", VERSION), TAG)
         self.assertEqual(tag_for("cargo-tauri", "2.13.0"), "tauri-cli-v2.13.0")
 
-    def test_architecture_policy_is_explicit_amd64_only(self) -> None:
-        self.assertEqual(arches_for("cargo-tauri"), ("amd64",))
+    def test_architecture_policy_covers_both_repository_architectures(self) -> None:
+        self.assertEqual(arches_for("cargo-tauri"), ("amd64", "arm64"))
         self.assertTrue(exact_tag_release_for("cargo-tauri"))
-        # Every other reviewed recipe publishes both architectures and follows
-        # the repository-wide latest release, so the amd64-only policy stays
-        # this package's alone.
+        # Every reviewed recipe publishes both architectures, while exact-tag
+        # release selection stays this package's alone.
         for name, recipe in RECIPES.items():
-            if name == "cargo-tauri":
-                continue
             with self.subTest(package=name):
                 self.assertEqual(recipe.arches, ("amd64", "arm64"))
-                self.assertFalse(recipe.exact_tag_release)
+                if name != "cargo-tauri":
+                    self.assertFalse(recipe.exact_tag_release)
 
-    def test_amd64_asset_and_member_are_the_reviewed_ones(self) -> None:
-        self.assertEqual(asset_name("cargo-tauri", VERSION, "amd64"), ASSET)
-        self.assertEqual(archive_member("cargo-tauri", VERSION, "amd64"), "cargo-tauri")
+    def test_both_assets_and_the_flat_member_are_the_reviewed_ones(self) -> None:
+        self.assertEqual(
+            triple_for("cargo-tauri", "amd64"), "x86_64-unknown-linux-gnu"
+        )
+        self.assertEqual(
+            triple_for("cargo-tauri", "arm64"), "aarch64-unknown-linux-gnu"
+        )
+        self.assertEqual(asset_name("cargo-tauri", VERSION, "amd64"), AMD64_ASSET)
+        self.assertEqual(asset_name("cargo-tauri", VERSION, "arm64"), ARM64_ASSET)
+        for arch in ("amd64", "arm64"):
+            with self.subTest(arch=arch):
+                self.assertEqual(
+                    archive_member("cargo-tauri", VERSION, arch), "cargo-tauri"
+                )
         self.assertEqual(binary_name("cargo-tauri"), "cargo-tauri")
-
-    def test_arm64_names_no_asset(self) -> None:
-        with self.assertRaisesRegex(ValueError, "publishes no arm64 release asset"):
-            triple_for("cargo-tauri", "arm64")
-        with self.assertRaisesRegex(ValueError, "publishes no arm64 release asset"):
-            asset_name("cargo-tauri", VERSION, "arm64")
 
     def test_license_sources_are_tag_bound_and_dual(self) -> None:
         self.assertEqual(expected_license_for("cargo-tauri"), "MIT OR Apache-2.0")
@@ -79,8 +84,9 @@ class CargoTauriRecipeTest(unittest.TestCase):
             (f"https://raw.githubusercontent.com/tauri-apps/tauri/{TAG}/LICENSE-APACHE-2.0",),
         )
 
-    def test_depends_are_the_reviewed_amd64_runtime(self) -> None:
-        self.assertEqual(depends_for("cargo-tauri", "amd64"), DEPENDS)
+    def test_depends_are_the_reviewed_per_arch_runtime(self) -> None:
+        self.assertEqual(depends_for("cargo-tauri", "amd64"), AMD64_DEPENDS)
+        self.assertEqual(depends_for("cargo-tauri", "arm64"), ARM64_DEPENDS)
 
     def test_the_committed_manifest_carries_the_reviewed_entry(self) -> None:
         manifest = load_manifest()
@@ -96,18 +102,29 @@ class CargoTauriRecipeTest(unittest.TestCase):
             pkg.extra_license_urls,
             (f"https://raw.githubusercontent.com/tauri-apps/tauri/{TAG}/LICENSE-APACHE-2.0",),
         )
-        self.assertEqual(set(pkg.targets), {"amd64"})
+        self.assertEqual(set(pkg.targets), {"amd64", "arm64"})
         amd64 = pkg.targets["amd64"]
         self.assertEqual(
             amd64.url,
-            f"https://github.com/tauri-apps/tauri/releases/download/{TAG}/{ASSET}",
+            f"https://github.com/tauri-apps/tauri/releases/download/{TAG}/{AMD64_ASSET}",
         )
         self.assertEqual(
             amd64.sha256,
-            "35c7b50266256cb6d5f757608d7097a59a5faeb0c75879ee1f504652a9b6087e",
+            "2f635874cbb0103878cd04794aab9f1fec9adf3950ca7c4b1be7f1d845244501",
         )
         self.assertEqual((amd64.archive_member, amd64.binary), ("cargo-tauri", "cargo-tauri"))
-        self.assertEqual(amd64.depends, DEPENDS)
+        self.assertEqual(amd64.depends, AMD64_DEPENDS)
+        arm64 = pkg.targets["arm64"]
+        self.assertEqual(
+            arm64.url,
+            f"https://github.com/tauri-apps/tauri/releases/download/{TAG}/{ARM64_ASSET}",
+        )
+        self.assertEqual(
+            arm64.sha256,
+            "13baa60bb1bfa8567c1e021b1192bbb0d5baa60949f03650492eecfb22c8f8e0",
+        )
+        self.assertEqual((arm64.archive_member, arm64.binary), ("cargo-tauri", "cargo-tauri"))
+        self.assertEqual(arm64.depends, ARM64_DEPENDS)
 
 
 if __name__ == "__main__":

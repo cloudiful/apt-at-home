@@ -19,6 +19,7 @@ from scripts.manifest import (
     default_manifest_path,
     deb_filename,
     load_manifest,
+    parse_baseline_manifest,
     parse_manifest,
 )
 from scripts.metadata import ARCHES, generate_release, write_indices
@@ -65,6 +66,33 @@ def published_manifest(names: tuple[str, ...] = PUBLISHED_NAMES) -> Manifest:
 PUBLISHED = published_manifest()
 
 
+def historical_cargo_baseline_data(
+    names: tuple[str, ...] = CATALOG_NAMES,
+) -> dict[str, object]:
+    """The catalog as published before cargo-tauri carried its arm64 target.
+
+    cargo-tauri gained an official aarch64 asset in 2.12.3, so an earlier or
+    equal published release of that package declares its amd64 target alone.
+    This document models exactly that recorded gap and stays otherwise
+    identical to the committed catalog.
+    """
+    data = published_manifest_data(names)
+    packages = data.get("packages")
+    assert isinstance(packages, list)
+    entry = next(entry for entry in packages if entry.get("name") == "cargo-tauri")
+    targets = entry.get("targets")
+    assert isinstance(targets, dict)
+    del targets["arm64"]
+    return data
+
+
+def historical_cargo_baseline(
+    names: tuple[str, ...] = CATALOG_NAMES,
+) -> Manifest:
+    """The validated baseline document of the pre-arm64 cargo-tauri release."""
+    return parse_baseline_manifest(historical_cargo_baseline_data(names))
+
+
 class FakeStorage:
     """Object store double: a missing key raises, byte ceilings are enforced."""
 
@@ -108,6 +136,7 @@ def build_release_objects(
     key_id: str,
     bind: bool = True,
     names: tuple[str, ...] = PUBLISHED_NAMES,
+    historical_cargo: bool = False,
 ) -> dict[str, bytes]:
     """Build a signed release and return its served objects.
 
@@ -115,8 +144,14 @@ def build_release_objects(
     `X-Manifest-*` fields and no artifact, which the trust chain must reject.
     `names` selects the published package set, so the incremental fixtures can
     model a five-package baseline without changing the two-package default.
+    `historical_cargo` publishes cargo-tauri in its recorded amd64-only shape.
     """
-    published = published_manifest(names)
+    if historical_cargo:
+        document = historical_cargo_baseline_data(names)
+        published = parse_baseline_manifest(document)
+    else:
+        document = published_manifest_data(names)
+        published = published_manifest(names)
     _build_debs(root, published)
     pool = root / "pool"
     dists = root / "releases" / RELEASE_ID / "dists" / "stable"
@@ -133,7 +168,7 @@ def build_release_objects(
     extra: list[tuple[str, str]] = []
     if bind:
         artifact = write_manifest_document(
-            data=published_manifest_data(names),
+            data=document,
             destination=root / "releases" / RELEASE_ID / MANIFEST_NAME,
         )
         extra = manifest_binding_fields(artifact)

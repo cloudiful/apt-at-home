@@ -24,11 +24,94 @@ from scripts.sign import export_public_key, sign_release
 from scripts.storage import MAX_DEB_BYTES, MAX_MANIFEST_BYTES
 from tests.helpers import make_gpg_home_with_key
 from tests.release_fixtures import (
+    CATALOG_NAMES,
     RELEASE_ID,
     DeniedStorage,
     FakeStorage,
     build_release_objects,
 )
+
+
+def _historical_cargo_objects(key_home: Path, key_id: str) -> dict[str, bytes]:
+    """Build a signed release whose bound manifest has the cargo-tauri arch gap.
+
+    Only `Packages` generation needs reprepro, and it is not needed here: the
+    trust chain verifies the indices against the signed Release hashes, so the
+    fixture writes index text directly and signs the same way production does.
+    """
+    from scripts.metadata import SUITE, COMPONENT, generate_release, write_gzip_deterministic
+    from scripts.release_manifest import (
+        MANIFEST_NAME,
+        manifest_binding_fields,
+        write_manifest_document,
+    )
+    from scripts.sign import export_public_key, sign_release
+    from tests.release_fixtures import historical_cargo_baseline_data
+
+    release_id = RELEASE_ID
+    document = historical_cargo_baseline_data(CATALOG_NAMES)
+    packages = document["packages"]  # type: ignore[index]
+
+    with tempfile.TemporaryDirectory(prefix="apt-historical-") as scratch:
+        root = Path(scratch)
+        dists = root / "releases" / release_id / "dists" / SUITE
+        artifacts: list[tuple[Path, str]] = []
+        for arch in ("amd64", "arm64"):
+            arch_dir = dists / COMPONENT / f"binary-{arch}"
+            arch_dir.mkdir(parents=True, exist_ok=True)
+            stanzas = []
+            for entry in packages:
+                targets = entry["targets"]
+                if arch not in targets:
+                    continue
+                stanzas.append(
+                    "\n".join(
+                        [
+                            f"Package: {entry['name']}",
+                            f"Architecture: {arch}",
+                            f"Version: {entry['version']}-1",
+                            f"Filename: pool/{entry['name']}_{entry['version']}-1_{arch}.deb",
+                            "Size: 10",
+                            f"SHA256: {'ab' * 32}",
+                        ]
+                    )
+                )
+            packages_file = arch_dir / "Packages"
+            packages_file.write_text("\n\n".join(stanzas) + "\n", encoding="utf-8")
+            packages_gz = arch_dir / "Packages.gz"
+            write_gzip_deterministic(packages_file, packages_gz)
+            artifacts.append((packages_file, f"{COMPONENT}/binary-{arch}/Packages"))
+            artifacts.append((packages_gz, f"{COMPONENT}/binary-{arch}/Packages.gz"))
+
+        artifact = write_manifest_document(
+            data=document,
+            destination=root / "releases" / release_id / MANIFEST_NAME,
+        )
+        release_file = generate_release(
+            output_root=root,
+            release_id=release_id,
+            files=artifacts,
+            extra_fields=manifest_binding_fields(artifact),
+        )
+        previous = os.environ.get("GNUPGHOME")
+        os.environ["GNUPGHOME"] = str(key_home)
+        try:
+            sign_release(release_file=release_file, key_id=key_id)
+            export_public_key(homedir=key_home, key_id=key_id, dest=root / "key.asc")
+        finally:
+            if previous is None:
+                os.environ.pop("GNUPGHOME", None)
+            else:
+                os.environ["GNUPGHOME"] = previous
+
+        objects = {
+            "current.json": (json.dumps({"release": release_id}) + "\n").encode(),
+            "key.asc": (root / "key.asc").read_bytes(),
+        }
+        for path in sorted((root / "releases").rglob("*")):
+            if path.is_file():
+                objects[str(path.relative_to(root))] = path.read_bytes()
+    return objects
 
 
 class PointerTest(unittest.TestCase):
@@ -64,6 +147,23 @@ class RestoreMetadataTest(unittest.TestCase):
                 for arch in ("amd64", "arm64"):
                     self.assertIn(f"Architecture: {arch}", restored.packages[arch])
                 self.assertEqual([key for key in storage.reads if key.startswith("pool/")], [])
+        finally:
+            tmpdir.cleanup()
+
+    def test_historical_cargo_tauri_baseline_restores_through_the_trust_chain(self) -> None:
+        """The signed pre-arm64 baseline restores; a current manifest still refuses it."""
+        from scripts.manifest import parse_manifest
+
+        tmpdir, home, key_id = make_gpg_home_with_key()
+        try:
+            storage = FakeStorage(_historical_cargo_objects(home, key_id))
+            restored = restore_metadata(storage, fingerprint=key_id)
+            cargo = next(
+                p for p in restored.manifest.packages if p.name == "cargo-tauri"
+            )
+            self.assertEqual(set(cargo.targets), {"amd64"})
+            with self.assertRaises(ValueError):
+                parse_manifest(restored.manifest_data)
         finally:
             tmpdir.cleanup()
 

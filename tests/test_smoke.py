@@ -304,7 +304,7 @@ class CliTest(unittest.TestCase):
             self.assertEqual(
                 count_of(["zellij", "starship", "git-delta", "rustfs-cli", "sccache"]), 10
             )
-            self.assertEqual(count_of(["cargo-tauri"]), 1)
+            self.assertEqual(count_of(["cargo-tauri"]), 2)
 
     def test_a_mode_is_required(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stderr(io.StringIO()):

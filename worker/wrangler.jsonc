@@ -16,6 +16,23 @@
       "bucket_name": "apt"
     }
   ],
+  "ratelimits": [
+    {
+      "name": "INDEX_LIMITER",
+      "namespace_id": "100101",
+      "simple": { "limit": 120, "period": 60 }
+    },
+    {
+      "name": "DOWNLOAD_LIMITER",
+      "namespace_id": "100102",
+      "simple": { "limit": 30, "period": 60 }
+    },
+    {
+      "name": "PACKAGE_LIMITER",
+      "namespace_id": "100103",
+      "simple": { "limit": 6, "period": 60 }
+    }
+  ],
   "assets": {
     "directory": "./dist/assets",
     "binding": "ASSETS",

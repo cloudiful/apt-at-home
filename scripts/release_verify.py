@@ -17,7 +17,7 @@ from pathlib import Path
 
 from .common import sha256_bytes
 from .fingerprint import check_key_matches_pin
-from .manifest import Manifest, parse_manifest
+from .manifest import Manifest, parse_baseline_manifest
 from .metadata import ARCHES, COMPONENT, SUITE
 from .release_hashes import parse_release_hashes
 from .release_manifest import MANIFEST_NAME, check_binding_bytes
@@ -174,7 +174,9 @@ def restore_metadata(source: Source, *, fingerprint: str) -> TrustedRelease:
         raise BaselineUnavailable(f"bound manifest for {release_id} is invalid: {exc}") from exc
     if not isinstance(parsed, dict):
         raise BaselineUnavailable(f"bound manifest for {release_id} is not an object")
-    manifest = parse_manifest(parsed)
+    # A published baseline may predate a reviewed architecture asset, so it is
+    # parsed with the narrow historical-gap rule after the trust chain passed.
+    manifest = parse_baseline_manifest(parsed)
 
     packages: dict[str, str] = {}
     for arch in ARCHES:
