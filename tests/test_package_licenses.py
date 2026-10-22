@@ -29,6 +29,17 @@ class PackageLicensesTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "extra_license_urls"):
             parse_manifest(changed)
 
+    def test_fd_find_copyright_contains_both_reviewed_license_texts(self) -> None:
+        pkg = next(pkg for pkg in load_manifest().packages if pkg.name == "fd-find")
+        primary, apache = read_vendor_licenses(pkg)
+        text = copyright_text(pkg, primary, apache)
+        self.assertIn("License: MIT OR Apache-2.0\n", text)
+        self.assertIn("MIT License", text)
+        self.assertIn("Apache License", text)
+        self.assertIn(primary.rstrip(), text)
+        self.assertIn(apache.rstrip(), text)
+        self.assertEqual(text.count("License:"), 1)
+
     def test_existing_single_license_format_is_unchanged(self) -> None:
         pkg = next(pkg for pkg in load_manifest().packages if pkg.name == "starship")
         text = copyright_text(pkg, "ISC License\n")

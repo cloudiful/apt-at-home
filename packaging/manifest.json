@@ -337,6 +337,104 @@
           "depends": "libc6 (>= 2.39), libgcc-s1"
         }
       }
+    },
+    {
+      "name": "fd-find",
+      "version": "10.5.0",
+      "homepage": "https://github.com/sharkdp/fd",
+      "description": "Simple, fast and user-friendly alternative to find",
+      "license": "MIT OR Apache-2.0",
+      "copyright": "Copyright (c) 2017-present The fd developers",
+      "license_url": "https://raw.githubusercontent.com/sharkdp/fd/v10.5.0/LICENSE-MIT",
+      "extra_license_urls": [
+        "https://raw.githubusercontent.com/sharkdp/fd/v10.5.0/LICENSE-APACHE"
+      ],
+      "targets": {
+        "amd64": {
+          "url": "https://github.com/sharkdp/fd/releases/download/v10.5.0/fd-v10.5.0-x86_64-unknown-linux-musl.tar.gz",
+          "sha256": "761c72dc8e120d85b22292063be8a796e2eeb20eb3e4f38b8fa2343ccf3514a7",
+          "archive_member": "fd-v10.5.0-x86_64-unknown-linux-musl/fd",
+          "binary": "fdfind"
+        },
+        "arm64": {
+          "url": "https://github.com/sharkdp/fd/releases/download/v10.5.0/fd-v10.5.0-aarch64-unknown-linux-musl.tar.gz",
+          "sha256": "d76c4317f7d5dba69f8a2a15856c90c777e7f0dd4e85f0de8c76de6992c374d4",
+          "archive_member": "fd-v10.5.0-aarch64-unknown-linux-musl/fd",
+          "binary": "fdfind"
+        }
+      }
+    },
+    {
+      "name": "fzf",
+      "version": "0.74.5",
+      "homepage": "https://github.com/junegunn/fzf",
+      "description": "Command-line fuzzy finder",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2013-2026 Junegunn Choi",
+      "license_url": "https://raw.githubusercontent.com/junegunn/fzf/v0.74.5/LICENSE",
+      "targets": {
+        "amd64": {
+          "url": "https://github.com/junegunn/fzf/releases/download/v0.74.5/fzf-0.74.5-linux_amd64.tar.gz",
+          "sha256": "d47d7f882972c7d674dbbba998ffa4116e68379616ffac7695d0671e9a722c5f",
+          "archive_member": "fzf",
+          "binary": "fzf"
+        },
+        "arm64": {
+          "url": "https://github.com/junegunn/fzf/releases/download/v0.74.5/fzf-0.74.5-linux_arm64.tar.gz",
+          "sha256": "cf058001da21724a469b714a29cf4aab9cbe860d218a0d6c1b5b661efad7784c",
+          "archive_member": "fzf",
+          "binary": "fzf"
+        }
+      }
+    },
+    {
+      "name": "tree-sitter-cli",
+      "version": "0.27.1",
+      "homepage": "https://github.com/tree-sitter/tree-sitter",
+      "description": "Command-line interface for the tree-sitter parser generator",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2018 Max Brunsfeld",
+      "license_url": "https://raw.githubusercontent.com/tree-sitter/tree-sitter/v0.27.1/LICENSE",
+      "targets": {
+        "amd64": {
+          "url": "https://github.com/tree-sitter/tree-sitter/releases/download/v0.27.1/tree-sitter-cli-linux-x64.zip",
+          "sha256": "c7e686aec16ba17053c2e6fd87600ccb10cf8ba3d055756b17e756d538e11114",
+          "archive_member": "tree-sitter",
+          "binary": "tree-sitter",
+          "depends": "libc6 (>= 2.39), libgcc-s1"
+        },
+        "arm64": {
+          "url": "https://github.com/tree-sitter/tree-sitter/releases/download/v0.27.1/tree-sitter-cli-linux-arm64.zip",
+          "sha256": "3c0d0113cae3fea36f2336c271cbdacbcdb349edb006319155652b9386803c55",
+          "archive_member": "tree-sitter",
+          "binary": "tree-sitter",
+          "depends": "libc6 (>= 2.39), libgcc-s1"
+        }
+      }
+    },
+    {
+      "name": "chezmoi",
+      "version": "2.73.3",
+      "homepage": "https://github.com/twpayne/chezmoi",
+      "description": "Manage dotfiles across multiple diverse machines",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2018 Tom Payne",
+      "license_url": "https://raw.githubusercontent.com/twpayne/chezmoi/v2.73.3/LICENSE",
+      "targets": {
+        "amd64": {
+          "url": "https://github.com/twpayne/chezmoi/releases/download/v2.73.3/chezmoi_2.73.3_linux_amd64.tar.gz",
+          "sha256": "6e5827598cbfc02d132b04f95b5ea10efb5b79230e2a4a0e52df4af144a8ee9f",
+          "archive_member": "chezmoi",
+          "binary": "chezmoi",
+          "depends": "libc6 (>= 2.34)"
+        },
+        "arm64": {
+          "url": "https://github.com/twpayne/chezmoi/releases/download/v2.73.3/chezmoi_2.73.3_linux_arm64.tar.gz",
+          "sha256": "c9e6a6e71eb5291018e161a8426d7c313cd2e8553c2ca4029511fec2a33bc28c",
+          "archive_member": "chezmoi",
+          "binary": "chezmoi"
+        }
+      }
     }
   ]
 }

@@ -192,13 +192,17 @@ the exact three steps, reproduced here for operators.
   headless check exercises the packaged runtime and the bundled Lua tree-sitter
   parser.
 - The command-line packages are `bottom` (`btm`), `bun` (`bun`), `cargo-tauri`
-  (`cargo-tauri` and `cargo tauri`, requires `cargo`), `forgejo-cli` (`fj`),
-  `git-delta` (`delta`), `neovim` (`nvim`), `rustfs-cli` (`rc`), `sccache`,
-  `starship`, `uv` (`uv` and `uvx`), `zellij`, and `zoxide` for both
-  architectures. The arm64 `cargo-tauri` build needs glibc 2.18 and the amd64
-  build keeps its glibc 2.34 and liblzma requirements. Zoxide shell
-  initialization is opt-in; users may add `eval "$(zoxide init bash)"` to their
-  own Bash configuration. Package installation never edits shell configuration.
+  (`cargo-tauri` and `cargo tauri`, requires `cargo`), `chezmoi`, `fd-find`
+  (`fdfind`), `forgejo-cli` (`fj`), `fzf`, `git-delta` (`delta`), `neovim`
+  (`nvim`), `rustfs-cli` (`rc`), `sccache`, `starship`, `tree-sitter-cli`
+  (`tree-sitter`, requires glibc 2.39), `uv` (`uv` and `uvx`), `zellij`, and
+  `zoxide` for both architectures. The arm64 `cargo-tauri` build needs glibc
+  2.18 and the amd64 build keeps its glibc 2.34 and liblzma requirements.
+  Zoxide shell initialization is opt-in; users may add
+  `eval "$(zoxide init bash)"` to their own Bash configuration. Package
+  installation never edits shell configuration.
+- `fd-find` installs upstream's `fd` binary as `fdfind`; `/usr/bin/fd` is left
+  to the distribution's unrelated `fdclone` package.
 - `bun` ships upstream's official release ZIP, whose binary is the only member
   the package installs; upstream's `bunx` command stays available as `bun x`.
 

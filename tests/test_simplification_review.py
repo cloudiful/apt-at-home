@@ -89,7 +89,8 @@ class RealArtifactReviewTest(unittest.TestCase):
         self.assertFalse(output.exists(), "review output must be fresh")
         manifest = load_manifest()
         baseline = {p.name: sha256_file(p) for p in Path("dist/repo/pool").glob("*.deb")}
-        self.assertEqual(len(baseline), 20)
+        expected = expected_debs(manifest)
+        self.assertLessEqual(set(baseline), expected, "baseline must be a published subset")
         cache = Path("dist/cache/upstream")
         for pkg in manifest.packages:
             for arch, target in pkg.targets.items():
@@ -108,8 +109,14 @@ class RealArtifactReviewTest(unittest.TestCase):
             self.assertEqual({p.name for p in built}, expected_debs(manifest))
             findings = verify_tree(output, expected_fingerprint=fingerprint)
             print("SIGNED21", findings)
-        self.assertEqual(len(list((output / "pool").glob("*_amd64.deb"))), 13)
-        self.assertEqual(len(list((output / "pool").glob("*_arm64.deb"))), 13)
+        self.assertEqual(
+            len(list((output / "pool").glob("*_amd64.deb"))),
+            len({name for name in expected if name.endswith("_amd64.deb")}),
+        )
+        self.assertEqual(
+            len(list((output / "pool").glob("*_arm64.deb"))),
+            len({name for name in expected if name.endswith("_arm64.deb")}),
+        )
         for name, digest in baseline.items():
             self.assertEqual(sha256_file(output / "pool" / name), digest, name)
             self.assertEqual(sha256_file(Path("dist/repo/pool") / name), digest)

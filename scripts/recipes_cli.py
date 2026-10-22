@@ -24,6 +24,15 @@ _MUSL = MappingProxyType({
     "amd64": "x86_64-unknown-linux-musl",
     "arm64": "aarch64-unknown-linux-musl",
 })
+# fzf does not embed a released version or a Rust triple in its asset name.
+_NO_TRIPLES = MappingProxyType({})
+_TREE_SITTER = MappingProxyType({"amd64": "x64", "arm64": "arm64"})
+_TREE_SITTER_LIBC = MappingProxyType({
+    "amd64": "libc6 (>= 2.39), libgcc-s1",
+    "arm64": "libc6 (>= 2.39), libgcc-s1",
+})
+# chezmoi's default arm64 archive is static; only the amd64 build is glibc-linked.
+_CHEZMOI_LIBC = MappingProxyType({"amd64": "libc6 (>= 2.34)"})
 # Bun publishes one ZIP per architecture, with its own short triple names.
 _BUN = MappingProxyType({
     "amd64": "x64",
@@ -136,5 +145,58 @@ def make_cli_recipes(recipe_type: type[Recipe]) -> dict[str, Recipe]:
             # The CLI reports its version through a subcommand, not a flag.
             smoke=("version",),
             extra_license_paths=("LICENSE-APACHE",),
+        ),
+        "fd-find": recipe_type(
+            name="fd-find",
+            upstream="fd",
+            repo="sharkdp/fd",
+            tag_prefix="v",
+            license_id="MIT OR Apache-2.0",
+            license_path="LICENSE-MIT",
+            asset="{upstream}-v{version}-{triple}.tar.gz",
+            # Upstream's archive member is `fd`; Debian installs it as fdfind
+            # so it cannot collide with the fdclone package's /usr/bin/fd.
+            member="{prefix}/fd",
+            binary="fdfind",
+            triples=_MUSL,
+            extra_license_paths=("LICENSE-APACHE",),
+        ),
+        "fzf": recipe_type(
+            name="fzf",
+            upstream="fzf",
+            repo="junegunn/fzf",
+            tag_prefix="v",
+            license_id="MIT",
+            license_path="LICENSE",
+            asset="{upstream}-{version}-linux_{arch}.tar.gz",
+            member="{binary}",
+            binary="fzf",
+            triples=_NO_TRIPLES,
+        ),
+        "tree-sitter-cli": recipe_type(
+            name="tree-sitter-cli",
+            upstream="tree-sitter",
+            repo="tree-sitter/tree-sitter",
+            tag_prefix="v",
+            license_id="MIT",
+            license_path="LICENSE",
+            asset="{upstream}-cli-linux-{triple}.zip",
+            member="{binary}",
+            binary="tree-sitter",
+            triples=_TREE_SITTER,
+            depends=_TREE_SITTER_LIBC,
+        ),
+        "chezmoi": recipe_type(
+            name="chezmoi",
+            upstream="chezmoi",
+            repo="twpayne/chezmoi",
+            tag_prefix="v",
+            license_id="MIT",
+            license_path="LICENSE",
+            asset="{upstream}_{version}_linux_{arch}.tar.gz",
+            member="{binary}",
+            binary="chezmoi",
+            triples=_NO_TRIPLES,
+            depends=_CHEZMOI_LIBC,
         ),
     }

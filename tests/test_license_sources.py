@@ -69,6 +69,32 @@ class LicenseSourcesTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "license bytes changed"):
             check_license_sources(FakeHttp(payloads), "forgejo-cli", "v0.7.0")
 
+    def test_fd_find_checks_primary_and_supplemental_bytes_in_recipe_order(self) -> None:
+        vendored = vendor_license_sources("fd-find")
+        urls = license_urls_for("fd-find", "v10.5.0")
+        self.assertEqual(
+            urls,
+            (
+                "https://raw.githubusercontent.com/sharkdp/fd/v10.5.0/LICENSE-MIT",
+                "https://raw.githubusercontent.com/sharkdp/fd/v10.5.0/LICENSE-APACHE",
+            ),
+        )
+        client = FakeHttp(dict(zip(urls, vendored.values(), strict=True)))
+
+        primary, extras = check_license_sources(client, "fd-find", "v10.5.0")
+
+        self.assertEqual((primary, extras), (urls[0], urls[1:]))
+        self.assertEqual([url for url, _ in client.requests], list(urls))
+
+    def test_fd_find_changed_apache_bytes_fail_closed(self) -> None:
+        urls = license_urls_for("fd-find", "v10.5.0")
+        vendored = vendor_license_sources("fd-find")
+        payloads = dict(zip(urls, vendored.values(), strict=True))
+        payloads[urls[1]] = b"a different Apache license text"
+
+        with self.assertRaisesRegex(ValueError, "supplemental license LICENSE-APACHE bytes changed"):
+            check_license_sources(FakeHttp(payloads), "fd-find", "v10.5.0")
+
 
 if __name__ == "__main__":
     unittest.main()

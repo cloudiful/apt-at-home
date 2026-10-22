@@ -5,9 +5,10 @@ Private per-device authenticated APT source for Debian 13. English | [中文](RE
 ## Features
 
 - Private authenticated source with per-device tokens over an authenticated gateway.
-- Debian 13 packages for amd64 and arm64: bottom, bun, cargo-tauri,
-  forgejo-cli, git-delta, kandev, neovim, rustfs-cli, sccache, starship, uv,
-  zellij, and zoxide, each from its official release asset.
+- Debian 13 packages for amd64 and arm64: bottom, bun, cargo-tauri, chezmoi,
+  fd-find, forgejo-cli, fzf, git-delta, kandev, neovim, rustfs-cli, sccache,
+  starship, tree-sitter-cli, uv, zellij, and zoxide, each from its official
+  release asset.
 - `forgejo-cli` comes from Codeberg, which publishes no release digest: its
   archives are pinned by a SHA256 computed from the official download, which
   costs about 18 MiB of downloads per discovery run.
@@ -24,16 +25,21 @@ Private per-device authenticated APT source for Debian 13. English | [中文](RE
 
 ```sh
 sudo apt update
-sudo apt install bottom bun cargo-tauri forgejo-cli git-delta kandev neovim rustfs-cli sccache starship uv zellij zoxide
+sudo apt install bottom bun cargo-tauri chezmoi fd-find forgejo-cli fzf git-delta kandev neovim rustfs-cli sccache starship tree-sitter-cli uv zellij zoxide
 ```
 
-`bottom` provides `btm`, `forgejo-cli` provides `fj`, `git-delta` provides
-`delta`, `rustfs-cli` provides `rc`, and `uv` provides both `uv` and `uvx`. `bun` provides `bun`; upstream's
+`bottom` provides `btm`, `fd-find` provides `fdfind`, `forgejo-cli` provides
+`fj`, `git-delta` provides `delta`, `rustfs-cli` provides `rc`,
+`tree-sitter-cli` provides `tree-sitter`, and `uv` provides both `uv` and
+`uvx`. `bun` provides `bun`; upstream's
 `bunx` command stays available as `bun x`. `cargo-tauri` provides `cargo-tauri`
 directly and `cargo tauri` as a Cargo external subcommand (it requires `cargo`
 on `PATH`, which the package declares as a dependency). `zoxide` shell integration is
 opt-in; for Bash, add `eval "$(zoxide init bash)"` to your shell configuration if
 wanted. Package installation does not change shell configuration.
+
+`tree-sitter-cli` requires glibc 2.39 or newer. `chezmoi` never edits shell
+configuration; run it explicitly to apply dotfiles.
 
 `kandev` installs the upstream standard server bundle. Run `kandev` to start it;
 package installation does not start the server.

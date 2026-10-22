@@ -139,8 +139,9 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   `Packages` hashes, and the manifest bound by `X-Manifest-SHA256` /
   `X-Manifest-Size`) before it reads a single package byte, then compares that
   signed baseline against the latest stable upstream release of every package
-  in the catalog: bottom, bun, cargo-tauri, forgejo-cli, git-delta, kandev,
-  neovim, rustfs-cli, sccache, starship, uv, zellij, and zoxide.
+  in the catalog: bottom, bun, cargo-tauri, chezmoi, fd-find, forgejo-cli,
+  fzf, git-delta, kandev, neovim, rustfs-cli, sccache, starship,
+  tree-sitter-cli, uv, zellij, and zoxide.
   `cargo-tauri` selects the highest stable `tauri-cli-vN.N.N` tag and that exact
   release's official Linux assets, so another product line's latest release
   never selects it.
@@ -154,13 +155,11 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   its archives are pinned by a SHA256 computed from the official download and
   recomputed on every discovery; that costs about 18 MiB of downloads per run.
 - A package the published release does not carry yet is added from the catalog
-  rather than replacing anything. With the thirteen-package catalog, a
-  two-package baseline adds eleven packages, a six-package baseline adds
-  seven, and a five-package baseline adds eight. Every added package
-  contributes one `.deb` per declared architecture, and every existing package
-  stays byte-identical. The final indices list every package the new bound
-  manifest declares. The published version is authoritative, so a catalog that
-  pins an older version never overwrites a newer published one.
+  rather than replacing anything. Every added package contributes one `.deb`
+  per declared architecture, and every existing package stays byte-identical.
+  The final indices list every package the new bound manifest declares. The
+  published version is authoritative, so a catalog that pins an older version
+  never overwrites a newer published one.
 - Only changed packages are rebuilt — each reviewed recipe determines its exact
   required targets (both architectures for the current catalog), so a later
   single-package update produces exactly its declared `.deb` files while the

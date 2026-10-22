@@ -91,7 +91,13 @@ class UvUpdateOverlayTest(unittest.TestCase):
                     ["uv_0.14.0-1_amd64.deb", "uv_0.14.0-1_arm64.deb"],
                 )
                 pool = {path.name: path.read_bytes() for path in (output / "pool").glob("*.deb")}
-                self.assertEqual(len(pool), 22)
+                expected_pool = {
+                    deb_filename(pkg, arch, plan.manifest)
+                    for pkg in plan.manifest.packages
+                    if pkg.name in uv_names
+                    for arch in pkg.targets
+                }
+                self.assertEqual(set(pool), expected_pool)
                 self.assertNotIn("uv_0.13.0-1_amd64.deb", pool)
                 for name, payload in published_pool.items():
                     if not name.startswith("uv_"):
