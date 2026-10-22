@@ -33,6 +33,27 @@ def job_block(text: str, job: str) -> str:
     return rest[: nxt.start() + 1] if nxt else rest
 
 
+def event_block(text: str) -> str:
+    """Slice the top-level `on:` trigger block from a workflow document."""
+    match = re.search(r"^on:\n(?P<body>(?:[ \t]+[^\n]*\n)+)", text, re.MULTILINE)
+    return match.group("body") if match else ""
+
+
+def event_entries(text: str) -> dict[str, list[str]]:
+    """Each event name under `on:` with its own body lines, stripped."""
+    entries: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in event_block(text).splitlines():
+        if not line.strip():
+            continue
+        if re.match(r"^  [A-Za-z0-9_-]+:\s*$", line):
+            current = line.strip().rstrip(":")
+            entries[current] = []
+        elif current is not None:
+            entries[current].append(line.strip())
+    return entries
+
+
 def install_packages(job: str) -> list[str]:
     """Package names from the job's apt-get install line, flags stripped."""
     for line in job.splitlines():
@@ -159,6 +180,33 @@ class CheckoutHistoryTest(unittest.TestCase):
             with self.subTest(workflow=workflow):
                 job = job_block(read_workflow(workflow), job_name)
                 self.assertNotRegex(job, r"fetch-depth:\s*0")
+
+
+class CiTriggerTest(unittest.TestCase):
+    """An ordinary branch push must not launch a second full CI run.
+
+    The pull-request event already covers every proposed change, so the push
+    trigger is limited to the default branch. A push without a branch filter
+    would run the whole suite on every branch again, which is exactly the
+    duplicate this pins shut.
+    """
+
+    def test_push_runs_on_main_only(self) -> None:
+        entries = event_entries(read_workflow("ci.yml"))
+        self.assertIn("push", entries)
+        branch_lines = [line for line in entries["push"] if line.startswith("branches:")]
+        self.assertEqual(len(branch_lines), 1, msg=f"push filters: {entries['push']}")
+        self.assertEqual(branch_lines[0], 'branches: ["main"]')
+
+    def test_push_has_no_other_branch_filter(self) -> None:
+        push = "\n".join(event_entries(read_workflow("ci.yml"))["push"])
+        for forbidden in ("branches-ignore", "paths", "paths-ignore", "tags"):
+            self.assertNotIn(forbidden, push)
+
+    def test_pull_request_and_manual_triggers_are_kept(self) -> None:
+        entries = event_entries(read_workflow("ci.yml"))
+        self.assertIn("pull_request", entries)
+        self.assertIn("workflow_dispatch", entries)
 
 
 class WorkflowStructureTest(unittest.TestCase):
