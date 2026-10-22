@@ -27,6 +27,8 @@ export interface PackageSummary {
   readonly name: string;
   readonly version: string;
   readonly architectures: readonly Architecture[];
+  /** Canonical UTC publication instant of the exact upstream release, if known. */
+  readonly upstreamPublishedAt?: string;
 }
 
 /** Why a trustworthy catalog could not be produced. */
@@ -67,6 +69,15 @@ const PACKAGE_NAME_PATTERN = /^[a-z0-9][a-z0-9+.-]{0,62}$/;
 
 /** Upstream version: a digit followed by the characters versions use. */
 const VERSION_PATTERN = /^[0-9][A-Za-z0-9.+~:-]{0,63}$/;
+
+/**
+ * Canonical upstream publication instant: UTC RFC3339 with second precision.
+ *
+ * The shape alone is not enough, because a shape-valid value such as
+ * `2026-02-31T00:00:00Z` names no real day. The value is parsed and required
+ * to round-trip, so a normalized rollover is refused instead of published.
+ */
+const PUBLISHED_AT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 
 /** Cached pointer for one bucket. */
 interface PointerEntry {
@@ -358,7 +369,12 @@ function parsePackages(document: unknown): readonly PackageSummary[] | null {
 /** Validates one manifest package entry. */
 function parsePackage(entry: unknown): PackageSummary | null {
   if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return null;
-  const record = entry as { name?: unknown; version?: unknown; targets?: unknown };
+  const record = entry as {
+    name?: unknown;
+    version?: unknown;
+    targets?: unknown;
+    upstream_published_at?: unknown;
+  };
 
   if (typeof record.name !== 'string' || !PACKAGE_NAME_PATTERN.test(record.name)) return null;
   if (typeof record.version !== 'string' || !VERSION_PATTERN.test(record.version)) return null;
@@ -381,7 +397,28 @@ function parsePackage(entry: unknown): PackageSummary | null {
   if (architectures.length === 0) return null;
   architectures.sort();
 
-  return { name: record.name, version: record.version, architectures };
+  const summary: PackageSummary = {
+    name: record.name,
+    version: record.version,
+    architectures,
+  };
+  // The field is optional, but a declared value must be a real canonical
+  // instant: an unreadable date is a broken document, never an unknown one.
+  if (record.upstream_published_at !== undefined) {
+    const publishedAt = parsePublishedAt(record.upstream_published_at);
+    if (publishedAt === null) return null;
+    return { ...summary, upstreamPublishedAt: publishedAt };
+  }
+  return summary;
+}
+
+/** Returns the canonical instant, or `null` when the value is not one. */
+function parsePublishedAt(value: unknown): string | null {
+  if (typeof value !== 'string' || !PUBLISHED_AT_PATTERN.test(value)) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  if (parsed.toISOString().slice(0, 19) + 'Z' !== value) return null;
+  return value;
 }
 
 /** The bucket binding, or null when the runtime has none. */

@@ -560,6 +560,89 @@ describe('root page content', () => {
     expect(html).not.toContain('ho"st.test');
     expect(html).toContain('ho&quot;st.test');
   });
+
+  it('shows the upstream release date as a UTC date and an unknown as an em dash', async () => {
+    const fixture = await createFixture();
+    const html = await (await fixture.call(plain('/?lang=en'))).text();
+
+    expect(html).toContain('Upstream release');
+    // alpha declares 2026-10-09T15:43:25Z; the cell shows the UTC day only and
+    // carries the full canonical value in the time element's dateTime.
+    expect(html).toContain('dateTime="2026-10-09T15:43:25Z">2026-10-09</time>');
+    // beta and gamma declare nothing, so they show the em dash.
+    expect(html.match(/>—<\/td>/g) ?? []).toHaveLength(2);
+    expect(html).not.toContain('1970-01-01');
+    expect(html).not.toContain('2026-02-31');
+  });
+
+  it('renders the same UTC date in both locales', async () => {
+    const fixture = await createFixture();
+    const en = await (await fixture.call(plain('/?lang=en'))).text();
+    const zh = await (await fixture.call(plain('/?lang=zh'))).text();
+    const cell = 'dateTime="2026-10-09T15:43:25Z">2026-10-09</time>';
+    expect(en).toContain(cell);
+    expect(zh).toContain(cell);
+    expect(zh).toContain('上游发布');
+  });
+
+  it('offers one section navigation landmark with the three anchors', async () => {
+    const fixture = await createFixture();
+    for (const [path, label] of [
+      ['/', 'aria-label="Sections"'],
+      ['/?lang=zh', 'aria-label="页面导航"'],
+    ] as const) {
+      const html = await (await fixture.call(plain(path))).text();
+      expect(html, path).toContain(label);
+      // Exactly one navigation landmark: no duplicated desktop/mobile render.
+      expect(html.match(/<nav /g) ?? [], path).toHaveLength(1);
+      for (const href of ['href="#catalog"', 'href="#steps"', 'href="#usage"']) {
+        expect(html, `${path} ${href}`).toContain(href);
+      }
+      // The anchors reach the real section identifiers and heading labels.
+      for (const id of ['id="catalog"', 'id="steps"', 'id="usage"']) {
+        expect(html, `${path} ${id}`).toContain(id);
+      }
+      expect(html, path).toContain('aria-labelledby="usage"');
+    }
+  });
+
+  it('states the fair-use budgets from the same constant in both locales', async () => {
+    const fixture = await createFixture();
+    const cases = [
+      ['/', 'Fair use', 'Index and metadata requests', 'All package file requests',
+        'One exact package file', 'requests/min',
+        'If you are temporarily limited, wait about a minute and try again.'],
+      ['/?lang=zh', '合理使用', '索引与元数据请求', '所有软件包文件请求',
+        '同一个软件包文件', '次请求/分钟', '如果暂时受限，请等待约 1 分钟后重试。'],
+    ] as const;
+
+    for (const [path, heading, index, downloads, perFile, unit, retry] of cases) {
+      const html = await (await fixture.call(plain(path))).text();
+      expect(html, path).toContain(heading);
+      expect(html, path).toContain(index);
+      expect(html, path).toContain(downloads);
+      expect(html, path).toContain(perFile);
+      expect(html, path).toContain(retry);
+      for (const limit of [120, 30, 6]) {
+        expect(html, `${path} ${limit}`).toContain(`${limit} ${unit}`);
+      }
+      // No gateway internals leak into the page.
+      for (const forbidden of ['namespace', 'per-colo', 'binding', 'CF-Connecting-IP']) {
+        expect(html, `${path} ${forbidden}`).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it('keeps the navigation and fair-use section when the catalog is unavailable', async () => {
+    const fixture = await createFixture();
+    fixture.bucket.entries.delete(`releases/${RELEASE_ID}/manifest.json`);
+    const html = await (await fixture.call(plain('/'))).text();
+    expect(html).toContain('aria-label="Sections"');
+    expect(html).toContain('href="#catalog"');
+    expect(html).toContain('href="#usage"');
+    expect(html).toContain('Fair use');
+    expect(html).toContain('120 requests/min');
+  });
 });
 
 describe('public browser assets', () => {

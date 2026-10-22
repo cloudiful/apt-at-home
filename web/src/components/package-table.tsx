@@ -17,7 +17,9 @@ import type { PackageSummary } from '@/lib/types'
  * The table is a real table with a caption and header scopes, and it scrolls
  * inside its own container on a narrow screen instead of widening the page.
  * The caption names the table for assistive technology and stays out of the
- * visible text, where the section heading already labels it.
+ * visible text, where the section heading already labels it. The upstream
+ * release instant is formatted from the canonical value, never from the
+ * browser's locale or clock, so the server and the browser agree.
  */
 export function PackageTable({
   packages,
@@ -42,6 +44,7 @@ export function PackageTable({
           <TableHead scope="col">{copy.catalog.packageColumn}</TableHead>
           <TableHead scope="col">{copy.catalog.versionColumn}</TableHead>
           <TableHead scope="col">{copy.catalog.architectureColumn}</TableHead>
+          <TableHead scope="col">{copy.catalog.publishedAtColumn}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -52,9 +55,19 @@ export function PackageTable({
             </TableHead>
             <TableCell>{pkg.version}</TableCell>
             <TableCell>{pkg.architectures.join(', ')}</TableCell>
+            <TableCell>{publishedAtCell(pkg, copy)}</TableCell>
           </TableRow>
         ))}
       </TableBody>
     </Table>
   )
+}
+
+/** The release date cell: the UTC day, or an em dash when it is unknown. */
+function publishedAtCell(pkg: PackageSummary, copy: HomepageCopy) {
+  const publishedAt = pkg.upstreamPublishedAt
+  if (publishedAt === undefined) {
+    return copy.catalog.publishedAtUnknown
+  }
+  return <time dateTime={publishedAt}>{publishedAt.slice(0, 10)}</time>
 }

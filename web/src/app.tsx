@@ -1,6 +1,8 @@
 import { AuthDetails, InstallSteps } from '@/components/install-steps'
+import { FairUse } from '@/components/fair-use'
 import { Header } from '@/components/header'
 import { PackageTable } from '@/components/package-table'
+import { SectionNav } from '@/components/section-nav'
 import { ThemeProvider } from '@/components/theme-provider'
 import { copyFor } from '@/lib/locales'
 import type { AppProps } from '@/lib/types'
@@ -20,22 +22,27 @@ export function App({ locale, origin, packages }: AppProps) {
     <ThemeProvider>
       <div className="page">
         <Header locale={locale} copy={copy} />
-        <main>
-          <section aria-labelledby="catalog">
-            <h2 id="catalog" className="mb-3 border-b pb-1.5 text-lg">
-              {copy.catalog.heading}
-            </h2>
-            <PackageTable packages={packages} copy={copy} />
-          </section>
+        <div className="layout">
+          <SectionNav copy={copy} />
+          <main>
+            <section aria-labelledby="catalog">
+              <h2 id="catalog" className="mb-3 border-b pb-1.5 text-lg">
+                {copy.catalog.heading}
+              </h2>
+              <PackageTable packages={packages} copy={copy} />
+            </section>
 
-          <section aria-labelledby="steps" className="mt-8">
-            <h2 id="steps" className="mb-3 border-b pb-1.5 text-lg">
-              {copy.stepsHeading}
-            </h2>
-            <InstallSteps origin={origin} packages={packages} copy={copy} />
-            <AuthDetails origin={origin} copy={copy} />
-          </section>
-        </main>
+            <section aria-labelledby="steps" className="mt-8">
+              <h2 id="steps" className="mb-3 border-b pb-1.5 text-lg">
+                {copy.stepsHeading}
+              </h2>
+              <InstallSteps origin={origin} packages={packages} copy={copy} />
+              <AuthDetails origin={origin} copy={copy} />
+            </section>
+
+            <FairUse copy={copy} />
+          </main>
+        </div>
       </div>
     </ThemeProvider>
   )

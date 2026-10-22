@@ -29,6 +29,7 @@ from .catalog import (
     source_for,
 )
 from .license_sources import check_license_sources, vendor_license_sources
+from .manifest import normalize_published_at
 from .upstream_assets import (
     asset_name,
     check_official_asset_url,
@@ -181,6 +182,7 @@ class Candidate:
     license_url: str
     targets: dict[str, dict[str, str]]
     extra_license_urls: tuple[str, ...] = ()
+    upstream_published_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -188,6 +190,16 @@ class ReleaseAsset:
     name: str
     url: str
     sha256: str
+
+
+@dataclass(frozen=True)
+class DiscoveredRelease:
+    """One upstream release with the publication instant its API reported."""
+
+    repo: str
+    tag: str
+    assets: dict[str, ReleaseAsset]
+    upstream_published_at: str = ""
 
 
 def _latest_exact_tag(client: HttpClient, package_name: str, repo: str) -> str:
@@ -257,10 +269,31 @@ def _computed_asset_digest(client: HttpClient, url: str) -> str:
     return hashlib.sha256(client.get_bytes(url, max_bytes=MAX_ASSET_BYTES)).hexdigest()
 
 
-def latest_stable(
-    client: HttpClient, package_name: str,
-) -> tuple[str, str, dict[str, ReleaseAsset]]:
-    """Return (repo, tag, per-arch assets) for the latest stable release.
+def _published_at(payload: dict[str, object], *, source: str) -> str:
+    """Return the canonical publication instant the release payload reports.
+
+    The instant belongs to the exact upstream release, never to the tag, the
+    local build, or the upload. A source that reports no instant leaves the
+    date unknown; a source that reports an unusable one stops discovery,
+    because a guessed date would be published as fact.
+    """
+    raw = payload.get("published_at")
+    if raw is None or raw == "":
+        return ""
+    if not isinstance(raw, str):
+        raise ValueError(
+            f"{source} release date for {payload.get('tag_name')!r} is not a string"
+        )
+    try:
+        return normalize_published_at(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"{source} release date for {payload.get('tag_name')!r} is unusable: {exc}"
+        ) from None
+
+
+def latest_release(client: HttpClient, package_name: str) -> DiscoveredRelease:
+    """Return the latest stable release with its publication instant.
 
     Packages with the reviewed exact-tag policy resolve the highest stable tag
     with their own prefix from the tag list and fetch that exact release;
@@ -325,7 +358,24 @@ def latest_stable(
             else _computed_asset_digest(client, url)
         )
         assets[arch] = ReleaseAsset(name=name, url=url, sha256=digest)
-    return repo, tag, assets
+    return DiscoveredRelease(
+        repo=repo,
+        tag=tag,
+        assets=assets,
+        upstream_published_at=_published_at(payload, source=source),
+    )
+
+
+def latest_stable(
+    client: HttpClient, package_name: str,
+) -> tuple[str, str, dict[str, ReleaseAsset]]:
+    """Return (repo, tag, per-arch assets) for the latest stable release.
+
+    The release itself is resolved by `latest_release`; this wrapper keeps the
+    three-value shape the rest of the tooling reads.
+    """
+    release = latest_release(client, package_name)
+    return release.repo, release.tag, release.assets
 
 
 def check_license(
@@ -347,7 +397,8 @@ def discover(
     vendored_license: bytes | None = None,
 ) -> Candidate:
     """Discover and fully validate the latest stable release of one package."""
-    repo, tag, assets = latest_stable(client, package_name)
+    release = latest_release(client, package_name)
+    repo, tag, assets = release.repo, release.tag, release.assets
     version = parse_stable_tag(package_name, tag)
     sources = vendor_license_sources(package_name)
     if vendored_license is not None:
@@ -362,6 +413,7 @@ def discover(
     return Candidate(
         name=package_name, repo=repo, tag=tag, version=version,
         license_url=primary_url, targets=targets, extra_license_urls=extra_urls,
+        upstream_published_at=release.upstream_published_at,
     )
 
 

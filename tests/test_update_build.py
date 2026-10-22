@@ -466,6 +466,37 @@ class TargetSelectionTest(unittest.TestCase):
                 continue
             self.assertEqual((pool / name).read_bytes(), payload, msg=name)
 
+    def test_a_metadata_only_plan_builds_nothing_and_publishes_the_manifest(self) -> None:
+        """A date-only plan rebuilds no .deb and still publishes the new manifest."""
+        baseline = copy.deepcopy(catalog_document())
+        for entry in baseline["packages"]:  # type: ignore[index]
+            entry.pop("upstream_published_at", None)
+        plan = build_plan(
+            baseline_release_id=RELEASE_ID,
+            baseline_data=baseline,
+            catalog_data=copy.deepcopy(catalog_document()),
+            candidates=_catalog_candidates(),
+        )
+        self.assertEqual(plan.changed, ())
+        self.assertTrue(plan.metadata_changed)
+        self.assertFalse(plan.is_noop)
+
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        pool, published = self._seed_pool(root, plan)
+        result, recorded = self._apply(plan, root)
+
+        # No package is selected, so the build set is empty and the pool keeps
+        # every published byte.
+        self.assertEqual(recorded["build_manifest"].packages, ())
+        self.assertEqual(result.debs, [])
+        release = recorded["build_release"]
+        self.assertEqual(release["packages"], ())
+        self.assertEqual(release["manifest_document"], plan.manifest_data)
+        entries = release["manifest_document"]["packages"]  # type: ignore[index]
+        self.assertTrue(all(entry.get("upstream_published_at") for entry in entries))
+        for name, payload in published.items():
+            self.assertEqual((pool / name).read_bytes(), payload, msg=name)
+
     def test_a_version_upgrade_rebuilds_every_target_of_that_package_only(self) -> None:
         plan = self._plan(candidates=_catalog_candidates(starship="1.27.0"))
         self.assertEqual(plan.changed, ("cargo-tauri", "starship"))

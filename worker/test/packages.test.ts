@@ -199,6 +199,56 @@ describe('published package catalog', () => {
     expect(result.reason).toBe('empty');
   });
 
+  it('accepts a canonical upstream release date and keeps it', async () => {
+    const bucket = publishedBucket();
+    const result = await loadCatalog(createEnv(bucket, '{}'));
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected a catalog');
+    const alpha = result.packages.find((pkg) => pkg.name === 'alpha');
+    expect(alpha?.upstreamPublishedAt).toBe('2026-10-09T15:43:25Z');
+    // A package that declares no date exposes none, never an invented one.
+    const beta = result.packages.find((pkg) => pkg.name === 'beta');
+    expect(beta?.upstreamPublishedAt).toBeUndefined();
+  });
+
+  it.each([
+    ['an offset instead of UTC', '2026-10-09T17:43:25+02:00'],
+    ['a missing seconds field', '2026-10-09T15:43Z'],
+    ['a fractional second', '2026-10-09T15:43:25.000Z'],
+    ['a lowercase z', '2026-10-09T15:43:25z'],
+    ['an impossible calendar day', '2026-02-31T00:00:00Z'],
+    ['a leap-second rollover', '2026-12-31T23:59:60Z'],
+    ['an empty string', ''],
+    ['a number', 1767926605],
+    ['null', null],
+  ])('refuses a declared upstream release date that is %s', async (_label, value) => {
+    const bucket = bucketWithDocument(
+      JSON.stringify({ release: RELEASE_ID }),
+      JSON.stringify({
+        packages: [
+          { name: 'alpha', version: '1.0.0', upstream_published_at: value, targets: { amd64: {} } },
+        ],
+      }),
+    );
+    const result = await loadCatalog(createEnv(bucket, '{}'));
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a failure');
+    expect(result.reason).toBe('invalid');
+  });
+
+  it('keeps a manifest without the optional field valid', async () => {
+    const bucket = bucketWithDocument(
+      JSON.stringify({ release: RELEASE_ID }),
+      JSON.stringify({
+        packages: [{ name: 'alpha', version: '1.0.0', targets: { amd64: {} } }],
+      }),
+    );
+    const result = await loadCatalog(createEnv(bucket, '{}'));
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected a catalog');
+    expect(result.packages[0]?.upstreamPublishedAt).toBeUndefined();
+  });
+
   it('rejects an unsupported architecture', async () => {
     const bucket = bucketWithDocument(
       JSON.stringify({ release: RELEASE_ID }),

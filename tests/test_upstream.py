@@ -16,7 +16,13 @@ import unittest
 from pathlib import Path
 
 from scripts.catalog import RECIPES, archive_member, asset_name, extra_license_paths_for
-from scripts.upstream import HttpError, UrllibClient, discover, latest_stable
+from scripts.upstream import (
+    HttpError,
+    UrllibClient,
+    discover,
+    latest_release,
+    latest_stable,
+)
 from scripts.upstream_assets import (
     license_url,
     release_download_url,
@@ -81,9 +87,10 @@ def release_payload(
     url_for_tag: str | None = None,
     draft: bool = False,
     prerelease: bool = False,
+    published_at: object = None,
 ) -> dict[str, object]:
     used = tag if url_for_tag is None else url_for_tag
-    return {
+    payload: dict[str, object] = {
         "tag_name": tag,
         "draft": draft,
         "prerelease": prerelease,
@@ -96,6 +103,9 @@ def release_payload(
             for name in names
         ],
     }
+    if published_at is not None:
+        payload["published_at"] = published_at
+    return payload
 
 
 def fixture_payloads(
@@ -103,6 +113,7 @@ def fixture_payloads(
     license_bytes: bytes | None = None,
     extra_license_bytes: dict[str, bytes] | None = None,
     payload: dict[str, object] | None = None,
+    published_at: object = None,
 ) -> dict[str, object]:
     """Serve the latest-release API and the tagged license for one package."""
     repo, default_tag, path, names = UPSTREAMS[package]
@@ -115,6 +126,7 @@ def fixture_payloads(
             asset_name(package, version, arch) for arch in ("amd64", "arm64")
         ),
         digest=digest,
+        published_at=published_at,
     )
     responses: dict[str, object] = {
         releases_api_url(repo): body,
@@ -244,6 +256,94 @@ class LatestStableTest(unittest.TestCase):
         })
         with self.assertRaises(HttpError):
             latest_stable(client, "zellij")
+
+
+class PublishedAtTest(unittest.TestCase):
+    """The upstream publication instant is extracted once and canonicalized."""
+
+    def _client(self, published_at: object) -> FakeHttp:
+        payload = release_payload(
+            ZELLIJ,
+            tag="v0.45.1",
+            names=tuple(UPSTREAMS["zellij"][3].values()),
+            published_at=published_at,
+        )
+        return FakeHttp(fixture_payloads("zellij", payload=payload))
+
+    def test_an_offset_aware_instant_is_normalized_to_utc_seconds(self) -> None:
+        release = latest_release(self._client("2026-10-16T04:09:08+02:00"), "zellij")
+        self.assertEqual(release.upstream_published_at, "2026-10-16T02:09:08Z")
+
+    def test_a_canonical_instant_passes_through_unchanged(self) -> None:
+        release = latest_release(self._client("2026-08-28T09:21:44Z"), "zellij")
+        self.assertEqual(release.upstream_published_at, "2026-08-28T09:21:44Z")
+
+    def test_a_missing_instant_is_unknown_and_not_invented(self) -> None:
+        release = latest_release(self._client(None), "zellij")
+        self.assertEqual(release.upstream_published_at, "")
+
+    def test_an_empty_instant_is_unknown(self) -> None:
+        release = latest_release(self._client(""), "zellij")
+        self.assertEqual(release.upstream_published_at, "")
+
+    def test_a_naive_or_unparseable_instant_stops_discovery(self) -> None:
+        for value in ["2026-08-28T09:21:44", "yesterday", "2026-13-01T00:00:00Z", 123]:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    latest_release(self._client(value), "zellij")
+
+    def test_discovery_carries_the_instant_onto_the_candidate(self) -> None:
+        client = FakeHttp(fixture_payloads("zellij", published_at="2026-08-28T09:21:44Z"))
+        candidate = discover(client, "zellij", vendored_license=vendored("zellij"))
+        self.assertEqual(candidate.upstream_published_at, "2026-08-28T09:21:44Z")
+
+    def test_discovery_leaves_the_instant_unknown_without_one(self) -> None:
+        client = FakeHttp(fixture_payloads("zellij"))
+        candidate = discover(client, "zellij", vendored_license=vendored("zellij"))
+        self.assertEqual(candidate.upstream_published_at, "")
+
+    def test_latest_stable_keeps_the_three_value_shape(self) -> None:
+        repo, tag, assets = latest_stable(
+            FakeHttp(fixture_payloads("zellij", published_at="2026-08-28T09:21:44Z")),
+            "zellij",
+        )
+        self.assertEqual((repo, tag), (ZELLIJ, "v0.45.1"))
+        self.assertEqual(sorted(assets), ["amd64", "arm64"])
+
+    def test_a_codeberg_instant_is_accepted_even_when_it_equals_created_at(self) -> None:
+        from scripts.upstream_assets import release_download_url
+
+        repo = "forgejo-contrib/forgejo-cli"
+        tag = "v0.7.0"
+        payload = {
+            "tag_name": tag,
+            "draft": False,
+            "prerelease": False,
+            "published_at": "2026-10-16T04:09:08+02:00",
+            "created_at": "2026-10-16T04:09:08+02:00",
+            "assets": [
+                {
+                    "name": asset_name("forgejo-cli", "0.7.0", arch),
+                    "browser_download_url": release_download_url(
+                        repo, tag, asset_name("forgejo-cli", "0.7.0", arch), source="codeberg"
+                    ),
+                }
+                for arch in ("amd64", "arm64")
+            ],
+        }
+        release = latest_release(
+            FakeHttp({
+                releases_api_url(repo, source="codeberg"): payload,
+                **{
+                    release_download_url(
+                        repo, tag, asset_name("forgejo-cli", "0.7.0", arch), source="codeberg"
+                    ): f"forgejo-cli-{arch}-bytes".encode()
+                    for arch in ("amd64", "arm64")
+                },
+            }),
+            "forgejo-cli",
+        )
+        self.assertEqual(release.upstream_published_at, "2026-10-16T02:09:08Z")
 
 
 class RecipeNamingTest(unittest.TestCase):

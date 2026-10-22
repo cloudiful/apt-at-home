@@ -228,6 +228,10 @@ the exact three steps, reproduced here for operators.
   denial in either case answers `429` with `Retry-After: 60`, `no-store`, and no
   authentication challenge. That delay is advisory, not the counter's exact
   reset.
+- The public landing page states these same budgets in its fair-use section: the
+  numbers come from one exported constant that a test binds to this file, so the
+  page cannot drift from the deployed limits. Edit the `simple` values above and
+  the page follows.
 - Only the Cloudflare-resolved `CF-Connecting-IP` header identifies a client.
   Cookies, `X-Forwarded-For`, and authorization values never select a bucket,
   and the address is neither persisted nor logged by the gateway. A request

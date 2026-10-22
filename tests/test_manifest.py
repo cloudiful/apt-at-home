@@ -8,6 +8,7 @@ from scripts.manifest import (
     expected_debs,
     expected_debs_for_arch,
     load_manifest,
+    normalize_published_at,
     parse_baseline_manifest,
     parse_manifest,
 )
@@ -389,6 +390,99 @@ class ManifestTest(unittest.TestCase):
             manifest.packages[0].targets["amd64"].depends,
             "libc6 (>= 2.18), libgcc-s1, zlib1g",
         )
+
+
+PINNED_PUBLISHED_AT = {
+    "zellij": "2026-08-28T09:21:44Z",
+    "starship": "2026-06-28T17:02:47Z",
+    "git-delta": "2026-10-04T19:38:10Z",
+    "rustfs-cli": "2026-09-17T03:09:31Z",
+    "sccache": "2026-09-14T11:22:38Z",
+    "neovim": "2026-10-09T15:43:25Z",
+    "bottom": "2026-08-27T08:24:00Z",
+    "uv": "2026-10-09T19:49:55Z",
+    "zoxide": "2026-07-04T12:41:16Z",
+    "kandev": "2026-10-04T21:52:30Z",
+    "cargo-tauri": "2026-10-14T18:54:05Z",
+    "bun": "2026-10-10T05:24:54Z",
+    "forgejo-cli": "2026-10-16T02:09:08Z",
+    "fd-find": "2026-08-26T07:59:09Z",
+    "fzf": "2026-10-11T02:39:32Z",
+    "tree-sitter-cli": "2026-10-08T17:43:54Z",
+    "chezmoi": "2026-10-20T15:14:47Z",
+}
+
+
+class PublishedAtManifestTest(unittest.TestCase):
+    """The optional upstream release instant stays optional, strict, and pinned."""
+
+    def test_every_committed_package_carries_its_verified_instant(self) -> None:
+        manifest = load_manifest()
+        by_name = {p.name: p for p in manifest.packages}
+        self.assertEqual(sorted(by_name), sorted(PINNED_PUBLISHED_AT))
+        for name, expected in PINNED_PUBLISHED_AT.items():
+            with self.subTest(package=name):
+                self.assertEqual(by_name[name].upstream_published_at, expected)
+
+    def test_the_pinned_values_only_add_the_date_and_keep_the_targets(self) -> None:
+        """The committed addition leaves every existing target field untouched."""
+        manifest = load_manifest()
+        for pkg in manifest.packages:
+            with self.subTest(package=pkg.name):
+                for arch, target in pkg.targets.items():
+                    self.assertEqual(
+                        target.url,
+                        release_download_url(
+                            RECIPES[pkg.name].repo,
+                            RECIPES[pkg.name].tag_prefix + pkg.version,
+                            asset_name(pkg.name, pkg.version, arch),
+                            source=RECIPES[pkg.name].source,
+                        ),
+                    )
+
+    def test_a_document_without_the_field_stays_valid(self) -> None:
+        data = _document()
+        for entry in data["packages"]:
+            entry.pop("upstream_published_at", None)
+        manifest = parse_manifest(data)
+        self.assertTrue(all(p.upstream_published_at == "" for p in manifest.packages))
+        # A baseline without the field is valid too, so an old release reads.
+        self.assertEqual(len(parse_baseline_manifest(data).packages), len(manifest.packages))
+
+    def test_a_canonical_value_is_accepted(self) -> None:
+        data = _document()
+        data["packages"][0]["upstream_published_at"] = "2026-01-02T03:04:05Z"
+        manifest = parse_manifest(data)
+        self.assertEqual(manifest.packages[0].upstream_published_at, "2026-01-02T03:04:05Z")
+
+    def test_a_declared_value_must_be_canonical_and_real(self) -> None:
+        bad = [
+            "",
+            None,
+            42,
+            "2026-01-02T03:04:05",
+            "2026-01-02T03:04:05+00:00",
+            "2026-01-02T03:04:05z",
+            "2026-01-02T03:04:05.000Z",
+            "2026-02-31T00:00:00Z",
+            "2026-13-01T00:00:00Z",
+            "not a time",
+        ]
+        for value in bad:
+            data = _document()
+            data["packages"][0]["upstream_published_at"] = value
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    parse_manifest(data)
+
+    def test_normalization_converts_an_offset_and_refuses_a_naive_value(self) -> None:
+        self.assertEqual(
+            normalize_published_at("2026-10-16T04:09:08+02:00"), "2026-10-16T02:09:08Z"
+        )
+        with self.assertRaises(ValueError):
+            normalize_published_at("2026-10-16T04:09:08")
+        with self.assertRaises(ValueError):
+            normalize_published_at("not a time")
 
 
 class HistoricalBaselineTest(unittest.TestCase):

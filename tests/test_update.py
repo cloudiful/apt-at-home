@@ -37,7 +37,9 @@ def committed_sha(package_name: str, arch: str) -> str:
     return pkg.targets[arch].sha256
 
 
-def candidate(name: str, version: str, *, sha: str | None = None) -> Candidate:
+def candidate(
+    name: str, version: str, *, sha: str | None = None, published_at: str = ""
+) -> Candidate:
     """Build a candidate whose URLs satisfy the same official-origin rules as discovery.
 
     By default each architecture keeps the digest the committed manifest already
@@ -66,6 +68,7 @@ def candidate(name: str, version: str, *, sha: str | None = None) -> Candidate:
             for arch in arches_for(name)
         },
         extra_license_urls=license_urls_for(name, tag)[1:],
+        upstream_published_at=published_at,
     )
 
 
@@ -351,6 +354,273 @@ class PlanTest(unittest.TestCase):
                 candidates=_catalog_candidates(starship="1.27.0"),
             )
         self.assertIn("license", str(ctx.exception))
+
+
+class PublishedAtPlanTest(unittest.TestCase):
+    """The publication instant follows the version and can backfill alone."""
+
+    STARSHIP_AT = "2026-06-28T17:02:47Z"
+
+    def _baseline(self) -> dict[str, object]:
+        return baseline_document()
+
+    def _entry(self, plan, name: str) -> dict[str, object]:
+        return next(
+            entry for entry in plan.manifest_data["packages"]  # type: ignore[index]
+            if entry.get("name") == name
+        )
+
+    def test_an_unchanged_version_keeps_its_published_date(self) -> None:
+        plan = build_plan(
+            baseline_release_id="r",
+            baseline_data=self._baseline(),
+            catalog_data=baseline_document(),
+            candidates=candidate_pairs(baseline_document()),
+        )
+        self.assertTrue(plan.is_noop)
+        self.assertEqual(plan.metadata_changed, ())
+        self.assertEqual(self._entry(plan, "starship")["upstream_published_at"], self.STARSHIP_AT)
+
+    def test_a_missing_published_date_is_backfilled_as_metadata_only(self) -> None:
+        baseline = self._baseline()
+        for entry in baseline["packages"]:  # type: ignore[index]
+            entry.pop("upstream_published_at", None)
+        candidates = candidate_pairs(baseline)
+        candidates["starship"] = candidate(
+            "starship", "1.26.0", published_at=self.STARSHIP_AT
+        )
+        plan = build_plan(
+            baseline_release_id="r",
+            baseline_data=baseline,
+            catalog_data=baseline,
+            candidates=candidates,
+        )
+        self.assertEqual(plan.changed, ())
+        self.assertEqual(plan.metadata_changed, ("starship",))
+        self.assertFalse(plan.is_noop)
+        self.assertEqual(self._entry(plan, "starship")["upstream_published_at"], self.STARSHIP_AT)
+
+    def test_a_same_version_date_mismatch_is_refused(self) -> None:
+        candidates = candidate_pairs(baseline_document())
+        candidates["starship"] = candidate(
+            "starship", "1.26.0", published_at="2026-07-01T00:00:00Z"
+        )
+        with self.assertRaises(ValueError) as ctx:
+            build_plan(
+                baseline_release_id="r",
+                baseline_data=self._baseline(),
+                catalog_data=baseline_document(),
+                candidates=candidates,
+            )
+        self.assertIn("immutable", str(ctx.exception))
+
+    def test_a_version_bump_takes_the_candidate_date(self) -> None:
+        candidates = _catalog_candidates(starship="1.27.0")
+        candidates["starship"] = candidate(
+            "starship", "1.27.0", published_at="2027-01-02T03:04:05Z"
+        )
+        plan = build_plan(
+            baseline_release_id="r",
+            baseline_data=self._baseline(),
+            catalog_data=catalog_document(),
+            candidates=candidates,
+        )
+        self.assertIn("starship", plan.changed)
+        self.assertEqual(
+            self._entry(plan, "starship")["upstream_published_at"], "2027-01-02T03:04:05Z"
+        )
+
+    def test_a_version_bump_with_an_unknown_candidate_date_drops_the_old_one(self) -> None:
+        candidates = _catalog_candidates(starship="1.27.0")
+        plan = build_plan(
+            baseline_release_id="r",
+            baseline_data=self._baseline(),
+            catalog_data=catalog_document(),
+            candidates=candidates,
+        )
+        self.assertNotIn("upstream_published_at", self._entry(plan, "starship"))
+
+    def test_a_known_published_date_is_never_erased_by_an_unknown_candidate(self) -> None:
+        plan = build_plan(
+            baseline_release_id="r",
+            baseline_data=baseline_document(),
+            catalog_data=baseline_document(),
+            candidates=candidate_pairs(baseline_document()),
+        )
+        self.assertTrue(plan.is_noop)
+        self.assertEqual(self._entry(plan, "starship")["upstream_published_at"], self.STARSHIP_AT)
+
+    def _replaced_catalog_date(self, name: str, value: str) -> dict[str, object]:
+        """The published catalog shape with one package's pinned instant replaced."""
+        catalog = baseline_document()
+        entry = next(e for e in catalog["packages"] if e["name"] == name)  # type: ignore[index]
+        entry["upstream_published_at"] = value
+        return catalog
+
+    def test_a_pinned_catalog_date_that_disagrees_with_the_baseline_is_refused(self) -> None:
+        """Three known inputs: baseline precedence must not hide the conflict.
+
+        The baseline keeps its own instant through the merge, so without an
+        explicit same-version check across all three inputs the disagreeing
+        pinned catalog value would be dropped unread.
+        """
+        catalog = self._replaced_catalog_date("starship", "2026-07-01T00:00:00Z")
+        candidates = candidate_pairs(baseline_document())
+        candidates["starship"] = candidate(
+            "starship", "1.26.0", published_at=self.STARSHIP_AT
+        )
+        with self.assertRaises(ValueError) as ctx:
+            build_plan(
+                baseline_release_id="r",
+                baseline_data=self._baseline(),
+                catalog_data=catalog,
+                candidates=candidates,
+            )
+        message = str(ctx.exception)
+        self.assertIn("conflicting upstream release dates", message)
+        self.assertIn(self.STARSHIP_AT, message)
+        self.assertIn("2026-07-01T00:00:00Z", message)
+
+    def test_a_pinned_catalog_date_that_disagrees_with_the_candidate_is_refused(self) -> None:
+        baseline = self._baseline()
+        for entry in baseline["packages"]:  # type: ignore[index]
+            if entry.get("name") == "starship":
+                entry.pop("upstream_published_at", None)
+        catalog = self._replaced_catalog_date("starship", "2026-07-01T00:00:00Z")
+        candidates = candidate_pairs(baseline_document())
+        candidates["starship"] = candidate(
+            "starship", "1.26.0", published_at="2026-07-02T00:00:00Z"
+        )
+        with self.assertRaisesRegex(ValueError, "conflicting upstream release dates"):
+            build_plan(
+                baseline_release_id="r",
+                baseline_data=baseline,
+                catalog_data=catalog,
+                candidates=candidates,
+            )
+
+    def test_three_agreeing_known_dates_stay_a_noop_with_baseline_precedence(self) -> None:
+        catalog = self._replaced_catalog_date("starship", self.STARSHIP_AT)
+        candidates = candidate_pairs(baseline_document())
+        candidates["starship"] = candidate(
+            "starship", "1.26.0", published_at=self.STARSHIP_AT
+        )
+        plan = build_plan(
+            baseline_release_id="r",
+            baseline_data=self._baseline(),
+            catalog_data=catalog,
+            candidates=candidates,
+        )
+        self.assertTrue(plan.is_noop)
+        self.assertEqual(plan.metadata_changed, ())
+        self.assertEqual(self._entry(plan, "starship")["upstream_published_at"], self.STARSHIP_AT)
+
+    def _pinned_date(self, name: str) -> str:
+        catalog = catalog_document()
+        return next(
+            str(e.get("upstream_published_at"))
+            for e in catalog["packages"]  # type: ignore[index]
+            if e.get("name") == name
+        )
+
+    def _older_baseline(self, name: str, version: str, *, published_at: str = "") -> dict[str, object]:
+        """The committed catalog with one package left behind at an older version."""
+        from tests.helpers import move_package_version
+
+        baseline = catalog_document()
+        entry = next(e for e in baseline["packages"] if e.get("name") == name)  # type: ignore[index]
+        move_package_version(entry, version)
+        if published_at:
+            entry["upstream_published_at"] = published_at
+        else:
+            entry.pop("upstream_published_at", None)
+        return baseline
+
+    def test_an_older_baseline_never_hides_a_catalog_candidate_conflict(self) -> None:
+        """The baseline lags behind, so only catalog and candidate share a version."""
+        pinned = self._pinned_date("zellij")
+        candidates = _catalog_candidates()
+        candidates["zellij"] = candidate("zellij", "0.45.1", published_at="2026-08-29T09:21:44Z")
+        with self.assertRaises(ValueError) as ctx:
+            build_plan(
+                baseline_release_id="r",
+                baseline_data=self._older_baseline("zellij", "0.45.0"),
+                catalog_data=catalog_document(),
+                candidates=candidates,
+            )
+        message = str(ctx.exception)
+        self.assertIn("conflicting upstream release dates", message)
+        self.assertIn(pinned, message)
+        self.assertIn("2026-08-29T09:21:44Z", message)
+
+    def test_an_agreeing_older_baseline_upgrade_is_accepted(self) -> None:
+        pinned = self._pinned_date("zellij")
+        candidates = _catalog_candidates()
+        candidates["zellij"] = candidate("zellij", "0.45.1", published_at=pinned)
+        plan = build_plan(
+            baseline_release_id="r",
+            baseline_data=self._older_baseline("zellij", "0.45.0"),
+            catalog_data=catalog_document(),
+            candidates=candidates,
+        )
+        self.assertIn("zellij", plan.changed)
+        self.assertEqual(self._entry(plan, "zellij")["upstream_published_at"], pinned)
+
+    def test_dates_of_different_versions_never_conflict(self) -> None:
+        """A lagging baseline's own date belongs to its own, older release."""
+        pinned = self._pinned_date("zellij")
+        candidates = _catalog_candidates()
+        candidates["zellij"] = candidate("zellij", "0.45.1", published_at=pinned)
+        plan = build_plan(
+            baseline_release_id="r",
+            baseline_data=self._older_baseline(
+                "zellij", "0.45.0", published_at="2026-01-01T00:00:00Z"
+            ),
+            catalog_data=catalog_document(),
+            candidates=candidates,
+        )
+        self.assertIn("zellij", plan.changed)
+        self.assertEqual(self._entry(plan, "zellij")["upstream_published_at"], pinned)
+
+    def test_an_unknown_candidate_never_conflicts_with_the_pinned_date(self) -> None:
+        pinned = self._pinned_date("zellij")
+        baseline = catalog_document()
+        next(
+            e for e in baseline["packages"]  # type: ignore[index]
+            if e.get("name") == "zellij"
+        ).pop("upstream_published_at", None)
+        plan = build_plan(
+            baseline_release_id="r",
+            baseline_data=baseline,
+            catalog_data=catalog_document(),
+            candidates=_catalog_candidates(),
+        )
+        self.assertEqual(plan.changed, ())
+        self.assertIn("zellij", plan.metadata_changed)
+        self.assertEqual(self._entry(plan, "zellij")["upstream_published_at"], pinned)
+
+    def test_a_bootstrap_plan_refuses_a_candidate_conflicting_with_the_pinned_date(self) -> None:
+        candidates = _catalog_candidates()
+        candidates["zellij"] = candidate("zellij", "0.45.1", published_at="2026-08-29T09:21:44Z")
+        with self.assertRaisesRegex(ValueError, "conflicting upstream release dates"):
+            build_plan(
+                baseline_release_id=None,
+                baseline_data=catalog_document(),
+                catalog_data=catalog_document(),
+                candidates=candidates,
+            )
+
+    def test_a_bootstrap_plan_accepts_agreeing_dates(self) -> None:
+        candidates = _catalog_candidates()
+        candidates["zellij"] = candidate("zellij", "0.45.1", published_at=self._pinned_date("zellij"))
+        plan = build_plan(
+            baseline_release_id=None,
+            baseline_data=catalog_document(),
+            catalog_data=catalog_document(),
+            candidates=candidates,
+        )
+        self.assertTrue(plan.is_bootstrap)
+        self.assertEqual(self._entry(plan, "zellij")["upstream_published_at"], self._pinned_date("zellij"))
 
 
 class SameVersionArchitectureExpansionTest(unittest.TestCase):

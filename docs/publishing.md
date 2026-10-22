@@ -168,6 +168,21 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   publishing. The new target is built and added to the indices while every
   published target of that version keeps its pinned metadata and pool bytes; a
   baseline that already carried the target is never rewritten.
+- Every package may carry an optional `upstream_published_at`: the publication
+  instant of the exact upstream release, normalized to UTC seconds
+  (`YYYY-MM-DDTHH:MM:SSZ`). It is the release's own publication time, never the
+  tag, the local build, the upload, or `SOURCE_DATE_EPOCH`. A source that
+  reports no instant leaves the field out and the page shows an em dash; a
+  value that is naive, unparseable, or not a real calendar date stops the run
+  instead of guessing. Older manifests and baselines without the field stay
+  valid.
+- A version bump carries the candidate's instant and drops the old one when the
+  candidate knows none. An unchanged version keeps the instant it already
+  published; a candidate that reports a different instant for the same version
+  is a republished release and stops the run. A published release that has no
+  instant yet is backfilled from the candidate as a metadata-only change: the
+  release is republished with the new bound manifest while no `.deb` is rebuilt
+  and the pool stays byte-identical.
 - A no-op is a success: nothing is built, signed, uploaded, or pointed at, and
   a second run against the new baseline finds nothing left to do.
 - Versions only move forward. A downgrade, a missing architecture asset, a
@@ -181,6 +196,12 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   is acceptable.
 - **Same version, different digest.** A republished tag is treated as a mutable
   release, not an unchanged one, and the run stops.
+- **Same version, different publication instant.** A release was published at one
+  instant. Any two of the committed catalog, the published baseline, and the
+  discovered candidate that know an instant for the same version must agree; a
+  disagreement is a republished release and stops the run. Instants of
+  different versions are unrelated, so an older baseline never constrains the
+  version the catalog and the candidate describe.
 - **A Codeberg archive is unreachable or renamed.** Codeberg publishes no
   release digest, so its archives are hashed from the official download; an
   outage, a renamed asset, or changed bytes stops the run instead of skipping

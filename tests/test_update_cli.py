@@ -19,6 +19,58 @@ from tests.test_update import _catalog_candidates, candidate, catalog_document
 from tests.test_update_build import Store, _export_private_key, _stub_archive
 
 
+class MetadataOnlyReportTest(unittest.TestCase):
+    """A date-only plan is reported as metadata without claiming a rebuild."""
+
+    def _report_text(self, plan) -> str:
+        import contextlib
+        import io
+
+        from scripts import update as update_module
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            update_module._report(plan)
+        return out.getvalue()
+
+    def test_a_metadata_only_plan_names_metadata_not_a_rebuild(self) -> None:
+        from scripts.manifest import default_manifest_path
+        from scripts.release_manifest import load_manifest_data
+        from scripts.update_plan import build_plan
+
+        baseline = load_manifest_data(default_manifest_path())
+        for entry in baseline["packages"]:  # type: ignore[index]
+            entry.pop("upstream_published_at", None)
+        plan = build_plan(
+            baseline_release_id="published",
+            baseline_data=baseline,
+            catalog_data=catalog_document(),
+            candidates=_catalog_candidates(),
+        )
+        self.assertEqual(plan.changed, ())
+        self.assertTrue(plan.metadata_changed)
+
+        text = self._report_text(plan)
+        self.assertIn("metadata only: ", text)
+        self.assertNotIn("would rebuild:", text)
+        self.assertNotIn("no updates", text)
+
+    def test_an_unchanged_plan_still_reports_no_updates(self) -> None:
+        from scripts.update_plan import build_plan
+
+        plan = build_plan(
+            baseline_release_id="published",
+            baseline_data=catalog_document(),
+            catalog_data=catalog_document(),
+            candidates=_catalog_candidates(),
+        )
+        self.assertTrue(plan.is_noop)
+        text = self._report_text(plan)
+        self.assertIn("no updates", text)
+        self.assertNotIn("would rebuild:", text)
+        self.assertNotIn("metadata only: ", text)
+
+
 class UvUpdateOverlayTest(unittest.TestCase):
     def test_a_uv_upgrade_preserves_uvx_and_both_license_urls(self) -> None:
         manifest = catalog_document()

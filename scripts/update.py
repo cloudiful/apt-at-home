@@ -81,8 +81,11 @@ def _report(plan: UpdatePlan) -> None:
         print(f"adding to the catalog: {', '.join(plan.added)}")
     if plan.is_noop:
         print("no updates: every package is already at its latest stable release")
-    else:
+        return
+    if plan.changed:
         print(f"would rebuild: {', '.join(plan.changed)}")
+    if plan.metadata_changed:
+        print(f"metadata only: {', '.join(plan.metadata_changed)}")
 
 
 def build_parser() -> argparse.ArgumentParser:

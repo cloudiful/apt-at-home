@@ -226,4 +226,90 @@
     min-width: 0;
     padding-left: 0.25rem;
   }
+  /*
+   * The section navigation is one landmark for both breakpoints: a compact
+   * shortcut bar above the content on a narrow screen, and a sticky column
+   * beside it once there is room. Sections carry a scroll margin so an anchor
+   * never lands under the compact bar.
+   */
+  .layout {
+    display: block;
+  }
+  .section-nav {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    margin: 0 -1.5rem 0.5rem;
+    padding: 0.25rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--background);
+  }
+  .section-nav-list {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 1rem;
+    margin: 0;
+    padding: 0.25rem 0;
+    overflow-x: auto;
+    list-style: none;
+    font-size: 0.9rem;
+  }
+  .section-nav-link {
+    color: var(--muted-foreground);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .section-nav-link:hover {
+    color: var(--foreground);
+    text-decoration: underline;
+  }
+  main h2[id] {
+    scroll-margin-top: 4rem;
+  }
+  .fair-use-limits {
+    margin: 0.75rem 0;
+  }
+  .fair-use-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+    padding: 0.25rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .fair-use-row dt {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+  .fair-use-row dd {
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted-foreground);
+  }
+}
+
+@media (min-width: 60rem) {
+  .page {
+    max-width: 58rem;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 11rem minmax(0, 1fr);
+    gap: 2rem;
+    align-items: start;
+  }
+  .section-nav {
+    top: 1.5rem;
+    margin: 0;
+    padding: 0;
+    border-bottom: 0;
+    background: none;
+  }
+  .section-nav-list {
+    flex-direction: column;
+    gap: 0.5rem;
+    overflow-x: visible;
+  }
+  main h2[id] {
+    scroll-margin-top: 1.5rem;
+  }
 }

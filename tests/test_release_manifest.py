@@ -162,6 +162,33 @@ class RemoteBindingTest(unittest.TestCase):
             )
             self.assertEqual(from_file.read_bytes(), from_memory.read_bytes())
 
+    def test_the_bound_artifact_round_trips_the_publication_instants(self) -> None:
+        """The signed manifest copy keeps every canonical date byte for byte."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = write_manifest_artifact(
+                source=SOURCE, destination=root / MANIFEST_NAME
+            )
+            data, manifest = validated_document(artifact)
+            bound = {
+                entry["name"]: entry.get("upstream_published_at")
+                for entry in data["packages"]  # type: ignore[index]
+            }
+            self.assertTrue(bound)
+            self.assertTrue(all(value for value in bound.values()))
+            for pkg in manifest.packages:
+                with self.subTest(package=pkg.name):
+                    self.assertEqual(bound[pkg.name], pkg.upstream_published_at)
+                    self.assertEqual(
+                        pkg.upstream_published_at,
+                        data["packages"][  # type: ignore[index]
+                            [entry["name"] for entry in data["packages"]].index(pkg.name)
+                        ]["upstream_published_at"],
+                    )
+            # The binding still covers exactly these bytes.
+            fields = dict(manifest_binding_fields(artifact))
+            self.assertEqual(fields[SHA256_FIELD], sha256_bytes(artifact.read_bytes()))
+
 
 if __name__ == "__main__":
     unittest.main()

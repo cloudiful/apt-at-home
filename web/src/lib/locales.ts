@@ -15,7 +15,34 @@ export interface CatalogCopy {
   readonly packageColumn: string
   readonly versionColumn: string
   readonly architectureColumn: string
+  readonly publishedAtColumn: string
+  readonly publishedAtUnknown: string
   readonly unavailable: string
+}
+
+/** One in-page section shortcut. */
+export interface NavSectionCopy {
+  readonly href: string
+  readonly label: string
+}
+
+/** Prose for the section navigation. */
+export interface NavCopy {
+  readonly label: string
+  readonly sections: readonly NavSectionCopy[]
+}
+
+/** Prose for the fair-use section; the numbers come from REQUEST_LIMITS. */
+export interface FairUseCopy {
+  readonly heading: string
+  readonly summary: string
+  readonly limits: {
+    readonly index: string
+    readonly downloads: string
+    readonly perFile: string
+  }
+  readonly unit: string
+  readonly retry: string
 }
 
 /** Prose for the signing-key step; the command block is shared. */
@@ -64,10 +91,25 @@ export interface HomepageCopy {
   readonly themeToDark: string
   readonly githubLabel: string
   readonly githubStarsAlt: string
+  readonly nav: NavCopy
   readonly catalog: CatalogCopy
   readonly stepsHeading: string
   readonly steps: InstallStepsCopy
+  readonly fairUse: FairUseCopy
 }
+
+/**
+ * The request budgets the fair-use section states, in requests per minute.
+ *
+ * The numbers live in one place so the bilingual copy cannot drift from the
+ * deployed limits; the deployment test binds them to the Worker's own
+ * rate-limit bindings.
+ */
+export const REQUEST_LIMITS = {
+  index: 120,
+  downloads: 30,
+  perFile: 6,
+} as const
 
 const en: HomepageCopy = {
   documentTitle: 'apt-at-home',
@@ -80,12 +122,22 @@ const en: HomepageCopy = {
   themeToDark: 'Switch to the dark theme',
   githubLabel: 'apt-at-home on GitHub',
   githubStarsAlt: 'GitHub stars',
+  nav: {
+    label: 'Sections',
+    sections: [
+      { href: '#catalog', label: 'Packages' },
+      { href: '#steps', label: 'Install' },
+      { href: '#usage', label: 'Usage limits' },
+    ],
+  },
   catalog: {
     heading: 'Published packages',
     caption: 'Published packages',
     packageColumn: 'Package',
     versionColumn: 'Upstream version',
     architectureColumn: 'Architecture',
+    publishedAtColumn: 'Upstream release',
+    publishedAtUnknown: '—',
     unavailable: 'The published package list is unavailable right now.',
   },
   stepsHeading: 'Installation steps',
@@ -113,6 +165,18 @@ const en: HomepageCopy = {
         'With the gate enabled, the key fetch uses your device name and prompts for the password instead of the anonymous command above:',
     },
   },
+  fairUse: {
+    heading: 'Fair use',
+    summary:
+      'Requests are budgeted per shared public IP per minute, so a shared network, office, or proxy draws on the same budget.',
+    limits: {
+      index: 'Index and metadata requests',
+      downloads: 'All package file requests',
+      perFile: 'One exact package file',
+    },
+    unit: 'requests/min',
+    retry: 'If you are temporarily limited, wait about a minute and try again.',
+  },
 }
 
 const zh: HomepageCopy = {
@@ -126,12 +190,22 @@ const zh: HomepageCopy = {
   themeToDark: '切换到深色主题',
   githubLabel: 'apt-at-home 的 GitHub 仓库',
   githubStarsAlt: 'GitHub 星标数',
+  nav: {
+    label: '页面导航',
+    sections: [
+      { href: '#catalog', label: '软件包' },
+      { href: '#steps', label: '安装' },
+      { href: '#usage', label: '使用限制' },
+    ],
+  },
   catalog: {
     heading: '已发布的软件包',
     caption: '已发布的软件包',
     packageColumn: '软件包',
     versionColumn: '上游版本',
     architectureColumn: '架构',
+    publishedAtColumn: '上游发布',
+    publishedAtUnknown: '—',
     unavailable: '当前无法获取已发布的软件包列表。',
   },
   stepsHeading: '安装步骤',
@@ -158,6 +232,18 @@ const zh: HomepageCopy = {
       curlNote:
         '启用校验后，获取公钥改用设备名并提示输入密码，而非上面的匿名命令：',
     },
+  },
+  fairUse: {
+    heading: '合理使用',
+    summary:
+      '请求按共享公网 IP 每分钟计量，共享网络、办公室或代理使用同一配额。',
+    limits: {
+      index: '索引与元数据请求',
+      downloads: '所有软件包文件请求',
+      perFile: '同一个软件包文件',
+    },
+    unit: '次请求/分钟',
+    retry: '如果暂时受限，请等待约 1 分钟后重试。',
   },
 }
 

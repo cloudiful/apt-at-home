@@ -15,6 +15,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
 
@@ -41,6 +42,8 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _ARCHES = ("amd64", "arm64")
 _VERSION = re.compile(r"^[0-9][A-Za-z0-9.+~:-]*$")
 _BINARY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
+# The canonical upstream publication instant: UTC RFC3339 with second precision.
+_PUBLISHED_AT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 # The two reviewed release hosts, in their fixed download form. Credentials, a
 # port, a query, and a fragment are all outside the shape, and the canonical
 # check below binds every URL to its own recipe, release, and asset.
@@ -83,6 +86,7 @@ class Package:
     copyright: str
     license_url: str
     targets: dict[str, ArchTarget]
+    upstream_published_at: str = ""
     extra_license_urls: tuple[str, ...] = ()
     conflicts: str = ""
     replaces: str = ""
@@ -99,6 +103,50 @@ class Manifest:
 
 def default_manifest_path() -> Path:
     return Path(__file__).resolve().parent.parent / "packaging" / "manifest.json"
+
+
+def normalize_published_at(value: str) -> str:
+    """Return the canonical UTC form of an upstream publication instant.
+
+    The canonical form is RFC3339 UTC with second precision. An offset-aware
+    ISO8601 instant is converted to UTC, so a source that publishes a local
+    time yields the same instant as every other source. A naive or unparseable
+    value is refused: an instant without a timezone is not a publication time,
+    and guessing one would publish a wrong date.
+    """
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        raise ValueError(
+            f"upstream release date is not an ISO8601 instant: {value!r}"
+        ) from None
+    if moment.tzinfo is None:
+        raise ValueError(f"upstream release date carries no timezone: {value!r}")
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def check_published_at(value: object, *, name: str) -> str:
+    """Return the canonical publication instant a document declares.
+
+    A declared value must already be canonical: a nonempty UTC timestamp with
+    a real calendar date and time. Anything else is refused, so a malformed or
+    impossible date can never reach the published page.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            f"upstream_published_at must be a nonempty string for {name}"
+        )
+    if not _PUBLISHED_AT.match(value):
+        raise ValueError(
+            f"upstream_published_at for {name} is not a canonical UTC timestamp: {value}"
+        )
+    try:
+        datetime.fromisoformat(value)
+    except ValueError:
+        raise ValueError(
+            f"upstream_published_at for {name} is not a real date and time: {value}"
+        ) from None
+    return value
 
 
 def load_manifest(path: Path | None = None) -> Manifest:
@@ -342,6 +390,9 @@ def parse_package(raw: object) -> Package:
         )
     conflicts = check_relations(f"conflicts for {name}", str(raw.get("conflicts", "") or ""))
     replaces = check_relations(f"replaces for {name}", str(raw.get("replaces", "") or ""))
+    published_at = ""
+    if "upstream_published_at" in raw:
+        published_at = check_published_at(raw["upstream_published_at"], name=name)
     return Package(
         name=name,
         version=version,
@@ -351,6 +402,7 @@ def parse_package(raw: object) -> Package:
         copyright=str(raw["copyright"]),
         license_url=str(raw["license_url"]),
         targets=targets,
+        upstream_published_at=published_at,
         extra_license_urls=extra_urls,
         conflicts=conflicts,
         replaces=replaces,

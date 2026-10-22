@@ -15,6 +15,7 @@
       "license": "MIT",
       "copyright": "Copyright (c) 2020 Zellij contributors",
       "license_url": "https://raw.githubusercontent.com/zellij-org/zellij/v0.45.1/LICENSE.md",
+      "upstream_published_at": "2026-08-28T09:21:44Z",
       "targets": {
         "amd64": {
           "url": "https://github.com/zellij-org/zellij/releases/download/v0.45.1/zellij-x86_64-unknown-linux-musl.tar.gz",
@@ -38,6 +39,7 @@
       "license": "ISC",
       "copyright": "Copyright (c) 2019-2022, Starship Contributors",
       "license_url": "https://raw.githubusercontent.com/starship/starship/v1.26.0/LICENSE",
+      "upstream_published_at": "2026-06-28T17:02:47Z",
       "targets": {
         "amd64": {
           "url": "https://github.com/starship/starship/releases/download/v1.26.0/starship-x86_64-unknown-linux-musl.tar.gz",
@@ -61,6 +63,7 @@
       "license": "MIT",
       "copyright": "Copyright 2020 Dan Davison",
       "license_url": "https://raw.githubusercontent.com/dandavison/delta/0.20.1/LICENSE",
+      "upstream_published_at": "2026-10-04T19:38:10Z",
       "targets": {
         "amd64": {
           "url": "https://github.com/dandavison/delta/releases/download/0.20.1/delta-0.20.1-x86_64-unknown-linux-musl.tar.gz",
@@ -85,6 +88,7 @@
       "license": "MIT",
       "copyright": "Copyright (c) 2026 RustFS Contributors",
       "license_url": "https://raw.githubusercontent.com/rustfs/cli/v0.1.36/LICENSE-MIT",
+      "upstream_published_at": "2026-09-17T03:09:31Z",
       "targets": {
         "amd64": {
           "url": "https://github.com/rustfs/cli/releases/download/v0.1.36/rustfs-cli-linux-amd64-v0.1.36.tar.gz",
@@ -108,6 +112,7 @@
       "license": "Apache-2.0",
       "copyright": "The sccache contributors; see upstream source for individual copyright notices.",
       "license_url": "https://raw.githubusercontent.com/mozilla/sccache/v0.18.0/LICENSE",
+      "upstream_published_at": "2026-09-14T11:22:38Z",
       "targets": {
         "amd64": {
           "url": "https://github.com/mozilla/sccache/releases/download/v0.18.0/sccache-v0.18.0-x86_64-unknown-linux-musl.tar.gz",
@@ -131,6 +136,7 @@
       "license": "Neovim",
       "copyright": "Copyright Neovim contributors. All rights reserved.",
       "license_url": "https://raw.githubusercontent.com/neovim/neovim/v0.12.6/LICENSE.txt",
+      "upstream_published_at": "2026-10-09T15:43:25Z",
       "conflicts": "neovim-runtime",
       "replaces": "neovim-runtime",
       "targets": {
@@ -158,6 +164,7 @@
       "license": "MIT",
       "copyright": "Copyright (c) 2019 Clement Tsang",
       "license_url": "https://raw.githubusercontent.com/ClementTsang/bottom/0.14.9/LICENSE",
+      "upstream_published_at": "2026-08-27T08:24:00Z",
       "targets": {
         "amd64": {
           "url": "https://github.com/ClementTsang/bottom/releases/download/0.14.9/bottom_x86_64-unknown-linux-gnu.tar.gz",
@@ -183,6 +190,7 @@
       "license": "MIT OR Apache-2.0",
       "copyright": "Copyright (c) 2025 Astral Software Inc.",
       "license_url": "https://raw.githubusercontent.com/astral-sh/uv/0.13.0/LICENSE-MIT",
+      "upstream_published_at": "2026-10-09T19:49:55Z",
       "extra_license_urls": [
         "https://raw.githubusercontent.com/astral-sh/uv/0.13.0/LICENSE-APACHE"
       ],
@@ -217,6 +225,7 @@
       "license": "MIT",
       "copyright": "Copyright 2020 Ajeet D'Souza",
       "license_url": "https://raw.githubusercontent.com/ajeetdsouza/zoxide/v0.10.0/LICENSE",
+      "upstream_published_at": "2026-07-04T12:41:16Z",
       "targets": {
         "amd64": {
           "url": "https://github.com/ajeetdsouza/zoxide/releases/download/v0.10.0/zoxide-0.10.0-x86_64-unknown-linux-musl.tar.gz",
@@ -240,6 +249,7 @@
       "license": "AGPL-3.0-or-later",
       "copyright": "Copyright Kandev contributors",
       "license_url": "https://raw.githubusercontent.com/kdlbs/kandev/v0.97.0/LICENSE",
+      "upstream_published_at": "2026-10-04T21:52:30Z",
       "targets": {
         "amd64": {
           "url": "https://github.com/kdlbs/kandev/releases/download/v0.97.0/kandev-linux-x64.tar.gz",
@@ -265,6 +275,7 @@
       "license": "MIT OR Apache-2.0",
       "copyright": "Copyright (c) Tauri Programme within The Commons Conservancy and the tauri-cli contributors",
       "license_url": "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.3/LICENSE-MIT",
+      "upstream_published_at": "2026-10-14T18:54:05Z",
       "extra_license_urls": [
         "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.12.3/LICENSE-APACHE-2.0"
       ],
@@ -293,6 +304,7 @@
       "license": "MIT AND LGPL-2.1-or-later",
       "copyright": "Copyright Bun contributors",
       "license_url": "https://raw.githubusercontent.com/oven-sh/bun/bun-v1.4.3/LICENSE.md",
+      "upstream_published_at": "2026-10-10T05:24:54Z",
       "targets": {
         "amd64": {
           "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-linux-x64.zip",
@@ -318,6 +330,7 @@
       "license": "MIT OR Apache-2.0",
       "copyright": "Copyright (c) 2026 The forgejo-cli developers",
       "license_url": "https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/v0.7.0/LICENSE-MIT",
+      "upstream_published_at": "2026-10-16T02:09:08Z",
       "extra_license_urls": [
         "https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/v0.7.0/LICENSE-APACHE"
       ],
@@ -346,6 +359,7 @@
       "license": "MIT OR Apache-2.0",
       "copyright": "Copyright (c) 2017-present The fd developers",
       "license_url": "https://raw.githubusercontent.com/sharkdp/fd/v10.5.0/LICENSE-MIT",
+      "upstream_published_at": "2026-08-26T07:59:09Z",
       "extra_license_urls": [
         "https://raw.githubusercontent.com/sharkdp/fd/v10.5.0/LICENSE-APACHE"
       ],
@@ -372,6 +386,7 @@
       "license": "MIT",
       "copyright": "Copyright (c) 2013-2026 Junegunn Choi",
       "license_url": "https://raw.githubusercontent.com/junegunn/fzf/v0.74.5/LICENSE",
+      "upstream_published_at": "2026-10-11T02:39:32Z",
       "targets": {
         "amd64": {
           "url": "https://github.com/junegunn/fzf/releases/download/v0.74.5/fzf-0.74.5-linux_amd64.tar.gz",
@@ -395,6 +410,7 @@
       "license": "MIT",
       "copyright": "Copyright (c) 2018 Max Brunsfeld",
       "license_url": "https://raw.githubusercontent.com/tree-sitter/tree-sitter/v0.27.1/LICENSE",
+      "upstream_published_at": "2026-10-08T17:43:54Z",
       "targets": {
         "amd64": {
           "url": "https://github.com/tree-sitter/tree-sitter/releases/download/v0.27.1/tree-sitter-cli-linux-x64.zip",
@@ -420,6 +436,7 @@
       "license": "MIT",
       "copyright": "Copyright (c) 2018 Tom Payne",
       "license_url": "https://raw.githubusercontent.com/twpayne/chezmoi/v2.73.3/LICENSE",
+      "upstream_published_at": "2026-10-20T15:14:47Z",
       "targets": {
         "amd64": {
           "url": "https://github.com/twpayne/chezmoi/releases/download/v2.73.3/chezmoi_2.73.3_linux_amd64.tar.gz",

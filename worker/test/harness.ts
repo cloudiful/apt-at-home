@@ -28,11 +28,17 @@ export interface SyntheticPackage {
   readonly name: string;
   readonly version: string;
   readonly architectures: readonly ('amd64' | 'arm64')[];
+  readonly upstreamPublishedAt?: string;
 }
 
 /** The catalog the fixture release publishes. */
 export const SYNTHETIC_PACKAGES: readonly SyntheticPackage[] = [
-  { name: 'alpha', version: '1.2.3', architectures: ['amd64', 'arm64'] },
+  {
+    name: 'alpha',
+    version: '1.2.3',
+    architectures: ['amd64', 'arm64'],
+    upstreamPublishedAt: '2026-10-09T15:43:25Z',
+  },
   { name: 'beta', version: '0.4.0', architectures: ['amd64'] },
   { name: 'gamma', version: '2.0.0', architectures: ['arm64'] },
 ];
@@ -50,6 +56,9 @@ export function manifestJson(packages: readonly SyntheticPackage[]): string {
     packages: packages.map((pkg) => ({
       name: pkg.name,
       version: pkg.version,
+      ...(pkg.upstreamPublishedAt === undefined
+        ? {}
+        : { upstream_published_at: pkg.upstreamPublishedAt }),
       targets: Object.fromEntries(
         pkg.architectures.map((architecture) => [
           architecture,

@@ -17,6 +17,8 @@ export interface PackageSummary {
   readonly name: string
   readonly version: string
   readonly architectures: readonly string[]
+  /** Canonical UTC publication instant of the exact upstream release, if known. */
+  readonly upstreamPublishedAt?: string
 }
 
 /** Everything the page renders from. */

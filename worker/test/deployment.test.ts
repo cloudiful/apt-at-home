@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import wranglerSource from '../wrangler.jsonc?raw';
+import { REQUEST_LIMITS } from '../../web/src/lib/locales.js';
 
 interface WranglerConfig {
   readonly name: string;
@@ -105,6 +106,17 @@ describe('deployment base config', () => {
     const namespaces = limits.map((entry) => entry.namespace_id);
     expect(new Set(namespaces).size).toBe(3);
     expect(namespaces).toEqual(['100101', '100102', '100103']);
+  });
+
+  it('states the same budgets the page publishes', () => {
+    const limits = readConfig().ratelimits ?? [];
+    const byName = new Map(limits.map((entry) => [entry.name, entry.simple]));
+    expect(byName.get('INDEX_LIMITER')?.limit).toBe(REQUEST_LIMITS.index);
+    expect(byName.get('DOWNLOAD_LIMITER')?.limit).toBe(REQUEST_LIMITS.downloads);
+    expect(byName.get('PACKAGE_LIMITER')?.limit).toBe(REQUEST_LIMITS.perFile);
+    for (const entry of limits) {
+      expect(entry.simple.period).toBe(60);
+    }
   });
 
   it('names the worker entry point that the gateway exports', () => {
