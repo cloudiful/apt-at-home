@@ -606,6 +606,22 @@ describe('root page content', () => {
     }
   });
 
+  it('keeps the wide-screen layout hooks and the document order', async () => {
+    const fixture = await createFixture();
+    const html = await (await fixture.call(plain('/'))).text();
+
+    expect(html).toContain('<main class="page-content">');
+    expect(html).toContain('class="catalog-section"');
+    expect(html).toContain('class="steps-section mt-8"');
+    expect(html).toContain('class="fair-use-section mt-8"');
+    // The document order stays catalog, guide, usage: the wide grid places
+    // the sections with CSS, never by reordering the markup.
+    expect(html.indexOf('id="catalog"')).toBeLessThan(html.indexOf('id="steps"'));
+    expect(html.indexOf('id="steps"')).toBeLessThan(html.indexOf('id="usage"'));
+    // The page still carries exactly one navigation landmark.
+    expect(html.match(/<nav /g) ?? []).toHaveLength(1);
+  });
+
   it('states the fair-use budgets from the same constant in both locales', async () => {
     const fixture = await createFixture();
     const cases = [
@@ -816,6 +832,29 @@ describe('the theme markers', () => {
     expect(classList.list).toEqual(['dark']);
     markTheme({ classList }, 'light');
     expect(classList.list).toEqual(['light']);
+  });
+});
+
+describe('the wide-screen layout', () => {
+  const styles = readSource('../../web/src/styles/app.css');
+
+  it('bounds the page and puts the guide beside the catalog on a wide screen', () => {
+    // The page grows with the window and stops at 1440 pixels.
+    expect(styles).toMatch(/\.page \{[^}]*max-width: 90rem;/);
+    // The shell gains its navigation column at 64rem, the content grid at 90rem.
+    expect(styles).toMatch(/@media \(min-width: 64rem\)/);
+    expect(styles).toMatch(/@media \(min-width: 90rem\)/);
+    expect(styles).toMatch(/grid-template-columns: 10rem minmax\(0, 1fr\)/);
+    expect(styles).toMatch(/grid-template-columns: minmax\(0, 1fr\) 25rem/);
+    // The fair-use note spans both columns underneath them.
+    expect(styles).toMatch(/\.fair-use-section \{[^}]*grid-column: 1 \/ -1;/);
+  });
+
+  it('carries the wide layout into the stylesheet the browser loads', () => {
+    const built = readSource(`../dist/assets/${CLIENT_STYLE}`);
+    // The minifier may write the range either way round.
+    expect(built).toMatch(/@media \((?:min-width: ?|width>=)64rem\)/);
+    expect(built).toMatch(/@media \((?:min-width: ?|width>=)90rem\)/);
   });
 });
 

@@ -17,7 +17,7 @@ export function FairUse({ copy }: { copy: HomepageCopy }) {
   ]
 
   return (
-    <section aria-labelledby="usage" className="mt-8">
+    <section aria-labelledby="usage" className="fair-use-section mt-8">
       <h2 id="usage" className="mb-3 border-b pb-1.5 text-lg">
         {copy.fairUse.heading}
       </h2>

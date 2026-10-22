@@ -24,15 +24,15 @@ export function App({ locale, origin, packages }: AppProps) {
         <Header locale={locale} copy={copy} />
         <div className="layout">
           <SectionNav copy={copy} />
-          <main>
-            <section aria-labelledby="catalog">
+          <main className="page-content">
+            <section aria-labelledby="catalog" className="catalog-section">
               <h2 id="catalog" className="mb-3 border-b pb-1.5 text-lg">
                 {copy.catalog.heading}
               </h2>
               <PackageTable packages={packages} copy={copy} />
             </section>
 
-            <section aria-labelledby="steps" className="mt-8">
+            <section aria-labelledby="steps" className="steps-section mt-8">
               <h2 id="steps" className="mb-3 border-b pb-1.5 text-lg">
                 {copy.stepsHeading}
               </h2>

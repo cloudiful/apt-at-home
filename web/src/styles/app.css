@@ -180,7 +180,7 @@
 @layer components {
   .page {
     margin: 0 auto;
-    max-width: 44rem;
+    max-width: 90rem;
     padding: 1.5rem;
   }
   .code-block {
@@ -266,6 +266,18 @@
   main h2[id] {
     scroll-margin-top: 4rem;
   }
+  /*
+   * The content column carries the catalog and the installation guide, and on
+   * a wide screen it becomes a two-column grid. Its items may shrink below
+   * their content width, so the table and the command blocks scroll inside
+   * themselves instead of widening the page.
+   */
+  .page-content {
+    min-width: 0;
+  }
+  .page-content > * {
+    min-width: 0;
+  }
   .fair-use-limits {
     margin: 0.75rem 0;
   }
@@ -287,14 +299,11 @@
   }
 }
 
-@media (min-width: 60rem) {
-  .page {
-    max-width: 58rem;
-  }
+@media (min-width: 64rem) {
   .layout {
     display: grid;
-    grid-template-columns: 11rem minmax(0, 1fr);
-    gap: 2rem;
+    grid-template-columns: 10rem minmax(0, 1fr);
+    gap: 1.5rem;
     align-items: start;
   }
   .section-nav {
@@ -311,5 +320,33 @@
   }
   main h2[id] {
     scroll-margin-top: 1.5rem;
+  }
+}
+
+/*
+ * A wide screen has room for the catalog and the installation guide next to
+ * each other. The grid keeps the document order — the catalog first, the
+ * guide second — and the fair-use note spans both columns underneath it.
+ */
+@media (min-width: 90rem) {
+  .page-content {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 25rem;
+    gap: 1.5rem;
+    align-items: start;
+  }
+  .catalog-section {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .steps-section {
+    grid-column: 2;
+    grid-row: 1;
+    margin-top: 0;
+  }
+  .fair-use-section {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    margin-top: 0.5rem;
   }
 }
