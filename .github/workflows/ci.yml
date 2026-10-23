@@ -40,6 +40,8 @@ jobs:
     name: Python build and verify gates
     runs-on: ubuntu-24.04
     container: debian:13
+    outputs:
+      heavy: ${{ steps.scope.outputs.heavy != 'false' }}
     env:
       UV_DEFAULT_INDEX: https://pypi.org/simple
     steps:
@@ -51,6 +53,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Detect package validation scope
+        id: scope
+        env:
+          CI_EVENT_NAME: ${{ github.event_name }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CI_HEAD_SHA: ${{ github.sha }}
+        run: python3 -m scripts.ci_scope >> "$GITHUB_OUTPUT"
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
       - name: Verify portable public dependency lock
         run: uv lock --check
@@ -60,6 +70,7 @@ jobs:
       - run: uv run python -m scripts.repo --help
       - run: uv run python -m scripts.update --help
       - name: Generate ephemeral signing key (CI only, isolated homedir)
+        if: steps.scope.outputs.heavy != 'false'
         run: |
           set -euo pipefail
           GNUPGHOME="$(mktemp -d)"
@@ -81,9 +92,12 @@ jobs:
           echo "APT_SIGNING_KEY_FILE=$RUNNER_TEMP/ci-private.asc" >>"$GITHUB_ENV"
           echo "GNUPGHOME_ISOLATED=$GNUPGHOME" >>"$GITHUB_ENV"
       - name: Build the repository
+        if: steps.scope.outputs.heavy != 'false'
         run: uv run python -m scripts.repo build --output dist/repo
-      - run: uv run python -m scripts.repo verify --output dist/repo
+      - if: steps.scope.outputs.heavy != 'false'
+        run: uv run python -m scripts.repo verify --output dist/repo
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.scope.outputs.heavy != 'false'
         with:
           name: apt-repo-amd64
           path: dist/repo
@@ -93,6 +107,7 @@ jobs:
     name: Debian 13 binary smoke (amd64)
     runs-on: ubuntu-24.04
     needs: [python]
+    if: needs.python.outputs.heavy == 'true'
     container: debian:13
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -125,6 +140,7 @@ jobs:
     name: Debian 13 binary smoke (arm64, native runner)
     runs-on: ubuntu-24.04-arm
     needs: [python]
+    if: needs.python.outputs.heavy == 'true'
     container: debian:13
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -156,6 +172,7 @@ jobs:
     name: Debian 13 APT upgrade from distro neovim (amd64)
     runs-on: ubuntu-24.04
     needs: [python]
+    if: needs.python.outputs.heavy == 'true'
     container: debian:13
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -183,6 +200,7 @@ jobs:
     name: Debian 13 APT upgrade from distro neovim (arm64, native runner)
     runs-on: ubuntu-24.04-arm
     needs: [python]
+    if: needs.python.outputs.heavy == 'true'
     container: debian:13
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

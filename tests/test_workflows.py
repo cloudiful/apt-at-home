@@ -76,6 +76,15 @@ def step_order(job: str) -> list[str]:
     return steps
 
 
+def step_blocks(job: str) -> list[str]:
+    """Slice a job's top-level steps at their six-space list markers."""
+    starts = [match.start() for match in re.finditer(r"^      - ", job, re.MULTILINE)]
+    return [
+        job[start : starts[index + 1] if index + 1 < len(starts) else len(job)]
+        for index, start in enumerate(starts)
+    ]
+
+
 # Bash array syntax that a POSIX `sh` cannot parse.
 BASH_ARRAY = re.compile(r"args=\(|\$\{args\[@\]\}")
 
@@ -132,14 +141,17 @@ class BashArrayShellTest(unittest.TestCase):
 # The two jobs that run the complete Python suite.
 FULL_SUITE_JOBS = (("ci.yml", "python"), ("publish.yml", "publish"))
 
+# Jobs that consume the package artifact and run the native smoke/upgrade checks.
+NATIVE_JOBS = ("smoke-amd64", "smoke-arm64", "upgrade-amd64", "upgrade-arm64")
+
 
 class CheckoutHistoryTest(unittest.TestCase):
-    """A checkout that cannot read git, or cannot read the base, fails the suite.
+    """CI needs the full history its scope diff reads; publish stays shallow.
 
-    `actions/checkout` silently falls back to a REST tarball when git is missing,
-    and a shallow clone omits the base commit the suite compares against. Both
-    failures look the same from here — a suite step that cannot find the
-    repository — so they are asserted structurally instead.
+    `actions/checkout` silently falls back to a REST tarball when git is missing.
+    The CI gate compares the event's base commit with the checked-out head, so
+    that job must fetch the history the diff reads. The production publish job
+    keeps its shallow checkout because it never compares base history.
     """
 
     def test_git_is_installed_before_this_repository_is_checked_out(self) -> None:
@@ -174,12 +186,100 @@ class CheckoutHistoryTest(unittest.TestCase):
             self.assertNotIn("source-plan", text)
             self.assertNotIn("SOURCE_ROUTING", text)
 
-    def test_shallow_checkout_is_sufficient_without_source_history(self) -> None:
-        """Normal shallow checkouts remain; no job requires full history."""
-        for workflow, job_name in FULL_SUITE_JOBS:
-            with self.subTest(workflow=workflow):
-                job = job_block(read_workflow(workflow), job_name)
-                self.assertNotRegex(job, r"fetch-depth:\s*0")
+    def test_ci_checkout_fetches_full_history(self) -> None:
+        job = job_block(read_workflow("ci.yml"), "python")
+        self.assertIn("fetch-depth: 0", job)
+
+    def test_publish_checkout_stays_shallow(self) -> None:
+        job = job_block(read_workflow("publish.yml"), "publish")
+        self.assertNotIn("fetch-depth: 0", job)
+
+
+class CiTierSelectionTest(unittest.TestCase):
+    """Cheap gates always run; package validation follows a fail-closed scope."""
+
+    def setUp(self) -> None:
+        self.ci = read_workflow("ci.yml")
+        self.python = job_block(self.ci, "python")
+
+    def python_step(self, marker: str) -> str:
+        for block in step_blocks(self.python):
+            if marker in block:
+                return block
+        self.fail(f"no python step contains {marker!r}")
+
+    def test_detector_runs_after_checkout(self) -> None:
+        steps = step_blocks(self.python)
+        checkout = next(i for i, step in enumerate(steps) if "actions/checkout" in step)
+        detect = next(i for i, step in enumerate(steps) if "python3 -m scripts.ci_scope" in step)
+        self.assertGreater(detect, checkout)
+        self.assertIn("id: scope", steps[detect])
+        self.assertIn('>> "$GITHUB_OUTPUT"', steps[detect])
+
+    def test_detector_binds_event_through_env(self) -> None:
+        detect = self.python_step("python3 -m scripts.ci_scope")
+        self.assertIn("CI_EVENT_NAME: ${{ github.event_name }}", detect)
+        self.assertIn(
+            "CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}",
+            detect,
+        )
+        self.assertIn("CI_HEAD_SHA: ${{ github.sha }}", detect)
+        run_line = next(
+            line
+            for line in detect.splitlines()
+            if line.strip().startswith("run:") and "scripts.ci_scope" in line
+        )
+        self.assertNotIn("${{", run_line)
+
+    def test_python_job_exposes_fail_closed_output(self) -> None:
+        self.assertIn(
+            "outputs:\n      heavy: ${{ steps.scope.outputs.heavy != 'false' }}",
+            self.python,
+        )
+
+    def test_exactly_four_expensive_steps_are_gated(self) -> None:
+        gated = [
+            block
+            for block in step_blocks(self.python)
+            if "steps.scope.outputs.heavy != 'false'" in block
+        ]
+        self.assertEqual(len(gated), 4)
+        for marker in (
+            "Generate ephemeral signing key",
+            "Build the repository",
+            "scripts.repo verify",
+            "actions/upload-artifact",
+        ):
+            self.assertIn(marker, self.python_step(marker))
+
+    def test_cheap_steps_have_no_condition(self) -> None:
+        for marker in (
+            "uv lock --check",
+            "uv sync --frozen",
+            "Run the full Python suite",
+            "scripts.repo --help",
+            "scripts.update --help",
+        ):
+            with self.subTest(marker=marker):
+                self.assertNotIn("if:", self.python_step(marker))
+
+    def test_native_jobs_require_the_heavy_output(self) -> None:
+        for job in NATIVE_JOBS:
+            with self.subTest(job=job):
+                block = job_block(self.ci, job)
+                self.assertIn("needs: [python]", block)
+                self.assertIn("if: needs.python.outputs.heavy == 'true'", block)
+
+    def test_worker_job_is_unconditional(self) -> None:
+        worker = job_block(self.ci, "worker")
+        self.assertNotIn("if:", worker)
+        self.assertIn("bun run test", worker)
+
+    def test_workflow_triggers_have_no_path_filters(self) -> None:
+        for event, lines in event_entries(self.ci).items():
+            for line in lines:
+                with self.subTest(event=event, line=line):
+                    self.assertNotIn("paths", line)
 
 
 class CiTriggerTest(unittest.TestCase):
