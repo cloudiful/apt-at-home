@@ -65,7 +65,7 @@ UPSTREAMS = {
         },
     ),
     "bun": (
-        "oven-sh/bun", "bun-v1.4.3", "LICENSE.md",
+        "oven-sh/bun", "bun-v1.4.4", "LICENSE.md",
         {
             "amd64": "bun-linux-x64.zip",
             "arm64": "bun-linux-aarch64.zip",
