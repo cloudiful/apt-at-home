@@ -17,6 +17,9 @@ export interface CatalogCopy {
   readonly architectureColumn: string
   readonly publishedAtColumn: string
   readonly publishedAtUnknown: string
+  readonly publishedToday: string
+  readonly publishedYesterday: string
+  readonly publishedDaysAgo: string
   readonly unavailable: string
 }
 
@@ -146,6 +149,9 @@ const en: HomepageCopy = {
     architectureColumn: 'Architecture',
     publishedAtColumn: 'Upstream release',
     publishedAtUnknown: '—',
+    publishedToday: 'Today',
+    publishedYesterday: 'Yesterday',
+    publishedDaysAgo: '{days} days ago',
     unavailable: 'The published package list is unavailable right now.',
   },
   stepsHeading: 'Installation steps',
@@ -219,6 +225,9 @@ const zh: HomepageCopy = {
     architectureColumn: '架构',
     publishedAtColumn: '上游发布',
     publishedAtUnknown: '—',
+    publishedToday: '今天',
+    publishedYesterday: '昨天',
+    publishedDaysAgo: '{days} 天前',
     unavailable: '当前无法获取已发布的软件包列表。',
   },
   stepsHeading: '安装步骤',

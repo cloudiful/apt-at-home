@@ -63,9 +63,10 @@ export async function handleRoot(request: Request, env: Env): Promise<Response |
   if (url.pathname !== '/') return null;
   if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed();
   const locale = resolveLocale(url.searchParams.get('lang'), request.headers.get('accept-language'));
+  const now = new Date().toISOString();
   const catalog = await loadCatalog(env);
   const packages: readonly PackageSummary[] | null = catalog.ok ? catalog.packages : null;
-  return homepageResponse(request.method, url.origin, locale, packages);
+  return homepageResponse(request.method, url.origin, locale, packages, now);
 }
 
 function homepageResponse(
@@ -73,8 +74,9 @@ function homepageResponse(
   origin: string,
   locale: Locale,
   packages: readonly PackageSummary[] | null,
+  now: string,
 ): Response {
-  const document = renderHomepageDocument({ locale, origin, packages });
+  const document = renderHomepageDocument({ locale, origin, packages, now });
   const length = encoder.encode(document).byteLength;
   const headers = {
     'Content-Type': 'text/html; charset=utf-8',

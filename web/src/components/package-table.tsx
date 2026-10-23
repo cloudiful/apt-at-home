@@ -8,6 +8,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import type { HomepageCopy } from '@/lib/locales'
+import { exactReleaseDate, relativeReleaseLabel } from '@/lib/release-date'
 import type { PackageSummary } from '@/lib/types'
 
 /**
@@ -24,9 +25,11 @@ import type { PackageSummary } from '@/lib/types'
 export function PackageTable({
   packages,
   copy,
+  now,
 }: {
   packages: readonly PackageSummary[] | null
   copy: HomepageCopy
+  now: string
 }) {
   if (packages === null || packages.length === 0) {
     return (
@@ -55,7 +58,7 @@ export function PackageTable({
             </TableHead>
             <TableCell>{pkg.version}</TableCell>
             <TableCell>{pkg.architectures.join(', ')}</TableCell>
-            <TableCell>{publishedAtCell(pkg, copy)}</TableCell>
+            <TableCell>{publishedAtCell(pkg, copy, now)}</TableCell>
           </TableRow>
         ))}
       </TableBody>
@@ -63,11 +66,22 @@ export function PackageTable({
   )
 }
 
-/** The release date cell: the UTC day, or an em dash when it is unknown. */
-function publishedAtCell(pkg: PackageSummary, copy: HomepageCopy) {
+/** The release date cell: relative age first, then the UTC day, or an em dash when unknown. */
+function publishedAtCell(pkg: PackageSummary, copy: HomepageCopy, now: string) {
   const publishedAt = pkg.upstreamPublishedAt
   if (publishedAt === undefined) {
     return copy.catalog.publishedAtUnknown
   }
-  return <time dateTime={publishedAt}>{publishedAt.slice(0, 10)}</time>
+  const exact = exactReleaseDate(publishedAt)
+  const relative = relativeReleaseLabel(publishedAt, now, copy.catalog)
+  if (relative === null) {
+    return <time dateTime={publishedAt}>{exact}</time>
+  }
+  return (
+    <span className="release-date">
+      <span>{relative}</span>
+      <span aria-hidden="true"> · </span>
+      <time dateTime={publishedAt}>{exact}</time>
+    </span>
+  )
 }

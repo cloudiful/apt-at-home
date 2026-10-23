@@ -29,4 +29,6 @@ export interface AppProps {
   readonly origin: string
   /** Published catalog, or null when it could not be read. */
   readonly packages: readonly PackageSummary[] | null
+  /** Request-time UTC clock reference, serialized for deterministic SSR/hydration. */
+  readonly now: string
 }

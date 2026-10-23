@@ -199,8 +199,8 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 0.85rem;
     line-height: 1.5;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
+    white-space: pre;
+    overflow-x: auto;
   }
   .code-block code {
     font-family: inherit;
@@ -208,7 +208,8 @@
   }
   /*
    * A command keeps its canonical text for copying while the visible block
-   * wraps, so even the long complete install command never widens the page.
+   * scrolls horizontally, so even the long complete install command never
+   * widens the page.
    */
   .command-block {
     display: grid;
@@ -291,16 +292,22 @@
     scroll-margin-top: 4rem;
   }
   /*
-   * The content column carries the catalog and the installation guide, and on
-   * a wide screen it becomes a two-column grid. Its items may shrink below
-   * their content width, so the table and the command blocks scroll inside
-   * themselves instead of widening the page.
+   * The content column stacks the catalog, the installation guide and the
+   * fair-use note in document order within a readable width. Its items may
+   * shrink below their content width, so the table and the command blocks
+   * scroll inside themselves instead of widening the page.
    */
   .page-content {
     min-width: 0;
+    max-width: 60rem;
   }
   .page-content > * {
     min-width: 0;
+  }
+  .release-date {
+    display: inline-flex;
+    flex-wrap: wrap;
+    column-gap: 0.375rem;
   }
   .fair-use-limits {
     margin: 0.75rem 0;
@@ -344,33 +351,5 @@
   }
   main h2[id] {
     scroll-margin-top: 1.5rem;
-  }
-}
-
-/*
- * A wide screen has room for the catalog and the installation guide next to
- * each other. The grid keeps the document order — the catalog first, the
- * guide second — and the fair-use note spans both columns underneath it.
- */
-@media (min-width: 90rem) {
-  .page-content {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 25rem;
-    gap: 1.5rem;
-    align-items: start;
-  }
-  .catalog-section {
-    grid-column: 1;
-    grid-row: 1;
-  }
-  .steps-section {
-    grid-column: 2;
-    grid-row: 1;
-    margin-top: 0;
-  }
-  .fair-use-section {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    margin-top: 0.5rem;
   }
 }
