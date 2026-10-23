@@ -108,6 +108,11 @@ class GlabRecipeTest(unittest.TestCase):
         self.assertEqual(pkg.version, VERSION)
         self.assertEqual(pkg.license, "MIT")
         self.assertEqual(pkg.homepage, "https://gitlab.com/gitlab-org/cli")
+        self.assertEqual(
+            pkg.copyright,
+            "Copyright (c) 2022-present GitLab Inc.; "
+            "Copyright (c) 2019 GitHub Inc.",
+        )
         self.assertEqual(pkg.license_url, LICENSE_URL)
         self.assertEqual(pkg.upstream_published_at, "2026-10-20T12:17:01Z")
         self.assertEqual(set(pkg.targets), {"amd64", "arm64"})
@@ -147,8 +152,23 @@ class GlabPackageTest(unittest.TestCase):
             control = (stage / "DEBIAN" / "control").read_text()
             self.assertNotIn("Depends:", control)
             copyright = (stage / "usr" / "share" / "doc" / "glab" / "copyright").read_text()
-            self.assertIn("License: MIT", copyright)
-            self.assertIn("Copyright (c) 2022-present GitLab Inc.", copyright)
+            copyright_lines = copyright.splitlines()
+            copyright_fields = [
+                line for line in copyright_lines if line.startswith("Copyright:")
+            ]
+            self.assertEqual(len(copyright_fields), 1)
+            self.assertEqual(
+                copyright_fields[0],
+                "Copyright: Copyright (c) 2022-present GitLab Inc.; "
+                "Copyright (c) 2019 GitHub Inc.",
+            )
+            copyright_index = copyright_lines.index(copyright_fields[0])
+            self.assertEqual(copyright_lines[copyright_index + 1], "License: MIT")
+            # The exact vendored MIT notice, including both holder lines,
+            # follows the metadata block unchanged.
+            self.assertIn("MIT License", copyright_lines)
+            self.assertIn("Copyright (c) 2022-present GitLab Inc.", copyright_lines)
+            self.assertIn("Copyright (c) 2019 GitHub Inc.", copyright_lines)
             deb = root / "glab.deb"
             build_deb(stage, deb)
             listing = subprocess.run(

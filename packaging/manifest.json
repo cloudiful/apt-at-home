@@ -485,7 +485,7 @@
       "homepage": "https://gitlab.com/gitlab-org/cli",
       "description": "GitLab CLI",
       "license": "MIT",
-      "copyright": "Copyright (c) 2022-present GitLab Inc.\nCopyright (c) 2019 GitHub Inc.",
+      "copyright": "Copyright (c) 2022-present GitLab Inc.; Copyright (c) 2019 GitHub Inc.",
       "license_url": "https://gitlab.com/gitlab-org/cli/-/raw/v1.124.0/LICENSE",
       "upstream_published_at": "2026-10-20T12:17:01Z",
       "targets": {
