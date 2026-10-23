@@ -118,7 +118,7 @@ class ForgejoCliRecipeTest(unittest.TestCase):
                 asset="{upstream}.tar.gz",
                 member="{binary}",
                 binary="x",
-                source="gitlab",
+                source="sourcehut",
             )
 
     def test_the_committed_manifest_carries_the_reviewed_entry(self) -> None:

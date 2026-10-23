@@ -6,12 +6,16 @@ Private per-device authenticated APT source for Debian 13. English | [中文](RE
 
 - Private authenticated source with per-device tokens over an authenticated gateway.
 - Debian 13 packages for amd64 and arm64: bottom, bun, cargo-tauri, chezmoi,
-  fd-find, forgejo-cli, fzf, git-delta, kandev, neovim, opencode, rustfs-cli,
-  sccache, starship, tree-sitter-cli, uv, zellij, and zoxide, each from its
-  official release asset.
+  fd-find, forgejo-cli, fzf, git-delta, glab, kandev, neovim, opencode,
+  rustfs-cli, sccache, starship, tree-sitter-cli, uv, zellij, and zoxide, each
+  from its official release asset.
 - `forgejo-cli` comes from Codeberg, which publishes no release digest: its
   archives are pinned by a SHA256 computed from the official download, which
   costs about 18 MiB of downloads per discovery run.
+- `glab` comes from the official GitLab release archives. GitLab publishes an
+  unsigned `checksums.txt` instead of a cryptographic signature, so each
+  archive is pinned by the SHA256 that file names; that digest trusts GitLab's
+  TLS transport and repository integrity.
 - Signed repository published via GitHub Actions to private object storage.
 - Every six hours, `publish.yml` publishes a new release when a newer stable
   upstream release of any of those packages appears; when nothing changed it
@@ -25,13 +29,13 @@ Private per-device authenticated APT source for Debian 13. English | [中文](RE
 
 ```sh
 sudo apt update
-sudo apt install bottom bun cargo-tauri chezmoi fd-find forgejo-cli fzf git-delta kandev neovim opencode rustfs-cli sccache starship tree-sitter-cli uv zellij zoxide
+sudo apt install bottom bun cargo-tauri chezmoi fd-find forgejo-cli fzf git-delta glab kandev neovim opencode rustfs-cli sccache starship tree-sitter-cli uv zellij zoxide
 ```
 
 `bottom` provides `btm`, `fd-find` provides `fdfind`, `forgejo-cli` provides
-`fj`, `git-delta` provides `delta`, `rustfs-cli` provides `rc`,
-`tree-sitter-cli` provides `tree-sitter`, and `uv` provides both `uv` and
-`uvx`. `bun` provides `bun`; upstream's
+`fj`, `git-delta` provides `delta`, `glab` provides `glab`, `rustfs-cli`
+provides `rc`, `tree-sitter-cli` provides `tree-sitter`, and `uv` provides both
+`uv` and `uvx`. `bun` provides `bun`; upstream's
 `bunx` command stays available as `bun x`. `cargo-tauri` provides `cargo-tauri`
 directly and `cargo tauri` as a Cargo external subcommand (it requires `cargo`
 on `PATH`, which the package declares as a dependency). `zoxide` shell integration is

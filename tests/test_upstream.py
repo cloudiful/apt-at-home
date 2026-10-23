@@ -784,6 +784,10 @@ class UrllibClientTest(unittest.TestCase):
             "https://github.com/x/y/releases/download/v1.0.0/x.tar.gz",
             "https://registry.npmjs.org/@opencode/cli",
             "https://registry.npmjs.org/@opencode/cli-linux-x64/-/cli-linux-x64-2.1.3.tgz",
+            "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases",
+            "https://gitlab.com/gitlab-org/cli/-/releases/v1.124.0/downloads/"
+            "glab_1.124.0_linux_amd64.tar.gz",
+            "https://gitlab.com/gitlab-org/cli/-/raw/v1.124.0/LICENSE",
             "http://api.github.com/repos/x/y/releases/latest",
             "https://api.github.com:8443/repos/x/y/releases/latest",
         ):

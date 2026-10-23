@@ -15,7 +15,12 @@ from scripts.manifest import (
 )
 from scripts.release_manifest import load_manifest_data
 from scripts.manifest import default_manifest_path
-from scripts.upstream_assets import asset_name, npm_tarball_url, release_download_url
+from scripts.upstream_assets import (
+    asset_name,
+    license_url,
+    npm_tarball_url,
+    release_download_url,
+)
 from tests.test_upstream_npm import NPM_RECIPE, npm_recipe
 
 TARGET = {
@@ -91,6 +96,66 @@ class ManifestTest(unittest.TestCase):
                 with self.assertRaises(ValueError, msg=label):
                     parse_manifest(bad)
 
+    def test_gitlab_targets_are_bound_to_the_reviewed_release(self) -> None:
+        """A GitLab URL is bound to the reviewed project, tag, and archive."""
+        data = _document()
+        glab = next(e for e in data["packages"] if e["name"] == "glab")
+        official = glab["targets"]["amd64"]["url"]
+        swapped = {
+            "other_host": official.replace("gitlab.com", "github.com"),
+            "other_repo": official.replace("gitlab-org/cli", "attacker/cli"),
+            "other_tag": official.replace("/v1.124.0/", "/v1.125.0/"),
+            "other_asset": official.replace(
+                "glab_1.124.0_linux_amd64.tar.gz", "glab_1.124.0_linux_arm64.tar.gz"
+            ),
+            "credentials": official.replace("https://", "https://user:secret@"),
+            "port": official.replace("https://gitlab.com", "https://gitlab.com:8443"),
+            "query": official + "?token=secret",
+            "fragment": official + "#secret",
+            "plain_http": official.replace("https://", "http://"),
+        }
+        for label, url in swapped.items():
+            with self.subTest(case=label):
+                bad = _document()
+                entry = next(e for e in bad["packages"] if e["name"] == "glab")
+                entry["targets"]["amd64"]["url"] = url
+                with self.assertRaises(ValueError, msg=label):
+                    parse_manifest(bad)
+
+    def test_gitlab_entries_keep_their_reviewed_member_and_license(self) -> None:
+        cases = {
+            "member": lambda entry: entry["targets"]["amd64"].__setitem__(
+                "archive_member", "glab"
+            ),
+            "license_other_tag": lambda entry: entry.__setitem__(
+                "license_url",
+                "https://gitlab.com/gitlab-org/cli/-/raw/v1.125.0/LICENSE",
+            ),
+            "license_other_host": lambda entry: entry.__setitem__(
+                "license_url",
+                "https://github.com/gitlab-org/cli/raw/v1.124.0/LICENSE",
+            ),
+        }
+        for label, mutate in cases.items():
+            with self.subTest(case=label):
+                data = _document()
+                entry = next(e for e in data["packages"] if e["name"] == "glab")
+                mutate(entry)
+                with self.assertRaises(ValueError):
+                    parse_manifest(data)
+
+    def test_gitlab_targets_refuse_an_install_tree_alternate(self) -> None:
+        """A flat GitLab recipe cannot be expressed as a reviewed tree."""
+        for arch in ("amd64", "arm64"):
+            with self.subTest(arch=arch):
+                data = _document()
+                entry = next(e for e in data["packages"] if e["name"] == "glab")
+                target = entry["targets"][arch]
+                tree = target.pop("archive_member")
+                target["install_tree"] = tree.split("/", 1)[0]
+                with self.assertRaisesRegex(ValueError, "flat GitLab"):
+                    parse_manifest(data)
+
     def test_records_nested_members_binaries_and_licenses(self) -> None:
         by_name = {p.name: p for p in load_manifest().packages}
         self.assertEqual(
@@ -109,6 +174,14 @@ class ManifestTest(unittest.TestCase):
         )
         self.assertEqual(by_name["rustfs-cli"].targets["arm64"].archive_member, "rc")
         self.assertEqual(by_name["rustfs-cli"].targets["arm64"].binary, "rc")
+        glab = by_name["glab"]
+        self.assertEqual(glab.targets["amd64"].archive_member, "bin/glab")
+        self.assertEqual(glab.targets["arm64"].binary, "glab")
+        self.assertEqual(glab.license, "MIT")
+        self.assertEqual(
+            glab.license_url,
+            license_url("gitlab-org/cli", "v1.124.0", "LICENSE", source="gitlab"),
+        )
         uv = by_name["uv"]
         self.assertEqual(uv.targets["amd64"].additional_binaries,
                          {"uv-x86_64-unknown-linux-gnu/uvx": "uvx"})
@@ -423,6 +496,7 @@ PINNED_PUBLISHED_AT = {
     "tree-sitter-cli": "2026-10-08T17:43:54Z",
     "chezmoi": "2026-10-20T15:14:47Z",
     "opencode": "2026-10-23T10:13:53Z",
+    "glab": "2026-10-20T12:17:01Z",
 }
 
 

@@ -5,13 +5,16 @@ byte is downloaded, so an unexpected origin, an asset the reviewed recipe does
 not name, or a release without the digest its source provides fails closed
 instead of guessing. The API endpoint, the download origin, and the raw license
 host are fixed per source here: nothing a manifest or an upstream response can
-supply ever builds one. Two sources are reviewed: GitHub, whose API publishes a
-sha256 digest for every asset, and Codeberg, whose API publishes none.
+supply ever builds one. The reviewed sources are GitHub, whose API publishes a
+sha256 digest for every asset, Codeberg, whose API publishes none, the npm
+registry, whose package metadata carries its own integrity digest, and GitLab,
+which publishes a release checksums.txt instead of per-asset digests.
 """
 
 from __future__ import annotations
 
 import re
+import urllib.parse
 from collections.abc import Mapping
 from types import MappingProxyType
 
@@ -32,6 +35,10 @@ WEB_BASE = "https://github.com"
 RAW_BASE = "https://raw.githubusercontent.com"
 CODEBERG_API_BASE = "https://codeberg.org/api/v1"
 CODEBERG_WEB_BASE = "https://codeberg.org"
+GITLAB_API_BASE = "https://gitlab.com/api/v4"
+GITLAB_WEB_BASE = "https://gitlab.com"
+# One bounded GitLab release listing is read per discovery, newest first.
+GITLAB_RELEASES_PER_PAGE = 100
 # The npm registry is the one origin an npm release may come from, and the
 # only origin its metadata and archives are ever read from.
 NPM_REGISTRY_BASE = f"https://{NPM_REGISTRY_HOST}"
@@ -45,10 +52,12 @@ _RELEASE_API_TEMPLATES = MappingProxyType({
 _DOWNLOAD_TEMPLATES = MappingProxyType({
     "github": f"{WEB_BASE}/{{repo}}/releases/download/{{tag}}/{{name}}",
     "codeberg": f"{CODEBERG_WEB_BASE}/{{repo}}/releases/download/{{tag}}/{{name}}",
+    "gitlab": f"{GITLAB_WEB_BASE}/{{repo}}/-/releases/{{tag}}/downloads/{{name}}",
 })
 _RAW_LICENSE_TEMPLATES = MappingProxyType({
     "github": f"{RAW_BASE}/{{repo}}/{{tag}}/{{path}}",
     "codeberg": f"{CODEBERG_WEB_BASE}/{{repo}}/raw/tag/{{tag}}/{{path}}",
+    "gitlab": f"{GITLAB_WEB_BASE}/{{repo}}/-/raw/{{tag}}/{{path}}",
 })
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -68,6 +77,20 @@ def _source_url(templates: Mapping[str, str], source: str, **fields: str) -> str
 def releases_api_url(repo: str, *, source: str = "github") -> str:
     """Return the fixed API endpoint for one repository's latest release."""
     return _source_url(_RELEASE_API_TEMPLATES, source, repo=repo)
+
+
+def gitlab_releases_api_url(repo: str) -> str:
+    """Return the fixed GitLab endpoint listing one project's releases.
+
+    GitLab names a project by its URL-encoded path in the API, so only the
+    reviewed repository is encoded here and nothing from a response can select
+    another project. The listing is bounded to one page, newest first.
+    """
+    project = urllib.parse.quote(repo, safe="")
+    return (
+        f"{GITLAB_API_BASE}/projects/{project}/releases"
+        f"?per_page={GITLAB_RELEASES_PER_PAGE}&order_by=released_at&sort=desc"
+    )
 
 
 def release_tag_api_url(repo: str, tag: str) -> str:
@@ -230,12 +253,16 @@ __all__ = [
     "API_BASE",
     "CODEBERG_API_BASE",
     "CODEBERG_WEB_BASE",
+    "GITLAB_API_BASE",
+    "GITLAB_RELEASES_PER_PAGE",
+    "GITLAB_WEB_BASE",
     "NPM_REGISTRY_BASE",
     "RAW_BASE",
     "WEB_BASE",
     "asset_name",
     "check_npm_tarball_url",
     "check_official_asset_url",
+    "gitlab_releases_api_url",
     "license_path",
     "license_url",
     "license_urls_for",
