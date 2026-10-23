@@ -23,6 +23,16 @@ export interface Env {
   readonly INDEX_LIMITER?: RateLimit;
   readonly DOWNLOAD_LIMITER?: RateLimit;
   readonly PACKAGE_LIMITER?: RateLimit;
+  /**
+   * Optional Analytics Engine dataset binding: the anonymous request counters.
+   * Absent in local and test environments, where nothing is counted.
+   */
+  readonly ANALYTICS?: AnalyticsEngineDataset;
+  /**
+   * Optional Analytics SQL binding: the only way the counters are read back.
+   * Absent in local and test environments, where the page shows no counters.
+   */
+  readonly ANALYTICS_SQL?: AnalyticsSQLBinding;
 }
 
 /** Key of the object that selects the currently published release. */

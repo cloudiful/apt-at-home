@@ -5,7 +5,13 @@ import { renderHomepageDocument } from '../src/homepage.js';
 import manifest from '../dist/assets/.vite/manifest.json';
 import { markTheme } from '../../web/src/components/theme-provider.js';
 import { copyFor } from '../../web/src/lib/locales.js';
-import { authorized, createEnv, FakeContext, plain } from './fakes.js';
+import {
+  FakeAnalyticsSql,
+  authorized,
+  createEnv,
+  FakeContext,
+  plain,
+} from './fakes.js';
 import {
   CLIENT,
   RELEASE_ID,
@@ -774,6 +780,99 @@ describe('root page content', () => {
     expect(html).toContain('href="#usage"');
     expect(html).toContain('Fair use');
     expect(html).toContain('120 requests/min');
+  });
+});
+
+describe('the anonymous counters in the rendered page', () => {
+  it('shows the counters in both locales when they could be read', async () => {
+    const fixture = await createFixture();
+    const sql = new FakeAnalyticsSql();
+    sql.rows = [
+      { kind: 'visit', total: 1234 },
+      { kind: 'download', total: 5678 },
+    ];
+    const env = createEnv(fixture.bucket, fixture.env.CREDENTIALS, undefined, undefined, {}, { sql });
+
+    for (const [path, heading, visits, downloads] of [
+      ['/', 'Last 30 days', 'Visits', 'Download requests'],
+      ['/?lang=zh', '最近 30 天', '访问次数', '下载请求数'],
+    ] as const) {
+      const html = await (
+        await gateway.fetch(plain(path), env, new FakeContext().asBinding())
+      ).text();
+      expect(html, path).toContain(heading);
+      expect(html, path).toContain(visits);
+      expect(html, path).toContain(downloads);
+      expect(html, path).toContain('1,234');
+      expect(html, path).toContain('5,678');
+    }
+  });
+
+  it('omits the counters entirely when they could not be read', async () => {
+    const fixture = await createFixture();
+    const sql = new FakeAnalyticsSql();
+    sql.failure = new Error('query refused');
+    const env = createEnv(fixture.bucket, fixture.env.CREDENTIALS, undefined, undefined, {}, { sql });
+
+    const html = await (
+      await gateway.fetch(plain('/'), env, new FakeContext().asBinding())
+    ).text();
+
+    expect(html).not.toContain('Last 30 days');
+    expect(html).not.toContain('public-stats');
+    // The rest of the page is untouched.
+    expect(html).toContain('Published packages');
+    expect(html).toContain('Fair use');
+  });
+
+  it('shows a zero count when the counters are read and empty', () => {
+    const html = renderHomepageDocument({
+      locale: 'en',
+      origin: 'https://apt.example.test',
+      packages: null,
+      now: '2026-10-12T00:00:00Z',
+      stats: { days: 30, visits: 0, downloads: 0 },
+    });
+
+    expect(html).toContain('Last 30 days');
+    expect(html).toContain('Visits');
+    expect(html).toContain('0');
+  });
+
+  it('never claims the counters are people or installations', () => {
+    const html = renderHomepageDocument({
+      locale: 'en',
+      origin: 'https://apt.example.test',
+      packages: null,
+      now: '2026-10-12T00:00:00Z',
+      stats: { days: 30, visits: 12, downloads: 34 },
+    });
+
+    // The labels count requests, and the note spells the difference out.
+    expect(html).toContain('<dt>Visits</dt>');
+    expect(html).toContain('<dt>Download requests</dt>');
+    expect(html).toContain('not unique visitors or completed installs');
+    for (const claim of ['unique visitors:', 'visitors: ', 'installs: ', 'people: ']) {
+      expect(html, claim).not.toContain(claim);
+    }
+  });
+
+  it('carries the counters into the props the browser hydrates with', async () => {
+    const fixture = await createFixture();
+    const sql = new FakeAnalyticsSql();
+    sql.rows = [{ kind: 'visit', total: 7 }];
+    const env = createEnv(fixture.bucket, fixture.env.CREDENTIALS, undefined, undefined, {}, { sql });
+
+    const html = await (
+      await gateway.fetch(plain('/'), env, new FakeContext().asBinding())
+    ).text();
+    const payload = html.slice(
+      html.indexOf('<script id="app-props" type="application/json">') +
+        '<script id="app-props" type="application/json">'.length,
+      html.indexOf('</script>', html.indexOf('<script id="app-props"')),
+    );
+
+    expect(JSON.parse(payload).stats).toEqual({ days: 30, visits: 7, downloads: 0 });
   });
 });
 

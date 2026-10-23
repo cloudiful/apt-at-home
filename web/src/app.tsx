@@ -2,6 +2,7 @@ import { AuthDetails, InstallSteps } from '@/components/install-steps'
 import { FairUse } from '@/components/fair-use'
 import { Header } from '@/components/header'
 import { PackageTable } from '@/components/package-table'
+import { PublicStats } from '@/components/public-stats'
 import { SectionNav } from '@/components/section-nav'
 import { ThemeProvider } from '@/components/theme-provider'
 import { copyFor } from '@/lib/locales'
@@ -15,7 +16,7 @@ import type { AppProps } from '@/lib/types'
  * catalog the server read. The page keeps its shape without JavaScript: the
  * markup is the document, and the client only takes over the controls.
  */
-export function App({ locale, origin, packages, now }: AppProps) {
+export function App({ locale, origin, packages, now, stats }: AppProps) {
   const copy = copyFor(locale)
 
   return (
@@ -43,6 +44,7 @@ export function App({ locale, origin, packages, now }: AppProps) {
             <FairUse copy={copy} />
           </main>
         </div>
+        {stats ? <PublicStats stats={stats} copy={copy.publicStats} locale={locale} /> : null}
       </div>
     </ThemeProvider>
   )

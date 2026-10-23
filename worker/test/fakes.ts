@@ -263,12 +263,75 @@ export interface LimiterOverrides {
   readonly package?: FakeRateLimiter | null;
 }
 
+/** One data point written to the counters dataset. */
+export interface RecordedDataPoint {
+  readonly blobs?: readonly (string | ArrayBuffer | null)[];
+  readonly doubles?: readonly number[];
+  readonly indexes?: readonly (string | ArrayBuffer | null)[];
+}
+
+/**
+ * The counters dataset binding.
+ *
+ * Every written data point is kept, so a test can assert the exact payload.
+ * A failure stands in for a dataset that refuses the write.
+ */
+export class FakeAnalyticsDataset {
+  readonly points: RecordedDataPoint[] = [];
+  /** Error thrown by every write while it is set. */
+  failure: Error | null = null;
+
+  writeDataPoint(event?: RecordedDataPoint): void {
+    if (this.failure !== null) throw this.failure;
+    this.points.push(event ?? {});
+  }
+
+  asBinding(): AnalyticsEngineDataset {
+    return this as unknown as AnalyticsEngineDataset;
+  }
+}
+
+/**
+ * The analytics SQL binding.
+ *
+ * The binding answers with the rows the test sets, and it records every query
+ * so a test can assert the query text. A failure stands in for a query that
+ * errors, and a stalled query for one that never answers.
+ */
+export class FakeAnalyticsSql {
+  readonly queries: string[] = [];
+  /** The rows the next successful query answers with. */
+  rows: unknown[] = [];
+  /** Error thrown by every query while it is set. */
+  failure: Error | null = null;
+  /** When set, a query never answers. */
+  stalled = false;
+
+  async query(request: { readonly query: string }): Promise<{ readonly data: unknown[] }> {
+    this.queries.push(request.query);
+    if (this.failure !== null) throw this.failure;
+    if (this.stalled) return new Promise<{ readonly data: unknown[] }>(() => undefined);
+    return { data: this.rows };
+  }
+
+  asBinding(): AnalyticsSQLBinding {
+    return this as unknown as AnalyticsSQLBinding;
+  }
+}
+
+/** Optional analytics bindings; an absent binding is left out entirely. */
+export interface AnalyticsOverrides {
+  readonly dataset?: FakeAnalyticsDataset;
+  readonly sql?: FakeAnalyticsSql;
+}
+
 export function createEnv(
   bucket: FakeBucket,
   credentials: unknown,
   authRequired?: unknown,
   assets?: FakeAssets,
   limiters: LimiterOverrides = {},
+  analytics: AnalyticsOverrides = {},
 ): Env {
   const env = { BUCKET: bucket.asBinding(), CREDENTIALS: credentials } as unknown as Record<
     string,
@@ -284,6 +347,12 @@ export function createEnv(
   }
   if (limiters.package !== null) {
     env['PACKAGE_LIMITER'] = (limiters.package ?? new FakeRateLimiter()).asBinding();
+  }
+  if (analytics.dataset !== undefined) {
+    env['ANALYTICS'] = analytics.dataset.asBinding();
+  }
+  if (analytics.sql !== undefined) {
+    env['ANALYTICS_SQL'] = analytics.sql.asBinding();
   }
   return env as unknown as Env;
 }

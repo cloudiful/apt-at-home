@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import wranglerSource from '../wrangler.jsonc?raw';
+import { PUBLIC_STATS_SQL } from '../src/telemetry.js';
 import { REQUEST_LIMITS } from '../../web/src/lib/locales.js';
 
 interface WranglerConfig {
@@ -26,6 +27,11 @@ interface WranglerConfig {
     readonly namespace_id: string;
     readonly simple: { readonly limit: number; readonly period: number };
   }>;
+  readonly analytics_engine_datasets?: ReadonlyArray<{
+    readonly binding: string;
+    readonly dataset: string;
+  }>;
+  readonly analytics?: { readonly binding: string; readonly remote?: boolean };
 }
 
 /** Reads the deployment base config exactly as committed. */
@@ -121,6 +127,20 @@ describe('deployment base config', () => {
 
   it('names the worker entry point that the gateway exports', () => {
     expect(readConfig().main).toBe('src/index.ts');
+  });
+
+  it('binds exactly one counters dataset and one analytics SQL binding', () => {
+    const config = readConfig();
+    expect(config.analytics_engine_datasets).toEqual([
+      { binding: 'ANALYTICS', dataset: 'apt_at_home_events' },
+    ]);
+    expect(config.analytics?.binding).toBe('ANALYTICS_SQL');
+  });
+
+  it('reads the counters from the dataset it binds', () => {
+    const dataset = readConfig().analytics_engine_datasets?.[0]?.dataset ?? '';
+    expect(PUBLIC_STATS_SQL).toContain(`events.analyticsEngine.${dataset}`);
+    expect(PUBLIC_STATS_SQL).toContain("blob1 IN ('visit','download')");
   });
 
   it('is not dated in the future', () => {

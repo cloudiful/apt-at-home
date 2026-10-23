@@ -278,7 +278,53 @@ the exact three steps, reproduced here for operators.
   metadata. This is a personal-repo freshness tradeoff documented in the
   manifest tooling.
 
-## 7. Token rotation
+## 7. Anonymous public counters
+
+The landing page publishes two anonymous counters over the last 30 days: the
+homepage visits and the package download requests. They are counts of requests
+the gateway answered, not of people and not of installations.
+
+- What is counted: a `GET` of `/` that answered `200` with the homepage, and a
+  `GET` of a validated `/pool/<file>.deb` that answered `200` or `206`. Every
+  other request is not counted — no `HEAD`, no browser asset, no metadata
+  request, and no request that failed (`4xx`, `5xx`, `304`, `416`). One client
+  request is one count even when the answer came from the cache; range
+  requests, retries and bots each count as their own request. A count is
+  therefore a request count and never a completed download.
+- What is stored: one event per counted request carrying only the kind of the
+  request (`visit` or `download`) and a count of one. No address, no path, no
+  header, no referrer, no cookie, no device or account identifier, and no
+  hashed address is written or derived. The only timestamp is the one the
+  provider adds.
+- What is read back: one fixed query over the bound dataset
+  (`events.analyticsEngine.apt_at_home_events`), filtered to the two known
+  kinds and the last 30 days. The query is a constant in the Worker; no
+  request can influence the table, the column or the filter, and the analytics
+  SQL binding already accounts for the sampling of the dataset, so the totals
+  are not scaled a second time.
+- The counters only exist from the moment the dataset is enabled and the
+  Worker is deployed. There is no backfill: earlier traffic is not counted.
+  The provider keeps the underlying events for 90 days.
+- The numbers are approximate. The page shows them rounded, and the page
+  itself says so. They lag: the successful answer is reused for five minutes,
+  so a fresh request is normally reflected a few minutes after it happened,
+  and the current homepage request is reflected on a later read.
+- When the counters cannot be read — no binding, a failed query, a query that
+  runs past its half-second budget, or an answer the Worker cannot read — the
+  page shows no counters at all. A missing counter and a counter of zero are
+  different facts and are never shown as the same thing; a read that succeeds
+  with no rows really did count zero requests.
+- The two bindings are committed in `worker/wrangler.jsonc`: the dataset
+  binding `ANALYTICS` (dataset `apt_at_home_events`) and the query binding
+  `ANALYTICS_SQL`. The dataset is created by the provider on the first write
+  after the first deployment; nothing is provisioned from this checkout.
+- Reading the counters back needs the account to have Analytics Engine and
+  Analytics SQL available. That entitlement is a deployment prerequisite: it
+  is not asserted here, and no live write, query or provisioning happens from
+  this checkout. After a deployment, confirm that the dataset exists and that
+  the query answers before relying on the published numbers.
+
+## 8. Token rotation
 
 1. Generate a new token for the device and add its digest to `CREDENTIALS`.
 2. Update that device's `auth.conf` entry (`chmod 600`).
