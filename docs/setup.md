@@ -97,8 +97,8 @@ repository, so no GitHub workflow deploys the Worker.
 
 `package.json` keeps a pinned `allowScripts` map for the only two install
 scripts the lock needs (`esbuild` and `workerd`). Nothing is approved by name
-or wildcard. `ci.yml` still bundles the Worker with a Wrangler `--dry-run` and
-synthetic credentials as a CI check; it never uploads.
+or wildcard. Use `bun run worker:dry-run` locally to exercise the same bundling
+without uploading.
 
 ## 4. GitHub environment `prod`
 
@@ -137,14 +137,14 @@ Every published release binds the manifest it was built from into its signed
 not match. Run one `publish.yml` manifest publish from `main` if the published
 baseline needs to be rebuilt.
 
-`ci.yml` runs the package build, verification, and native amd64/arm64 smoke on
-every push, and pins `UV_DEFAULT_INDEX` to public PyPI so the committed lock
-stays portable. It needs no cloud secrets: the CI signing key is ephemeral and
-the Wrangler step is a dry run. The build and test jobs install `reprepro`,
-which generates the `Packages` indices, so a missing tool fails the job
-instead of silently producing a different index. Package publication and
-Worker deploys have separate owners, so the GitHub environment holds only the
-R2 and GPG material.
+`publish.yml` runs the complete Python suite, the portable public-PyPI lock
+checks, the package build, and its pool smoke check before any production
+write, so a failure stops the release before public data changes. Local runs
+use the focused commands in `docs/publishing.md`. The publish job installs
+`reprepro`, which generates the `Packages` indices, so a missing tool fails the
+job instead of silently producing a different index. Package publication and
+Worker deploys have separate owners: Cloudflare Worker Builds deploys the
+Worker, so the GitHub environment holds only the R2 and GPG material.
 
 ## 5. Client bootstrap
 

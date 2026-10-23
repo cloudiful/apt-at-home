@@ -1,17 +1,16 @@
 """Structural regressions for production workflows and builder defaults.
 
 These tests pin the deployment-owner and release-safety properties without live
-cloud access for the two published entrypoints (``ci.yml`` and ``publish.yml``).
+cloud access for the single published entrypoint (``publish.yml``).
 """
 
 import re
-import subprocess
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github" / "workflows"
-WORKFLOW_NAMES = ("ci.yml", "publish.yml")
+WORKFLOW_NAMES = ("publish.yml",)
 
 RUN_RE = re.compile(r"run: \|\n(?P<body>(?: {10,}[^\n]*\n)+)")
 SECRET_RE = re.compile(r"secrets\.([A-Z0-9_]+)")
@@ -31,27 +30,6 @@ def job_block(text: str, job: str) -> str:
     rest = text[start + 1:]
     nxt = re.search(r"\n  [A-Za-z0-9_-]+:", rest[1:])
     return rest[: nxt.start() + 1] if nxt else rest
-
-
-def event_block(text: str) -> str:
-    """Slice the top-level `on:` trigger block from a workflow document."""
-    match = re.search(r"^on:\n(?P<body>(?:[ \t]+[^\n]*\n)+)", text, re.MULTILINE)
-    return match.group("body") if match else ""
-
-
-def event_entries(text: str) -> dict[str, list[str]]:
-    """Each event name under `on:` with its own body lines, stripped."""
-    entries: dict[str, list[str]] = {}
-    current: str | None = None
-    for line in event_block(text).splitlines():
-        if not line.strip():
-            continue
-        if re.match(r"^  [A-Za-z0-9_-]+:\s*$", line):
-            current = line.strip().rstrip(":")
-            entries[current] = []
-        elif current is not None:
-            entries[current].append(line.strip())
-    return entries
 
 
 def install_packages(job: str) -> list[str]:
@@ -76,15 +54,6 @@ def step_order(job: str) -> list[str]:
     return steps
 
 
-def step_blocks(job: str) -> list[str]:
-    """Slice a job's top-level steps at their six-space list markers."""
-    starts = [match.start() for match in re.finditer(r"^      - ", job, re.MULTILINE)]
-    return [
-        job[start : starts[index + 1] if index + 1 < len(starts) else len(job)]
-        for index, start in enumerate(starts)
-    ]
-
-
 # Bash array syntax that a POSIX `sh` cannot parse.
 BASH_ARRAY = re.compile(r"args=\(|\$\{args\[@\]\}")
 
@@ -99,13 +68,13 @@ class BashArrayShellTest(unittest.TestCase):
     A container job runs `run` steps with `sh` unless it says otherwise, so an
     array like `args=(...)` fails before the command it was assembling ever
     starts. Every job that uses one must therefore have an effective Bash shell,
-    declared on the job or on the step. The ordinary CI build no longer routes
-    through a Bash array; only the publish routing steps do.
+    declared on the job or on the step. The publish routing steps are the only
+    remaining array users.
     """
 
     def array_jobs(self) -> list[tuple[str, str, str]]:
         found: list[tuple[str, str, str]] = []
-        for workflow in ("ci.yml", "publish.yml"):
+        for workflow in WORKFLOW_NAMES:
             text = read_workflow(workflow)
             for name in re.findall(r"\n  ([A-Za-z0-9_-]+):", text):
                 job = job_block(text, name)
@@ -129,29 +98,14 @@ class BashArrayShellTest(unittest.TestCase):
             with self.subTest(workflow=workflow, job=name):
                 self.assertIn("shell: bash", job)
 
-    def test_the_ordinary_build_invokes_no_source_routing(self) -> None:
-        """The simplified CI build is a plain asset-only invocation."""
-        job = job_block(read_workflow("ci.yml"), "python")
-        self.assertIn("python -m scripts.repo build --output dist/repo", job)
-        self.assertNotIn("--source-artifacts", job)
-        self.assertNotIn("--reuse-published-source", job)
-        self.assertNotIn("SOURCE_ROUTING", job)
-
-
-# The two jobs that run the complete Python suite.
-FULL_SUITE_JOBS = (("ci.yml", "python"), ("publish.yml", "publish"))
-
-# Jobs that consume the package artifact and run the native smoke/upgrade checks.
-NATIVE_JOBS = ("smoke-amd64", "smoke-arm64", "upgrade-amd64", "upgrade-arm64")
+# The job that runs the complete Python suite.
+FULL_SUITE_JOBS = (("publish.yml", "publish"),)
 
 
 class CheckoutHistoryTest(unittest.TestCase):
-    """CI needs the full history its scope diff reads; publish stays shallow.
-
-    `actions/checkout` silently falls back to a REST tarball when git is missing.
-    The CI gate compares the event's base commit with the checked-out head, so
-    that job must fetch the history the diff reads. The production publish job
-    keeps its shallow checkout because it never compares base history.
+    """`actions/checkout` silently falls back to a REST tarball when git is
+    missing, so the publish job installs git before checkout and keeps its
+    shallow checkout because it never compares base history.
     """
 
     def test_git_is_installed_before_this_repository_is_checked_out(self) -> None:
@@ -179,150 +133,20 @@ class CheckoutHistoryTest(unittest.TestCase):
 
     def test_no_source_producer_job_remains(self) -> None:
         """The source-build producer and its routing are gone, not disabled."""
-        for workflow in ("ci.yml", "publish.yml"):
+        for workflow in WORKFLOW_NAMES:
             text = read_workflow(workflow)
             self.assertNotIn("source-producer", text)
             self.assertNotIn("tauri_source", text)
             self.assertNotIn("source-plan", text)
             self.assertNotIn("SOURCE_ROUTING", text)
 
-    def test_ci_checkout_fetches_full_history(self) -> None:
-        job = job_block(read_workflow("ci.yml"), "python")
-        self.assertIn("fetch-depth: 0", job)
-
     def test_publish_checkout_stays_shallow(self) -> None:
         job = job_block(read_workflow("publish.yml"), "publish")
         self.assertNotIn("fetch-depth: 0", job)
 
 
-class CiTierSelectionTest(unittest.TestCase):
-    """Cheap gates always run; package validation follows a fail-closed scope."""
-
-    def setUp(self) -> None:
-        self.ci = read_workflow("ci.yml")
-        self.python = job_block(self.ci, "python")
-
-    def python_step(self, marker: str) -> str:
-        for block in step_blocks(self.python):
-            if marker in block:
-                return block
-        self.fail(f"no python step contains {marker!r}")
-
-    def test_detector_runs_after_checkout(self) -> None:
-        steps = step_blocks(self.python)
-        checkout = next(i for i, step in enumerate(steps) if "actions/checkout" in step)
-        detect = next(i for i, step in enumerate(steps) if "python3 -m scripts.ci_scope" in step)
-        self.assertGreater(detect, checkout)
-        self.assertIn("id: scope", steps[detect])
-        self.assertIn('>> "$GITHUB_OUTPUT"', steps[detect])
-
-    def test_detector_binds_event_through_env(self) -> None:
-        detect = self.python_step("python3 -m scripts.ci_scope")
-        self.assertIn("CI_EVENT_NAME: ${{ github.event_name }}", detect)
-        self.assertIn(
-            "CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}",
-            detect,
-        )
-        self.assertIn("CI_HEAD_SHA: ${{ github.sha }}", detect)
-        run_line = next(
-            line
-            for line in detect.splitlines()
-            if line.strip().startswith("run:") and "scripts.ci_scope" in line
-        )
-        self.assertNotIn("${{", run_line)
-
-    def test_detector_trust_is_exact_and_command_scoped(self) -> None:
-        detect = self.python_step("python3 -m scripts.ci_scope")
-        self.assertIn(
-            'run: GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory '
-            'GIT_CONFIG_VALUE_0="$PWD" python3 -m scripts.ci_scope >> "$GITHUB_OUTPUT"',
-            detect,
-        )
-        self.assertEqual(self.ci.count("GIT_CONFIG_COUNT"), 1)
-        self.assertEqual(self.ci.count("safe.directory"), 1)
-        self.assertNotIn("git config --global", self.ci)
-        self.assertNotIn("git config --system", self.ci)
-
-    def test_python_job_exposes_fail_closed_output(self) -> None:
-        self.assertIn(
-            "outputs:\n      heavy: ${{ steps.scope.outputs.heavy != 'false' }}",
-            self.python,
-        )
-
-    def test_exactly_four_expensive_steps_are_gated(self) -> None:
-        gated = [
-            block
-            for block in step_blocks(self.python)
-            if "steps.scope.outputs.heavy != 'false'" in block
-        ]
-        self.assertEqual(len(gated), 4)
-        for marker in (
-            "Generate ephemeral signing key",
-            "Build the repository",
-            "scripts.repo verify",
-            "actions/upload-artifact",
-        ):
-            self.assertIn(marker, self.python_step(marker))
-
-    def test_cheap_steps_have_no_condition(self) -> None:
-        for marker in (
-            "uv lock --check",
-            "uv sync --frozen",
-            "Run the full Python suite",
-            "scripts.repo --help",
-            "scripts.update --help",
-        ):
-            with self.subTest(marker=marker):
-                self.assertNotIn("if:", self.python_step(marker))
-
-    def test_native_jobs_require_the_heavy_output(self) -> None:
-        for job in NATIVE_JOBS:
-            with self.subTest(job=job):
-                block = job_block(self.ci, job)
-                self.assertIn("needs: [python]", block)
-                self.assertIn("if: needs.python.outputs.heavy == 'true'", block)
-
-    def test_worker_job_is_unconditional(self) -> None:
-        worker = job_block(self.ci, "worker")
-        self.assertNotIn("if:", worker)
-        self.assertIn("bun run test", worker)
-
-    def test_workflow_triggers_have_no_path_filters(self) -> None:
-        for event, lines in event_entries(self.ci).items():
-            for line in lines:
-                with self.subTest(event=event, line=line):
-                    self.assertNotIn("paths", line)
-
-
-class CiTriggerTest(unittest.TestCase):
-    """An ordinary branch push must not launch a second full CI run.
-
-    The pull-request event already covers every proposed change, so the push
-    trigger is limited to the default branch. A push without a branch filter
-    would run the whole suite on every branch again, which is exactly the
-    duplicate this pins shut.
-    """
-
-    def test_push_runs_on_main_only(self) -> None:
-        entries = event_entries(read_workflow("ci.yml"))
-        self.assertIn("push", entries)
-        branch_lines = [line for line in entries["push"] if line.startswith("branches:")]
-        self.assertEqual(len(branch_lines), 1, msg=f"push filters: {entries['push']}")
-        self.assertEqual(branch_lines[0], 'branches: ["main"]')
-
-    def test_push_has_no_other_branch_filter(self) -> None:
-        push = "\n".join(event_entries(read_workflow("ci.yml"))["push"])
-        for forbidden in ("branches-ignore", "paths", "paths-ignore", "tags"):
-            self.assertNotIn(forbidden, push)
-
-    def test_pull_request_and_manual_triggers_are_kept(self) -> None:
-        entries = event_entries(read_workflow("ci.yml"))
-        self.assertIn("pull_request", entries)
-        self.assertIn("workflow_dispatch", entries)
-
-
 class WorkflowStructureTest(unittest.TestCase):
-    def test_only_ci_and_publish_workflows_exist(self) -> None:
+    def test_only_publish_workflow_exists(self) -> None:
         names = sorted(path.name for path in WORKFLOWS.glob("*.yml"))
         self.assertEqual(names, list(WORKFLOW_NAMES))
 
@@ -341,9 +165,8 @@ class WorkflowStructureTest(unittest.TestCase):
             head = read_workflow(name).split("jobs:")[0]
             self.assertNotIn("\nenvironment:", head, msg=name)
 
-    def test_publish_job_is_the_only_protected_job(self) -> None:
+    def test_publish_job_is_protected(self) -> None:
         self.assertIn("    environment: prod", read_workflow("publish.yml"))
-        self.assertNotIn("environment:", read_workflow("ci.yml"))
 
     def test_no_template_interpolation_inside_shell(self) -> None:
         for name in WORKFLOW_NAMES:
@@ -358,33 +181,10 @@ class WorkflowStructureTest(unittest.TestCase):
             self.assertIn("uv sync --frozen", text, msg=name)
 
     def test_github_never_deploys_the_worker(self) -> None:
-        # Cloudflare Worker Builds owns the deploy; every wrangler invocation
-        # that remains in GitHub stays a dry-run bundling check.
-        deploy_lines = [
-            (name, line.strip())
-            for name in WORKFLOW_NAMES
-            for line in read_workflow(name).splitlines()
-            if "wrangler deploy" in line
-        ]
-        self.assertTrue(deploy_lines, msg="expected at least one CI dry-run")
-        for name, line in deploy_lines:
-            self.assertIn("--dry-run", line, msg=f"{name}: {line}")
-
-    def test_ci_dry_runs_production_equivalent_command(self) -> None:
-        text = read_workflow("ci.yml")
-        self.assertIn("--config worker/wrangler.jsonc", text)
-        self.assertIn("--domains apt-ci.example.com", text)
-        self.assertIn("--dry-run", text)
-        self.assertIn("--secrets-file", text)
-        self.assertNotIn("wrangler.deploy.jsonc", text)
-        self.assertNotIn("routes:", text)
-
-    def test_dry_run_provisions_synthetic_secret_atomically(self) -> None:
-        text = read_workflow("ci.yml")
-        deploy = text.split("Dry-run production-equivalent")[1]
-        self.assertIn("--secrets-file", deploy)
-        self.assertIn("ci-secrets.json", deploy)
-        self.assertIn('chmod 600 "$RUNNER_TEMP/ci-secrets.json"', deploy)
+        # Cloudflare Worker Builds owns the deploy; the publish workflow never
+        # bundles or uploads the Worker.
+        for name in WORKFLOW_NAMES:
+            self.assertNotIn("wrangler deploy", read_workflow(name), msg=name)
 
     def test_publish_inputs_pass_through_env(self) -> None:
         text = read_workflow("publish.yml")
@@ -478,99 +278,18 @@ class WorkflowStructureTest(unittest.TestCase):
                 self.assertIn(tool, text, msg=f"{name} missing {tool}")
             self.assertNotIn("apt-utils", text, msg=f"{name} installs the removed apt-utils")
 
-    def test_build_jobs_install_reprepro(self) -> None:
-        # Production `Packages` indices come from reprepro in every build job.
-        for name, job in (("ci.yml", "python"), ("publish.yml", "publish")):
-            packages = install_packages(job_block(read_workflow(name), job))
-            self.assertIn("reprepro", packages, msg=f"{name}:{job}")
+    def test_publish_installs_reprepro(self) -> None:
+        # Production `Packages` indices come from reprepro in the publish job.
+        job = job_block(read_workflow("publish.yml"), "publish")
+        self.assertIn("reprepro", install_packages(job))
 
-    def test_gpg_agent_installed_where_keys_are_generated(self) -> None:
-        # A bare `gpg` carries no gpg-agent, so key generation and import fail;
-        # the `gnupg` metapackage pulls the agent in as a hard dependency.
-        python_job = job_block(read_workflow("ci.yml"), "python")
-        self.assertIn("gnupg", install_packages(python_job))
-        self.assertNotIn("gpg", install_packages(python_job))
-        self.assertIn("gpg --batch --generate-key", python_job)
-
+    def test_publish_installs_gnupg_for_key_import(self) -> None:
+        # A bare `gpg` carries no gpg-agent, so key import fails; the `gnupg`
+        # metapackage pulls the agent in as a hard dependency.
         publish_job = job_block(read_workflow("publish.yml"), "publish")
         self.assertIn("gnupg", install_packages(publish_job))
         self.assertNotIn("gpg", install_packages(publish_job))
         self.assertIn("gpg --batch --import", publish_job)
-
-    def test_ci_exercises_the_update_cli(self) -> None:
-        # The scheduled updater runs the real CLI, so CI proves it at least
-        # parses and resolves without touching any secret.
-        text = read_workflow("ci.yml")
-        self.assertIn("python -m scripts.update --help", text)
-
-    def test_ci_does_not_import_a_production_secret(self) -> None:
-        # CI is independent: it only ever generates an ephemeral key of its own.
-        text = read_workflow("ci.yml")
-        self.assertNotIn("APT_RELEASE_SIGNING_KEY", text)
-        self.assertNotIn("APT_SIGNING_FINGERPRINT", text)
-
-    def test_smoke_jobs_install_the_generated_packages(self) -> None:
-        # Each smoke job installs the debs its own architecture built.
-        text = read_workflow("ci.yml")
-        for job, arch in (("smoke-amd64", "amd64"), ("smoke-arm64", "arm64")):
-            block = job_block(text, job)
-            self.assertIn(f"apt-get install -y --no-install-recommends ./dist/repo/pool/*_{arch}.deb", block)
-            installed = " ".join(
-                line for line in block.splitlines() if "apt-get install" in line
-            )
-            self.assertNotIn("gpg", installed, msg=job)
-            self.assertNotIn("gnupg", installed, msg=job)
-
-    def test_each_smoke_job_installs_its_own_python_interpreter(self) -> None:
-        """Each fresh smoke container cannot inherit an interpreter.
-
-        Asserted per job, and the install must precede the helper in that job.
-        """
-        text = read_workflow("ci.yml")
-        for job in ("smoke-amd64", "smoke-arm64"):
-            with self.subTest(job=job):
-                block = job_block(text, job)
-                install_lines = [
-                    line for line in block.splitlines() if "apt-get install" in line
-                ]
-                self.assertTrue(install_lines, msg=f"{job} installs nothing")
-                self.assertTrue(
-                    any("python3" in line for line in install_lines),
-                    msg=f"{job} never installs python3",
-                )
-                self.assertLess(
-                    block.index("python3"), block.index("-m scripts.smoke"),
-                    msg=f"{job} installs python3 after the helper runs",
-                )
-
-    def test_smoke_jobs_check_every_package_from_the_manifest(self) -> None:
-        # No workflow may hard-code the package set; the manifest drives it.
-        text = read_workflow("ci.yml")
-        for job, arch in (("smoke-amd64", "amd64"), ("smoke-arm64", "arm64")):
-            block = job_block(text, job)
-            self.assertIn(
-                "--manifest packaging/manifest.json --count", block, msg=job
-            )
-            self.assertIn("--pool dist/repo/pool", block, msg=job)
-            self.assertIn(f"--installed --arch {arch}", block, msg=job)
-            self.assertNotRegex(block, r'=\s*"4"')
-            self.assertNotIn("zellij_0.45.1-1", block, msg=job)
-            self.assertNotIn("starship_1.26.0-1", block, msg=job)
-
-    def test_apt_upgrade_jobs_install_distro_neovim_then_the_generated_debs(self) -> None:
-        # The distro neovim must be installed first, so the upgrade is a real transition.
-        text = read_workflow("ci.yml")
-        for job, arch in (("upgrade-amd64", "amd64"), ("upgrade-arm64", "arm64")):
-            with self.subTest(job=job):
-                block = job_block(text, job)
-                self.assertIn("needs: [python]", block)
-                distro = block.index("apt-get install -y --no-install-recommends python3 neovim")
-                generated = block.index(f"./dist/repo/pool/*_{arch}.deb")
-                self.assertLess(distro, generated)
-                self.assertIn("--upgraded", block)
-                self.assertIn(f"--installed --arch {arch}", block)
-                self.assertNotIn("dpkg -i", block)
-                self.assertNotIn("--force", block)
 
     def test_publish_counts_the_pool_from_the_manifest(self) -> None:
         block = job_block(read_workflow("publish.yml"), "publish")

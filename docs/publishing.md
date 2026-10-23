@@ -42,22 +42,6 @@ and the read-only storage credentials to restore and compare the published
 baseline, but never the private key. Every path reuses the same seven `prod`
 secrets; there are no Cloudflare secrets in the publication path.
 
-## CI tiers
-
-`.github/workflows/ci.yml` always runs the Worker gateway gates and, in the
-Python job, the lock/sync checks, the full Python suite, and both CLI help
-checks. Signing-key generation, the archive and `.deb` build, verification,
-artifact upload, and the four native smoke/upgrade jobs run only when the
-changed paths are package-relevant: `packaging/`, `scripts/`, `tests/`,
-`.github/`, `pyproject.toml`, or `uv.lock`.
-
-Changes limited to `web/`, `worker/`, `docs/`, `client/`, or the listed root
-frontend and config files skip package validation. `workflow_dispatch` always
-runs it, and any unknown path, invalid event or commit, empty diff, malformed
-path data, or Git failure also runs it, so a detection problem never turns
-into a false skip. The classifier is `scripts/ci_scope.py`; it never executes
-event-provided paths or shell input.
-
 ## Local build
 
 ```sh
@@ -103,7 +87,7 @@ uv run python -m scripts.repo verify --output dist/repo
 
 ## Dependency locks
 
-Both locks stay reproducible against public sources, so any CI or Cloudflare
+Both locks stay reproducible against public sources, so any local or Cloudflare
 build works without a private mirror and without upgrading anything:
 
 - `uv.lock` pins the exact resolved versions and artifact hashes.
@@ -120,8 +104,8 @@ build works without a private mirror and without upgrading anything:
 
 GitHub's dependency graph is independent of this publication path: GitHub builds
 it automatically from the committed `uv.lock` and `package-lock.json`, so it
-needs no workflow, no CI job, and no repository file. `publish.yml` and CI never
-submit dependencies and never touch the graph; it stays a separate supply-chain
+needs no workflow, no job, and no repository file. `publish.yml` never submits
+dependencies and never touches the graph; it stays a separate supply-chain
 view.
 
 ## Verify
