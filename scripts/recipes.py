@@ -8,6 +8,7 @@ consumer that derives values from these records.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -23,11 +24,20 @@ _DELTA = MappingProxyType(
 _NO_TRIPLES: Mapping[str, str] = MappingProxyType({})
 _NEOVIM = MappingProxyType({"amd64": "x86_64", "arm64": "arm64"})
 _NO_DEPENDS: Mapping[str, str] = MappingProxyType({})
+_NO_PACKAGES: Mapping[str, str] = MappingProxyType({})
 
 # The upstream hosts a reviewed recipe may be fetched from. The set is closed:
 # a source nobody reviewed fails closed instead of building a URL for a host
 # this repository never vetted.
-SOURCES = ("github", "codeberg")
+SOURCES = ("github", "codeberg", "npm")
+
+# The hosts whose raw license text a reviewed recipe may name. A license
+# override may only point at one of them, never at a new origin.
+LICENSE_SOURCES = ("github", "codeberg")
+
+# One npm package name: an optional scope, a lowercase name, and no other
+# character. A name outside this shape can never be a reviewed package.
+_NPM_NAME = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
 
 
 @dataclass(frozen=True)
@@ -78,12 +88,69 @@ class Recipe:
     parsers: tuple[str, ...] = ()
     additional_members: Mapping[str, str] = _NO_DEPENDS
     extra_license_paths: tuple[str, ...] = ()
+    # The npm distribution of a reviewed package: the wrapper package that
+    # names the platform packages, and the platform package published for each
+    # reviewed architecture. Only an `npm` source declares them.
+    npm_package: str = ""
+    npm_packages: Mapping[str, str] = _NO_PACKAGES
+    # The reviewed host the license text comes from when the release itself
+    # comes from another host. An empty value keeps the source's own host.
+    license_source: str = ""
+    # The reviewed ceilings for this package's archive and for the member
+    # extracted from it. Zero keeps the legacy behavior of every other recipe.
+    max_archive_bytes: int = 0
+    max_binary_bytes: int = 0
 
     def __post_init__(self) -> None:
         if self.source not in SOURCES:
             raise ValueError(
                 f"unsupported release source for {self.name!r}: {self.source!r}"
             )
+        self._check_npm_fields()
+        self._check_license_source()
+        self._check_limits()
+
+    def _check_npm_fields(self) -> None:
+        """Require the npm fields to match the source that declares them."""
+        if self.source != "npm":
+            if self.npm_package or self.npm_packages:
+                raise ValueError(
+                    f"{self.name!r} declares npm packages but its source is "
+                    f"{self.source!r}"
+                )
+            return
+        if not _NPM_NAME.match(self.npm_package):
+            raise ValueError(
+                f"{self.name!r} declares an unusable npm wrapper package: "
+                f"{self.npm_package!r}"
+            )
+        if set(self.npm_packages) != set(self.arches):
+            raise ValueError(
+                f"{self.name!r} publishes npm packages for "
+                f"{sorted(self.npm_packages)}, not {sorted(self.arches)}"
+            )
+        for arch, package in self.npm_packages.items():
+            if not _NPM_NAME.match(package):
+                raise ValueError(
+                    f"{self.name!r} declares an unusable npm package for {arch}: "
+                    f"{package!r}"
+                )
+
+    def _check_license_source(self) -> None:
+        """Require a license override to name a reviewed raw-license host."""
+        if self.license_source and self.license_source not in LICENSE_SOURCES:
+            raise ValueError(
+                f"unsupported license source for {self.name!r}: {self.license_source!r}"
+            )
+
+    def _check_limits(self) -> None:
+        """Require the reviewed byte ceilings to be plain non-negative sizes."""
+        for field in ("max_archive_bytes", "max_binary_bytes"):
+            value = getattr(self, field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(
+                    f"{self.name!r} declares an unusable {field}: {value!r}"
+                )
 
 
 # zellij and starship publish one asset name per toolchain and never embed the

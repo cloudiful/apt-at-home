@@ -51,6 +51,15 @@ _FORGEJO_LIBC_DEPENDS = MappingProxyType({
     "amd64": "libc6 (>= 2.39), libgcc-s1, libssl3t64, zlib1g",
     "arm64": "libc6 (>= 2.39), libgcc-s1",
 })
+# OpenCode publishes its official CLI through npm: one wrapper package that
+# names the platform packages, one platform package per Linux architecture,
+# each named with its own short target triple.
+_OPENCODE = MappingProxyType({"amd64": "x64", "arm64": "arm64"})
+# Both OpenCode builds link against glibc 2.17 and need nothing beyond it.
+_OPENCODE_LIBC = MappingProxyType({
+    "amd64": "libc6 (>= 2.17)",
+    "arm64": "libc6 (>= 2.17)",
+})
 
 
 def make_cli_recipes(recipe_type: type[Recipe]) -> dict[str, Recipe]:
@@ -198,5 +207,35 @@ def make_cli_recipes(recipe_type: type[Recipe]) -> dict[str, Recipe]:
             binary="chezmoi",
             triples=_NO_TRIPLES,
             depends=_CHEZMOI_LIBC,
+        ),
+        "opencode": recipe_type(
+            name="opencode",
+            upstream="opencode",
+            repo="anomalyco/opencode",
+            tag_prefix="v",
+            license_id="MIT",
+            license_path="LICENSE",
+            # OpenCode V2 is distributed only through the official npm
+            # registry: the wrapper names the platform packages, and each
+            # reviewed architecture uses the ordinary (non-baseline) build.
+            source="npm",
+            npm_package="@opencode/cli",
+            npm_packages=MappingProxyType({
+                "amd64": "@opencode/cli-linux-x64",
+                "arm64": "@opencode/cli-linux-arm64",
+            }),
+            # The release comes from the registry, while the tagged license
+            # text lives in the project's own repository.
+            license_source="github",
+            asset="cli-linux-{triple}-{version}.tgz",
+            member="package/bin/opencode",
+            binary="opencode",
+            triples=_OPENCODE,
+            depends=_OPENCODE_LIBC,
+            # The official archive is about 114MiB and its binary about
+            # 240MiB, above the legacy ceilings, so this reviewed package
+            # carries its own reviewed ones.
+            max_archive_bytes=128 * 1024 * 1024,
+            max_binary_bytes=256 * 1024 * 1024,
         ),
     }

@@ -14,13 +14,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts.catalog import KNOWN_PACKAGES, repo_of, source_for, tag_for
+from scripts.catalog import KNOWN_PACKAGES, npm_platform_package_for, repo_of, source_for, tag_for
 from scripts.manifest import default_manifest_path
 from scripts.release_manifest import validated_document
 from scripts.update_plan import build_plan, merge_catalog
 from scripts.upstream import Candidate
 from scripts.upstream_assets import (
-    asset_name, license_urls_for, release_download_url,
+    asset_name, license_urls_for, npm_tarball_url, release_download_url,
 )
 from tests.release_fixtures import (
     historical_cargo_baseline_data,
@@ -45,9 +45,10 @@ def candidate(
     By default each architecture keeps the digest the committed manifest already
     pins, which is what an unchanged upstream release looks like; pass `sha` to
     model a rebuilt archive. The URLs follow the package's own reviewed source,
-    so a Codeberg package never carries a GitHub origin.
+    so a Codeberg package never carries a GitHub origin and an npm package
+    stays on the registry.
     """
-    from scripts.catalog import arches_for
+    from scripts.catalog import arches_for, npm_platform_package_for
 
     repo = repo_of(name)
     tag = tag_for(name, version)
@@ -60,8 +61,12 @@ def candidate(
         license_url=license_urls_for(name, tag)[0],
         targets={
             arch: {
-                "url": release_download_url(
-                    repo, tag, asset_name(name, version, arch), source=source
+                "url": (
+                    npm_tarball_url(npm_platform_package_for(name, arch), version)
+                    if source == "npm"
+                    else release_download_url(
+                        repo, tag, asset_name(name, version, arch), source=source
+                    )
                 ),
                 "sha256": sha or committed_sha(name, arch),
             }
@@ -974,6 +979,55 @@ class CliTest(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 update_module._fingerprint()
         self.assertEqual(self._run([], storage=FakeStorage({}), candidates={})[0], 1)
+
+
+class OpenCodeNpmPlanTest(unittest.TestCase):
+    """The npm package plans from the registry identity its recipe reviews."""
+
+    def test_the_committed_entry_is_a_noop_against_its_own_candidate(self) -> None:
+        catalog = catalog_document()
+        plan = build_plan(
+            baseline_release_id="20260102-030405",
+            baseline_data=catalog,
+            catalog_data=catalog,
+            candidates=candidate_pairs(catalog),
+        )
+
+        self.assertTrue(plan.is_noop)
+        self.assertNotIn("opencode", plan.changed)
+
+    def test_a_newer_opencode_release_plans_the_registry_targets(self) -> None:
+        version = "2.2.0"
+        plan = build_plan(
+            baseline_release_id="20260102-030405",
+            baseline_data=catalog_document(),
+            catalog_data=catalog_document(),
+            candidates={
+                **candidate_pairs(catalog_document()),
+                "opencode": candidate(
+                    "opencode", version, sha="ab" * 32,
+                    published_at="2026-11-01T00:00:00Z",
+                ),
+            },
+        )
+
+        self.assertIn("opencode", plan.changed)
+        entry = next(
+            entry for entry in plan.manifest_data["packages"]
+            if entry["name"] == "opencode"
+        )
+        self.assertEqual(entry["version"], version)
+        self.assertEqual(entry["upstream_published_at"], "2026-11-01T00:00:00Z")
+        for arch in ("amd64", "arm64"):
+            target = entry["targets"][arch]
+            self.assertEqual(
+                target["url"],
+                npm_tarball_url(npm_platform_package_for("opencode", arch), version),
+            )
+            self.assertEqual(target["sha256"], "ab" * 32)
+            self.assertEqual(target["archive_member"], "package/bin/opencode")
+            self.assertEqual(target["binary"], "opencode")
+            self.assertEqual(target["depends"], "libc6 (>= 2.17)")
 
 
 if __name__ == "__main__":

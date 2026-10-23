@@ -42,6 +42,20 @@ class PackageBinariesTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unsafe or duplicate"):
                 stage_binaries(root / "usr" / "bin", "uv", source, {"-uvx": source})
 
+    def test_a_reviewed_member_ceiling_reaches_the_extraction(self) -> None:
+        """The recipe's own ceiling replaces the global one for its members."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = write_fake_archive(
+                root / "uv.tar.gz", member=self.target.archive_member, payload=b"uv",
+                additional_members=tuple(self.target.additional_binaries),
+            )
+            with self.assertRaisesRegex(ValueError, "limit"):
+                extract_binaries(
+                    archive, self.target, root / "extract", max_bytes=1
+                )
+            self.assertFalse((root / "extract").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

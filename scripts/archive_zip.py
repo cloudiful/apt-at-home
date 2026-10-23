@@ -56,15 +56,20 @@ def _entry_path(info: zipfile.ZipInfo) -> str:
     return canonical_member(name)
 
 
-def safe_extract_zip_member(archive: Path, member_name: str, dest: Path) -> Path:
+def safe_extract_zip_member(
+    archive: Path, member_name: str, dest: Path, *, max_bytes: int | None = None
+) -> Path:
     """Extract exactly one declared regular-file member of a ZIP archive.
 
     The member is selected by exact canonical path, never by basename guess, so
     an archive can only ever contribute the file the manifest pinned. Unsafe
     paths, links, devices, encrypted entries, unsupported compression, and a
-    second entry claiming the same path are refused rather than skipped.
+    second entry claiming the same path are refused rather than skipped. The
+    member's ceiling is the reviewed one for this package, or the global one
+    when the package declares none.
     """
     wanted = canonical_member(member_name)
+    limit = MAX_BINARY_BYTES if max_bytes is None else max_bytes
     written = 0
     crc = 0
     with zipfile.ZipFile(archive) as zf:
@@ -99,10 +104,10 @@ def safe_extract_zip_member(archive: Path, member_name: str, dest: Path) -> Path
         member = matches[0]
         if member.orig_filename.endswith("/"):
             raise ValueError(f"refusing to extract directory member {member.orig_filename!r}")
-        if member.file_size > MAX_BINARY_BYTES:
+        if member.file_size > limit:
             raise ValueError(
                 f"member {member.orig_filename} declares {member.file_size} bytes, over the "
-                f"{MAX_BINARY_BYTES} limit"
+                f"{limit} limit"
             )
         dest.parent.mkdir(parents=True, exist_ok=True)
         temp = dest.with_name(f".{dest.name}.partial")
@@ -114,10 +119,10 @@ def safe_extract_zip_member(archive: Path, member_name: str, dest: Path) -> Path
                         break
                     written += len(chunk)
                     crc = binascii.crc32(chunk, crc)
-                    if written > MAX_BINARY_BYTES:
+                    if written > limit:
                         raise ValueError(
                             f"member {member.orig_filename} exceeds the "
-                            f"{MAX_BINARY_BYTES} byte limit"
+                            f"{limit} byte limit"
                         )
                     out.write(chunk)
             if written != member.file_size:

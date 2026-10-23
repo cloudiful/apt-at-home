@@ -2,6 +2,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts.build import archive_cache_name
 from scripts.deb import build_deb, stage_package
@@ -120,7 +121,7 @@ class DebTest(unittest.TestCase):
 
             original = build_module.fetch_verified
 
-            def fake_fetch(url: str, sha: str, dest: Path) -> Path:
+            def fake_fetch(url: str, sha: str, dest: Path, **kwargs: object) -> Path:
                 return dest
 
             build_module.fetch_verified = fake_fetch  # type: ignore[assignment]
@@ -154,7 +155,7 @@ class DebTest(unittest.TestCase):
                     _write_build_archive(archive, pkg, arch, f"fake-{pkg.name}-{arch}".encode())
 
             original = build_module.fetch_verified
-            build_module.fetch_verified = lambda url, sha, dest: dest  # type: ignore[assignment]
+            build_module.fetch_verified = lambda url, sha, dest, **kwargs: dest  # type: ignore[assignment]
             try:
                 every = build_all(manifest, pool_dir=pool, cache_dir=cache)
                 self.assertEqual(len(every), len(expected_debs(manifest)))
@@ -193,7 +194,7 @@ class DebTest(unittest.TestCase):
                     archive = cache / archive_cache_name(pkg, arch)
                     write_target_archive(archive, pkg, arch, payload)
 
-            build_module.fetch_verified = lambda url, sha, dest: dest  # type: ignore[assignment]
+            build_module.fetch_verified = lambda url, sha, dest, **kwargs: dest  # type: ignore[assignment]
             try:
                 write_archive(b"first build")
                 build_all(manifest, pool_dir=pool, cache_dir=cache, packages=["starship"])
@@ -203,6 +204,92 @@ class DebTest(unittest.TestCase):
                 self.assertIn("refusing to overwrite", str(ctx.exception))
             finally:
                 build_module.fetch_verified = original  # type: ignore[assignment]
+
+
+    def test_the_reviewed_ceilings_reach_the_fetch_and_the_extraction(self) -> None:
+        """A package's own ceilings are the ones the build uses."""
+        from scripts import build as build_module
+        from scripts.build import build_all
+
+        manifest = load_manifest()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            pool = tmpdir / "pool"
+            cache = tmpdir / "upstream"
+            cache.mkdir(parents=True, exist_ok=True)
+            for pkg in manifest.packages:
+                for arch in sorted(pkg.targets):
+                    archive = cache / archive_cache_name(pkg, arch)
+                    _write_build_archive(archive, pkg, arch, f"fake-{pkg.name}-{arch}".encode())
+
+            fetched: list[object] = []
+            extracted: list[object] = []
+            original_fetch = build_module.fetch_verified
+            original_extract = build_module.extract_binaries
+
+            def fake_fetch(url: str, sha: str, dest: Path, **kwargs: object) -> Path:
+                fetched.append(kwargs.get("max_bytes"))
+                return dest
+
+            def fake_extract(archive: Path, target, destination: Path, **kwargs: object):
+                extracted.append(kwargs.get("max_bytes"))
+                return original_extract(archive, target, destination)
+
+            build_module.fetch_verified = fake_fetch  # type: ignore[assignment]
+            build_module.extract_binaries = fake_extract  # type: ignore[assignment]
+            try:
+                with mock.patch(
+                    "scripts.build.max_archive_bytes_for", return_value=1024
+                ), mock.patch(
+                    "scripts.build.max_binary_bytes_for", return_value=2048
+                ):
+                    build_all(manifest, pool_dir=pool, cache_dir=cache, packages=["zellij"])
+            finally:
+                build_module.fetch_verified = original_fetch  # type: ignore[assignment]
+                build_module.extract_binaries = original_extract  # type: ignore[assignment]
+
+            self.assertEqual(set(fetched), {1024})
+            self.assertEqual(set(extracted), {2048})
+
+    def test_a_package_without_reviewed_ceilings_keeps_the_legacy_ones(self) -> None:
+        """A recipe that declares no ceiling bounds the build by no ceiling."""
+        from scripts import build as build_module
+        from scripts.build import build_all
+
+        manifest = load_manifest()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            pool = tmpdir / "pool"
+            cache = tmpdir / "upstream"
+            cache.mkdir(parents=True, exist_ok=True)
+            for pkg in manifest.packages:
+                for arch in sorted(pkg.targets):
+                    archive = cache / archive_cache_name(pkg, arch)
+                    _write_build_archive(archive, pkg, arch, f"fake-{pkg.name}-{arch}".encode())
+
+            fetched: list[object] = []
+            extracted: list[object] = []
+            original_fetch = build_module.fetch_verified
+            original_extract = build_module.extract_binaries
+
+            def fake_fetch(url: str, sha: str, dest: Path, **kwargs: object) -> Path:
+                fetched.append(kwargs.get("max_bytes"))
+                return dest
+
+            def fake_extract(archive: Path, target, destination: Path, **kwargs: object):
+                extracted.append(kwargs.get("max_bytes"))
+                return original_extract(archive, target, destination)
+
+            build_module.fetch_verified = fake_fetch  # type: ignore[assignment]
+            build_module.extract_binaries = fake_extract  # type: ignore[assignment]
+            try:
+                build_all(manifest, pool_dir=pool, cache_dir=cache, packages=["zellij"])
+            finally:
+                build_module.fetch_verified = original_fetch  # type: ignore[assignment]
+                build_module.extract_binaries = original_extract  # type: ignore[assignment]
+
+            self.assertEqual(set(fetched), {None})
+            self.assertEqual(set(extracted), {None})
 
 
 if __name__ == "__main__":

@@ -30,11 +30,12 @@ from .catalog import (
     check_known_names,
     check_relations,
     extra_license_urls_for,
+    npm_platform_package_for,
     repo_of,
     source_for,
     tag_for,
 )
-from .upstream_assets import release_download_url, version_key
+from .upstream_assets import npm_tarball_name, npm_tarball_url, release_download_url, version_key
 
 from .download import canonical_member
 
@@ -50,6 +51,13 @@ _PUBLISHED_AT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _URL = re.compile(
     r"^https://(?:github\.com|codeberg\.org)/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
     r"/releases/download/[^/?#\s]+/[^/?#\s]+$"
+)
+# The npm registry archive form. The host, the package path, and the archive
+# name are the only shapes this accepts, and the canonical check below binds
+# each of them to one reviewed package, version, and asset.
+_NPM_URL = re.compile(
+    r"^https://registry\.npmjs\.org/(?:@[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+"
+    r"/-/[^/?#\s]+\.tgz$"
 )
 
 # The one reviewed architecture gap in published history: cargo-tauri publishes
@@ -243,6 +251,31 @@ def _parse_manifest(raw: object, *, allow_historical_gap: bool) -> Manifest:
     )
 
 
+def _check_npm_target_url(name: str, version: str, arch: str, url: str) -> str:
+    """Require the pinned URL to be the reviewed npm archive.
+
+    The URL is bound to the reviewed platform package and to the exact
+    version, so a generic registry URL, another package, or another version
+    can never pass. The recipe's own asset name must name that same archive,
+    so a manifest and a recipe can never disagree about which file is taken.
+    """
+    if not _NPM_URL.match(url):
+        raise ValueError(f"invalid pinned URL for {name} {arch}: {url}")
+    platform = npm_platform_package_for(name, arch)
+    expected = npm_tarball_url(platform, version)
+    if url != expected:
+        raise ValueError(
+            f"pinned URL for {name} {arch} is not the reviewed official asset: {url}"
+        )
+    reviewed = asset_name(name, version, arch)
+    if reviewed != npm_tarball_name(platform, version):
+        raise ValueError(
+            f"the reviewed asset name for {name} {arch} is not the npm archive "
+            f"name: {reviewed}"
+        )
+    return url
+
+
 def _check_target_url(name: str, version: str, arch: str, url: str) -> str:
     """Require the pinned URL to be the reviewed package's official asset.
 
@@ -251,6 +284,8 @@ def _check_target_url(name: str, version: str, arch: str, url: str) -> str:
     package's own source, repository, release tag, and asset, so a swapped
     host, repository, path, or tag can never pass.
     """
+    if name in KNOWN_PACKAGES and source_for(name) == "npm":
+        return _check_npm_target_url(name, version, arch, url)
     if not _URL.match(url):
         raise ValueError(f"invalid pinned URL for {name} {arch}: {url}")
     if name not in KNOWN_PACKAGES:
@@ -294,6 +329,14 @@ def _parse_source(
     if bundle_type and member != archive_member(name, version, arch):
         raise ValueError(
             f"{name} {arch} archive_member does not match the reviewed {bundle_type} recipe"
+        )
+    if (
+        name in KNOWN_PACKAGES
+        and source_for(name) == "npm"
+        and member != archive_member(name, version, arch)
+    ):
+        raise ValueError(
+            f"{name} {arch} archive_member does not match the reviewed npm recipe"
         )
     return member, "", bundle_type
 

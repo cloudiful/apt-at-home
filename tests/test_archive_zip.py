@@ -148,6 +148,23 @@ class ZipExtractionTest(unittest.TestCase):
             self.assertEqual(safe_extract_member(archive, MEMBER, dest), dest)
             self.assertEqual(dest.read_bytes(), PAYLOAD)
 
+    def test_a_reviewed_member_ceiling_replaces_the_global_one(self) -> None:
+        """The recipe's own ceiling reaches the ZIP reader unchanged."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = _zip(root / "big.zip", [(MEMBER, PAYLOAD, 0o100755)])
+            with self.assertRaisesRegex(ValueError, "limit"):
+                safe_extract_zip_member(archive, MEMBER, root / "bun", max_bytes=4)
+            self.assertFalse((root / "bun").exists())
+
+    def test_the_shared_entry_point_passes_the_reviewed_ceiling_on(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = _zip(root / "bun-linux-x64.zip", [(MEMBER, PAYLOAD, 0o100755)])
+            with self.assertRaisesRegex(ValueError, "limit"):
+                safe_extract_member(archive, MEMBER, root / "bun", max_bytes=4)
+            self.assertFalse((root / "bun").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

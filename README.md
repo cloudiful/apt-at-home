@@ -6,9 +6,9 @@ Private per-device authenticated APT source for Debian 13. English | [中文](RE
 
 - Private authenticated source with per-device tokens over an authenticated gateway.
 - Debian 13 packages for amd64 and arm64: bottom, bun, cargo-tauri, chezmoi,
-  fd-find, forgejo-cli, fzf, git-delta, kandev, neovim, rustfs-cli, sccache,
-  starship, tree-sitter-cli, uv, zellij, and zoxide, each from its official
-  release asset.
+  fd-find, forgejo-cli, fzf, git-delta, kandev, neovim, opencode, rustfs-cli,
+  sccache, starship, tree-sitter-cli, uv, zellij, and zoxide, each from its
+  official release asset.
 - `forgejo-cli` comes from Codeberg, which publishes no release digest: its
   archives are pinned by a SHA256 computed from the official download, which
   costs about 18 MiB of downloads per discovery run.
@@ -25,7 +25,7 @@ Private per-device authenticated APT source for Debian 13. English | [中文](RE
 
 ```sh
 sudo apt update
-sudo apt install bottom bun cargo-tauri chezmoi fd-find forgejo-cli fzf git-delta kandev neovim rustfs-cli sccache starship tree-sitter-cli uv zellij zoxide
+sudo apt install bottom bun cargo-tauri chezmoi fd-find forgejo-cli fzf git-delta kandev neovim opencode rustfs-cli sccache starship tree-sitter-cli uv zellij zoxide
 ```
 
 `bottom` provides `btm`, `fd-find` provides `fdfind`, `forgejo-cli` provides
@@ -40,6 +40,13 @@ wanted. Package installation does not change shell configuration.
 
 `tree-sitter-cli` requires glibc 2.39 or newer. `chezmoi` never edits shell
 configuration; run it explicitly to apply dotfiles.
+
+`opencode` is OpenCode V2, installed as the standalone `opencode` command: it
+needs neither Node nor Bun. The amd64 build requires AVX2, and both builds
+need glibc 2.17 or newer. Versions follow the stable 2.x line of the official
+npm distribution, whose archives are verified against the registry's published
+integrity digest before their SHA256 is pinned. Each `.deb` is large because
+the packaged binary is about 240 MB uncompressed.
 
 `kandev` installs the upstream standard server bundle. Run `kandev` to start it;
 package installation does not start the server.

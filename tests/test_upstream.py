@@ -12,12 +12,18 @@ bytes it serves.
 """
 
 import hashlib
+import tempfile
 import unittest
+import urllib.error
+import urllib.request
+from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 from scripts.catalog import RECIPES, archive_member, asset_name, extra_license_paths_for
 from scripts.upstream import (
     HttpError,
+    SameOriginRedirectHandler,
     UrllibClient,
     discover,
     latest_release,
@@ -28,6 +34,7 @@ from scripts.upstream_assets import (
     release_download_url,
     releases_api_url,
 )
+from tests.test_upstream_npm import ARCHIVES, NPM_RECIPE, npm_payloads, npm_recipe
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ZELLIJ = "zellij-org/zellij"
@@ -150,8 +157,9 @@ class FakeHttp:
     def __init__(self, payloads: dict[str, object]) -> None:
         self.payloads = payloads
         self.requests: list[str] = []
+        self.bounds: list[int] = []
 
-    def get_json(self, url: str) -> object:
+    def get_json(self, url: str, *, max_bytes: int = 0) -> object:
         self.requests.append(url)
         payload = self.payloads[url]
         if isinstance(payload, Exception):
@@ -160,6 +168,7 @@ class FakeHttp:
 
     def get_bytes(self, url: str, *, max_bytes: int) -> bytes:
         self.requests.append(url)
+        self.bounds.append(max_bytes)
         payload = self.payloads[url]
         if isinstance(payload, Exception):
             raise payload
@@ -697,6 +706,66 @@ class CodebergDiscoveryTest(unittest.TestCase):
             discover(FakeHttp(payloads), "forgejo-cli")
 
 
+class RegistryRedirectPolicyTest(unittest.TestCase):
+    """Every registry redirect target is validated, not only the first URL."""
+
+    REGISTRY = "https://registry.npmjs.org/@opencode%2Fcli"
+    TARBALL = (
+        "https://registry.npmjs.org/@opencode/cli-linux-x64/-/"
+        "cli-linux-x64-2.1.4.tgz"
+    )
+
+    def _redirect(self, target: str):
+        handler = SameOriginRedirectHandler()
+        request = urllib.request.Request(self.REGISTRY)
+        return handler.redirect_request(request, None, 302, "Found", {}, target)
+
+    def test_a_registry_redirect_with_a_query_is_refused(self) -> None:
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._redirect(self.REGISTRY + "?alternate=1")
+        ctx.exception.close()
+        self.assertIn("registry redirect", str(ctx.exception))
+
+    def test_a_registry_redirect_with_a_fragment_is_refused(self) -> None:
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._redirect(self.REGISTRY + "#alternate")
+        ctx.exception.close()
+        self.assertIn("registry redirect", str(ctx.exception))
+
+    def test_a_registry_redirect_with_a_credential_or_port_is_refused(self) -> None:
+        for target in (
+            "https://user:secret@registry.npmjs.org/@opencode%2Fcli",
+            "https://registry.npmjs.org:8443/@opencode%2Fcli",
+        ):
+            with self.subTest(target=target):
+                with self.assertRaises(urllib.error.HTTPError) as ctx:
+                    self._redirect(target)
+                ctx.exception.close()
+
+    def test_a_canonical_registry_redirect_is_followed(self) -> None:
+        new = self._redirect(self.TARBALL)
+
+        self.assertIsNotNone(new)
+        assert new is not None
+        self.assertEqual(new.full_url, self.TARBALL)
+
+    def test_a_non_registry_redirect_keeps_its_own_behavior(self) -> None:
+        """Only registry redirects are held to the canonical identity rule."""
+        request = urllib.request.Request(
+            "https://api.github.com/repos/x/y/releases/latest"
+        )
+        new = SameOriginRedirectHandler().redirect_request(
+            request, None, 302, "Found", {},
+            "https://api.github.com/repos/x/y/releases/tags/v1?page=1",
+        )
+
+        self.assertIsNotNone(new)
+        assert new is not None
+        self.assertEqual(
+            new.full_url, "https://api.github.com/repos/x/y/releases/tags/v1?page=1"
+        )
+
+
 class UrllibClientTest(unittest.TestCase):
     def test_reads_are_bounded_and_timeouts_are_set(self) -> None:
         client = UrllibClient(timeout=1)
@@ -713,6 +782,8 @@ class UrllibClientTest(unittest.TestCase):
             "https://codeberg.org/x/y/releases/download/v1.0.0/x.tar.gz",
             "https://raw.githubusercontent.com/x/y/v1.0.0/LICENSE",
             "https://github.com/x/y/releases/download/v1.0.0/x.tar.gz",
+            "https://registry.npmjs.org/@opencode/cli",
+            "https://registry.npmjs.org/@opencode/cli-linux-x64/-/cli-linux-x64-2.1.3.tgz",
             "http://api.github.com/repos/x/y/releases/latest",
             "https://api.github.com:8443/repos/x/y/releases/latest",
         ):
@@ -720,6 +791,92 @@ class UrllibClientTest(unittest.TestCase):
                 headers = client._headers(url)  # noqa: SLF001
                 self.assertNotIn("Authorization", headers)
                 self.assertNotIn("application/vnd.github+json", headers["Accept"] if "Accept" in headers else "")
+
+
+class NpmDiscoveryTest(unittest.TestCase):
+    """An npm package resolves through the registry, never through GitHub."""
+
+    def _payloads(self) -> dict[str, object]:
+        payloads = npm_payloads()
+        payloads[
+            "https://raw.githubusercontent.com/anomalyco/opencode/v2.1.3/LICENSE"
+        ] = b"MIT license text"
+        return payloads
+
+    def test_the_release_carries_the_canonical_registry_assets(self) -> None:
+        with npm_recipe():
+            client = FakeHttp(self._payloads())
+            release = latest_release(client, NPM_RECIPE.name)
+
+        self.assertEqual(release.repo, "anomalyco/opencode")
+        self.assertEqual(release.tag, "v2.1.3")
+        self.assertEqual(release.upstream_published_at, "2026-10-22T12:44:20Z")
+        self.assertEqual(sorted(release.assets), ["amd64", "arm64"])
+        for arch, platform in (("amd64", "@opencode/cli-linux-x64"),
+                               ("arm64", "@opencode/cli-linux-arm64")):
+            asset = release.assets[arch]
+            self.assertEqual(asset.name, f"{platform.split('/')[-1]}-2.1.3.tgz")
+            self.assertEqual(
+                asset.url,
+                f"https://registry.npmjs.org/{platform}/-/"
+                f"{platform.split('/')[-1]}-2.1.3.tgz",
+            )
+            self.assertEqual(
+                asset.sha256,
+                hashlib.sha256(ARCHIVES[platform]).hexdigest(),
+            )
+
+    def test_no_github_release_is_consulted(self) -> None:
+        with npm_recipe():
+            client = FakeHttp(self._payloads())
+            latest_release(client, NPM_RECIPE.name)
+
+        self.assertTrue(client.requests)
+        for url in client.requests:
+            self.assertNotIn("api.github.com", url)
+            self.assertNotIn("github.com/anomalyco", url)
+
+    def test_the_candidate_carries_the_registry_urls_and_the_license_source(self) -> None:
+        with npm_recipe(), mock.patch(
+            "scripts.upstream.vendor_license_sources",
+            return_value={"LICENSE": b"MIT license text"},
+        ):
+            candidate = discover(
+                FakeHttp(self._payloads()),
+                NPM_RECIPE.name,
+                vendored_license=b"MIT license text",
+            )
+
+        self.assertEqual(candidate.version, "2.1.3")
+        self.assertEqual(candidate.tag, "v2.1.3")
+        self.assertEqual(candidate.upstream_published_at, "2026-10-22T12:44:20Z")
+        self.assertEqual(
+            candidate.license_url,
+            "https://raw.githubusercontent.com/anomalyco/opencode/v2.1.3/LICENSE",
+        )
+        self.assertEqual(
+            candidate.targets["amd64"]["url"],
+            "https://registry.npmjs.org/@opencode/cli-linux-x64/-/"
+            "cli-linux-x64-2.1.3.tgz",
+        )
+
+    def test_a_recipe_asset_name_that_agrees_with_nothing_is_refused(self) -> None:
+        recipe = replace(
+            NPM_RECIPE,
+            name="opencode-npm-test",
+            asset="cli-linux-{triple}-{version}.zip",
+        )
+        with npm_recipe(recipe):
+            with self.assertRaises(ValueError):
+                latest_release(FakeHttp(self._payloads()), recipe.name)
+
+    def test_the_reviewed_archive_ceiling_reaches_the_registry_read(self) -> None:
+        recipe = replace(NPM_RECIPE, max_archive_bytes=1024)
+        with npm_recipe(recipe):
+            client = FakeHttp(self._payloads())
+            latest_release(client, recipe.name)
+
+        self.assertEqual(set(client.bounds), {1024})
 
 
 if __name__ == "__main__":

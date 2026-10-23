@@ -5,7 +5,7 @@
   "section": "utils",
   "priority": "optional",
   "source_date_epoch": 1767225600,
-  "checksum_provenance": "Archive SHA256 verified by direct download against GitHub API digests. Zellij upstream .sha256sum files cover the inner binary (target/<triple>/release/zellij), not the tarball; starship .tar.gz.sha256 files cover the tarball and match the API digests. Codeberg publishes no release digest, so the forgejo-cli archives are pinned by SHA256 computed from the official Codeberg download and recomputed on every discovery.",
+  "checksum_provenance": "Archive SHA256 verified by direct download against GitHub API digests. Zellij upstream .sha256sum files cover the inner binary (target/<triple>/release/zellij), not the tarball; starship .tar.gz.sha256 files cover the tarball and match the API digests. Codeberg publishes no release digest, so the forgejo-cli archives are pinned by SHA256 computed from the official Codeberg download and recomputed on every discovery. OpenCode publishes through the npm registry, which carries a sha512 subresource-integrity digest for every package version: each platform archive is verified in full against that digest before its SHA256 is computed and pinned, and registry signature blobs are not treated as verified authenticity.",
   "packages": [
     {
       "name": "zellij",
@@ -450,6 +450,32 @@
           "sha256": "c9e6a6e71eb5291018e161a8426d7c313cd2e8553c2ca4029511fec2a33bc28c",
           "archive_member": "chezmoi",
           "binary": "chezmoi"
+        }
+      }
+    },
+    {
+      "name": "opencode",
+      "version": "2.1.4",
+      "homepage": "https://opencode.ai/v2/",
+      "description": "AI coding agent for the terminal",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2025 opencode",
+      "license_url": "https://raw.githubusercontent.com/anomalyco/opencode/v2.1.4/LICENSE",
+      "upstream_published_at": "2026-10-23T10:13:53Z",
+      "targets": {
+        "amd64": {
+          "url": "https://registry.npmjs.org/@opencode/cli-linux-x64/-/cli-linux-x64-2.1.4.tgz",
+          "sha256": "ce05abe2dce1041391c8ec8cdb8da066f640fd471e72ac846dcb089c441e11e1",
+          "archive_member": "package/bin/opencode",
+          "binary": "opencode",
+          "depends": "libc6 (>= 2.17)"
+        },
+        "arm64": {
+          "url": "https://registry.npmjs.org/@opencode/cli-linux-arm64/-/cli-linux-arm64-2.1.4.tgz",
+          "sha256": "e9acb4e23a9ac432139693aa166455a6add8946533394cbe083459a48e788861",
+          "archive_member": "package/bin/opencode",
+          "binary": "opencode",
+          "depends": "libc6 (>= 2.17)"
         }
       }
     }
