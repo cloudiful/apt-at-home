@@ -100,7 +100,9 @@ class Store:
 def _stub_archive():
     """Serve any requested archive with the exact member its manifest pins."""
 
-    def fetch(url: str, expected_sha256: str, dest: Path) -> Path:
+    def fetch(
+        url: str, expected_sha256: str, dest: Path, *, max_bytes: int | None = None,
+    ) -> Path:
         stem = archive_stem(dest.name)
         manifest = load_manifest()
         name = next(

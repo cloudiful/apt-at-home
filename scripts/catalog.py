@@ -23,6 +23,12 @@ __all__ = [
     "archive_suffix_for",
     "arches_for",
     "exact_tag_release_for",
+    "license_source_for",
+    "max_archive_bytes_for",
+    "max_binary_bytes_for",
+    "npm_package_for",
+    "npm_packages_for",
+    "npm_platform_package_for",
     "source_for",
     "tag_prefix_for",
 ]
@@ -102,6 +108,46 @@ def repo_of(package_name: str) -> str:
 def source_for(package_name: str) -> str:
     """Return the reviewed upstream host this package's release comes from."""
     return recipe_for(package_name).source
+
+
+def license_source_for(package_name: str) -> str:
+    """Return the reviewed host this package's license text comes from.
+
+    A package whose release comes from one host may publish its license text
+    on another reviewed host, so the license origin is its own reviewed value.
+    """
+    recipe = recipe_for(package_name)
+    return recipe.license_source or recipe.source
+
+
+def npm_package_for(package_name: str) -> str:
+    """Return the npm wrapper package this package's platform packages live in."""
+    return recipe_for(package_name).npm_package
+
+
+def npm_packages_for(package_name: str) -> Mapping[str, str]:
+    """Return the npm platform package published for each reviewed arch."""
+    return recipe_for(package_name).npm_packages
+
+
+def npm_platform_package_for(package_name: str, arch: str) -> str:
+    """Return the npm platform package published for one reviewed arch."""
+    try:
+        return npm_packages_for(package_name)[_arch(arch)]
+    except KeyError:
+        raise ValueError(
+            f"{package_name} publishes no {arch} npm platform package"
+        ) from None
+
+
+def max_archive_bytes_for(package_name: str) -> int:
+    """Return this package's reviewed archive ceiling, or 0 for the legacy one."""
+    return recipe_for(package_name).max_archive_bytes
+
+
+def max_binary_bytes_for(package_name: str) -> int:
+    """Return this package's reviewed member ceiling, or 0 for the legacy one."""
+    return recipe_for(package_name).max_binary_bytes
 
 
 def tag_prefix_for(package_name: str) -> str:
@@ -198,7 +244,7 @@ def extra_license_urls_for(package_name: str, version: str) -> tuple[str, ...]:
     recipe = recipe_for(package_name)
     tag = tag_for(package_name, version)
     return tuple(
-        license_url(recipe.repo, tag, path, source=recipe.source)
+        license_url(recipe.repo, tag, path, source=license_source_for(package_name))
         for path in recipe.extra_license_paths
     )
 

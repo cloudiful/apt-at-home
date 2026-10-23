@@ -156,7 +156,7 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   `X-Manifest-Size`) before it reads a single package byte, then compares that
   signed baseline against the latest stable upstream release of every package
   in the catalog: bottom, bun, cargo-tauri, chezmoi, fd-find, forgejo-cli,
-  fzf, git-delta, kandev, neovim, rustfs-cli, sccache, starship,
+  fzf, git-delta, kandev, neovim, opencode, rustfs-cli, sccache, starship,
   tree-sitter-cli, uv, zellij, and zoxide.
   `cargo-tauri` selects the highest stable `tauri-cli-vN.N.N` tag and that exact
   release's official Linux assets, so another product line's latest release
@@ -170,6 +170,11 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   every asset. `forgejo-cli` comes from Codeberg, which publishes none, so
   its archives are pinned by a SHA256 computed from the official download and
   recomputed on every discovery; that costs about 18 MiB of downloads per run.
+  `opencode` comes from the official npm registry: its archives are read in
+  full, verified against the sha512 subresource-integrity digest the registry
+  publishes for the exact package version, and only then pinned by their
+  SHA256; that costs about 220 MiB of downloads per run, and registry signature
+  blobs are never treated as verified authenticity.
 - A package the published release does not carry yet is added from the catalog
   rather than replacing anything. Every added package contributes one `.deb`
   per declared architecture, and every existing package stays byte-identical.
@@ -222,6 +227,13 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   release digest, so its archives are hashed from the official download; an
   outage, a renamed asset, or changed bytes stops the run instead of skipping
   the package.
+- **An npm release is missing, deprecated, or does not match its digest.** The
+  registry must name the exact reviewed wrapper and platform packages at one
+  stable version, and every archive must match the sha512 integrity digest the
+  registry published for that version before its SHA256 is pinned. A missing or
+  malformed digest, a mismatching archive, a deprecated release, a platform
+  package the wrapper does not pin at exactly that version, or a newer major
+  line stops the run instead of falling back.
 - **The published release does not bind a valid manifest.** A release whose
   `Release` omits `X-Manifest-*`, or whose bound manifest is missing or does not
   match the signed digest and size, stops the run before any package is read.

@@ -25,9 +25,13 @@ from .catalog import (
     arches_for,
     exact_tag_release_for,
     license_path_for,
+    max_archive_bytes_for,
+    npm_package_for,
+    npm_platform_package_for,
     repo_of,
     source_for,
 )
+from .download import NPM_REGISTRY_HOST
 from .license_sources import check_license_sources, vendor_license_sources
 from .manifest import normalize_published_at
 from .upstream_assets import (
@@ -41,6 +45,7 @@ from .upstream_assets import (
     tags_api_url,
     version_key,
 )
+from .upstream_npm import MAX_ARCHIVE_BYTES, discover as discover_npm
 
 USER_AGENT = "apt-at-home/1.0"
 JSON_TIMEOUT = 30
@@ -65,7 +70,7 @@ _HOP_COUNT = "_apt_at_home_redirect_hops"
 class HttpClient(Protocol):
     """The two bounded reads discovery needs; injectable so tests never hit the network."""
 
-    def get_json(self, url: str) -> object: ...
+    def get_json(self, url: str, *, max_bytes: int = MAX_JSON_BYTES) -> object: ...
 
     def get_bytes(self, url: str, *, max_bytes: int) -> bytes: ...
 
@@ -80,15 +85,40 @@ def _origin(url: str) -> tuple[str, str]:
     return (parts.scheme.lower(), parts.netloc.lower())
 
 
+def _check_registry_redirect(newurl: str, code: int, headers, fp) -> None:  # type: ignore[no-untyped-def]
+    """Refuse a registry redirect that is not the exact canonical identity.
+
+    The registry answers one canonical URL per package, version, and archive,
+    so a redirect target that carries a credential, a port, a query, or a
+    fragment names a request this repository never reviewed. Every other
+    origin keeps its own redirect behavior.
+    """
+    parts = urllib.parse.urlsplit(newurl)
+    if (parts.hostname or "").lower() != NPM_REGISTRY_HOST:
+        return
+    if parts.netloc.lower() != NPM_REGISTRY_HOST or parts.query or parts.fragment:
+        raise urllib.error.HTTPError(
+            newurl,
+            code,
+            "a registry redirect must not carry a credential, port, query, or fragment",
+            headers,
+            fp,
+        )
+
+
 class SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Follow a redirect only inside the origin the request already had.
 
     A redirect is refused before the next request is sent when it leaves the
     origin (host, port, and scheme) or downgrades to plain HTTP, so a token or
-    a cookie scoped to one origin can never reach another one. A chain follows
-    at most three hops in total, repeated destinations included; the budget
-    travels with the request, so every new request starts with a full
-    allowance and concurrent chains never share a counter.
+    a cookie scoped to one origin can never reach another one. A registry
+    redirect must also stay the exact reviewed request identity: a credential,
+    a port, a query, or a fragment on the redirect target is refused, because
+    the registry answers only canonical URLs and a response must never select
+    another one. A chain follows at most three hops in total, repeated
+    destinations included; the budget travels with the request, so every new
+    request starts with a full allowance and concurrent chains never share a
+    counter.
     """
 
     max_redirections = MAX_REDIRECTS
@@ -103,6 +133,7 @@ class SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
             raise urllib.error.HTTPError(
                 newurl, code, "a cross-origin redirect is refused", headers, fp
             )
+        _check_registry_redirect(newurl, code, headers, fp)
         hops = getattr(req, _HOP_COUNT, 0)
         if hops >= MAX_REDIRECTS:
             raise urllib.error.HTTPError(
@@ -164,8 +195,8 @@ class UrllibClient:
             raise HttpError(f"request failed for {url}: {exc.reason}") from exc
         return b"".join(chunks)
 
-    def get_json(self, url: str) -> object:
-        return json.loads(self._read(url, max_bytes=MAX_JSON_BYTES).decode("utf-8"))
+    def get_json(self, url: str, *, max_bytes: int = MAX_JSON_BYTES) -> object:
+        return json.loads(self._read(url, max_bytes=max_bytes).decode("utf-8"))
 
     def get_bytes(self, url: str, *, max_bytes: int) -> bytes:
         return self._read(url, max_bytes=max_bytes)
@@ -292,6 +323,47 @@ def _published_at(payload: dict[str, object], *, source: str) -> str:
         ) from None
 
 
+def _latest_npm_release(client: HttpClient, package_name: str, repo: str) -> DiscoveredRelease:
+    """Return the reviewed npm release of one package.
+
+    The npm registry answers only for the reviewed wrapper package and the
+    reviewed platform packages, and the archives it serves are verified
+    against their own integrity digests before their sha256 is computed. No
+    GitHub release is consulted for an npm package.
+    """
+    release = discover_npm(
+        client,
+        wrapper=npm_package_for(package_name),
+        platforms={
+            arch: npm_platform_package_for(package_name, arch)
+            for arch in arches_for(package_name)
+        },
+        max_archive_bytes=max_archive_bytes_for(package_name) or MAX_ARCHIVE_BYTES,
+    )
+    version = release.version
+    tag = tag_for(package_name, version)
+    assets: dict[str, ReleaseAsset] = {}
+    for asset in release.assets:
+        name = asset_name(package_name, version, asset.arch)
+        if name != asset.name:
+            raise ValueError(
+                f"the npm archive name for {package_name} {asset.arch} is not "
+                f"the reviewed one: {asset.name!r}"
+            )
+        assets[asset.arch] = ReleaseAsset(
+            name=asset.name, url=asset.url, sha256=asset.sha256
+        )
+    published_at = (
+        normalize_published_at(release.published_at) if release.published_at else ""
+    )
+    return DiscoveredRelease(
+        repo=repo,
+        tag=tag,
+        assets=assets,
+        upstream_published_at=published_at,
+    )
+
+
 def latest_release(client: HttpClient, package_name: str) -> DiscoveredRelease:
     """Return the latest stable release with its publication instant.
 
@@ -300,10 +372,13 @@ def latest_release(client: HttpClient, package_name: str) -> DiscoveredRelease:
     every other package retains `releases/latest` behavior. Only the reviewed
     architectures carry assets. A GitHub release supplies the asset digest; a
     Codeberg release supplies none, so its digest is computed from the
-    official download.
+    official download; an npm release supplies its own integrity digest, and
+    its sha256 is computed from the verified archive bytes.
     """
     repo = repo_of(package_name)
     source = source_for(package_name)
+    if source == "npm":
+        return _latest_npm_release(client, package_name, repo)
     if exact_tag_release_for(package_name):
         tag = _latest_exact_tag(client, package_name, repo)
         # The tag must carry this project's own prefix and be an exact stable

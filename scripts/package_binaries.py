@@ -33,16 +33,20 @@ def _members(target: ArchTarget) -> list[tuple[str, str]]:
     return declarations
 
 
-def extract_binaries(archive: Path, target: ArchTarget, destination: Path) -> dict[str, Path]:
+def extract_binaries(
+    archive: Path, target: ArchTarget, destination: Path, *, max_bytes: int | None = None
+) -> dict[str, Path]:
     """Extract each exact reviewed flat member without executing its contents.
 
     The archive is a gzipped tarball or a ZIP: the format follows the official
     asset's suffix, and both refuse everything but the one pinned regular file.
+    The member ceiling is the reviewed one for this package, or the global one
+    when the package declares none.
     """
     sources: dict[str, Path] = {}
     for name, member in _members(target):
         source = destination / name
-        safe_extract_member(archive, member, source)
+        safe_extract_member(archive, member, source, max_bytes=max_bytes)
         sources[name] = source
     return sources
 

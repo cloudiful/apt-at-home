@@ -7,7 +7,13 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from .archive_tree import inventory_tree
-from .catalog import archive_suffix_for, required_paths_for, tag_for
+from .catalog import (
+    archive_suffix_for,
+    max_archive_bytes_for,
+    max_binary_bytes_for,
+    required_paths_for,
+    tag_for,
+)
 from .common import sha256_file
 from .deb import build_deb, stage_package
 from .download import fetch_verified
@@ -40,7 +46,10 @@ def _stage_target(
             tree=(archive, inventory, required_paths_for(pkg.name)),
         )
     binary_sources = extract_binaries(
-        archive, target, tmpdir / f"{pkg.name}-{arch}-bin"
+        archive,
+        target,
+        tmpdir / f"{pkg.name}-{arch}-bin",
+        max_bytes=max_binary_bytes_for(pkg.name) or None,
     )
     additional = {
         name: source for name, source in binary_sources.items() if name != target.binary
@@ -93,7 +102,12 @@ def build_all(
             for arch in sorted(pkg.targets):
                 target = pkg.targets[arch]
                 archive = cache_dir / archive_cache_name(pkg, arch)
-                fetch_verified(target.url, target.sha256, archive)
+                fetch_verified(
+                    target.url,
+                    target.sha256,
+                    archive,
+                    max_bytes=max_archive_bytes_for(pkg.name) or None,
+                )
                 # Nothing in the archive is executed during the host build.
                 stage = _stage_target(pkg, arch, manifest, archive, tmpdir)
                 output_deb = pool_dir / deb_filename(pkg, arch, manifest)

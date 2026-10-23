@@ -20,17 +20,21 @@ from .catalog import (
     asset_name,
     extra_license_paths_for,
     license_path_for,
+    license_source_for,
     recipe_for,
     repo_of,
-    source_for,
     tag_for,
 )
+from .download import NPM_REGISTRY_HOST
 
 API_BASE = "https://api.github.com"
 WEB_BASE = "https://github.com"
 RAW_BASE = "https://raw.githubusercontent.com"
 CODEBERG_API_BASE = "https://codeberg.org/api/v1"
 CODEBERG_WEB_BASE = "https://codeberg.org"
+# The npm registry is the one origin an npm release may come from, and the
+# only origin its metadata and archives are ever read from.
+NPM_REGISTRY_BASE = f"https://{NPM_REGISTRY_HOST}"
 
 # The fixed URL form of each reviewed source. Nothing outside this table can
 # become a release, download, or raw-license origin.
@@ -155,8 +159,70 @@ def license_urls_for(package_name: str, tag: str) -> tuple[str, ...]:
     """Return primary and supplemental license URLs in reviewed recipe order."""
     paths = (license_path(package_name), *extra_license_paths_for(package_name))
     repo = repo_of(package_name)
-    source = source_for(package_name)
+    source = license_source_for(package_name)
     return tuple(license_url(repo, tag, path, source=source) for path in paths)
+
+
+# One npm package name: an optional scope and a lowercase name. A name outside
+# this shape can never name a reviewed package, so no endpoint is built for it.
+_NPM_NAME = re.compile(r"^(?:@([a-z0-9][a-z0-9._-]*)/)?([a-z0-9][a-z0-9._-]*)$")
+
+
+def _split_npm_name(package_name: str) -> tuple[str, str]:
+    """Return the scope and the name of one npm package, or fail closed."""
+    match = _NPM_NAME.match(package_name)
+    if match is None:
+        raise ValueError(f"unusable npm package name: {package_name!r}")
+    return match.group(1) or "", match.group(2)
+
+
+def npm_package_endpoint(package_name: str) -> str:
+    """Return the canonical registry metadata endpoint for one package.
+
+    A scoped package names its scope and its name in one path segment, so the
+    endpoint is built from the reviewed name and never from a response.
+    """
+    scope, stem = _split_npm_name(package_name)
+    if scope:
+        return f"{NPM_REGISTRY_BASE}/@{scope}%2F{stem}"
+    return f"{NPM_REGISTRY_BASE}/{stem}"
+
+
+def npm_version_endpoint(package_name: str, version: str) -> str:
+    """Return the canonical registry endpoint for one exact package version."""
+    if not re.match(r"^[0-9]+\.[0-9]+\.[0-9]+$", version):
+        raise ValueError(f"unusable npm version: {version!r}")
+    return f"{npm_package_endpoint(package_name)}/{version}"
+
+
+def npm_tarball_name(package_name: str, version: str) -> str:
+    """Return the canonical archive file name of one npm package version."""
+    _, stem = _split_npm_name(package_name)
+    return f"{stem}-{version}.tgz"
+
+
+def npm_tarball_url(package_name: str, version: str) -> str:
+    """Return the canonical registry archive URL for one package version.
+
+    The URL is constructed from the reviewed scope, name, and version alone,
+    so no response can ever name the origin or the path of an archive.
+    """
+    scope, stem = _split_npm_name(package_name)
+    prefix = f"{NPM_REGISTRY_BASE}/@{scope}/{stem}" if scope else (
+        f"{NPM_REGISTRY_BASE}/{stem}"
+    )
+    return f"{prefix}/-/{npm_tarball_name(package_name, version)}"
+
+
+def check_npm_tarball_url(url: object, package_name: str, version: str) -> str:
+    """Require a registry archive URL to be the canonical reviewed one."""
+    expected = npm_tarball_url(package_name, version)
+    if url != expected:
+        raise ValueError(
+            f"the npm archive url for {package_name} {version} is not the "
+            f"canonical one: {url!r}"
+        )
+    return expected
 
 
 __all__ = [
@@ -164,13 +230,19 @@ __all__ = [
     "API_BASE",
     "CODEBERG_API_BASE",
     "CODEBERG_WEB_BASE",
+    "NPM_REGISTRY_BASE",
     "RAW_BASE",
     "WEB_BASE",
     "asset_name",
+    "check_npm_tarball_url",
     "check_official_asset_url",
     "license_path",
     "license_url",
     "license_urls_for",
+    "npm_package_endpoint",
+    "npm_tarball_name",
+    "npm_tarball_url",
+    "npm_version_endpoint",
     "parse_asset_digest",
     "parse_stable_tag",
     "release_download_url",

@@ -1,5 +1,6 @@
 import copy
 import unittest
+from dataclasses import replace
 
 from scripts.catalog import KNOWN_PACKAGES, RECIPES, arches_for, check_known_names
 from scripts.manifest import (
@@ -14,7 +15,8 @@ from scripts.manifest import (
 )
 from scripts.release_manifest import load_manifest_data
 from scripts.manifest import default_manifest_path
-from scripts.upstream_assets import asset_name, release_download_url
+from scripts.upstream_assets import asset_name, npm_tarball_url, release_download_url
+from tests.test_upstream_npm import NPM_RECIPE, npm_recipe
 
 TARGET = {
     "url": "https://github.com/example/example/releases/download/v1.0.0/x.tar.gz",
@@ -22,6 +24,21 @@ TARGET = {
     "archive_member": "x",
     "binary": "x",
 }
+
+
+def expected_target_url(name: str, version: str, arch: str) -> str:
+    """The official asset URL a reviewed package's target must carry."""
+    from scripts.catalog import npm_platform_package_for
+
+    recipe = RECIPES[name]
+    if recipe.source == "npm":
+        return npm_tarball_url(npm_platform_package_for(name, arch), version)
+    return release_download_url(
+        recipe.repo,
+        recipe.tag_prefix + version,
+        asset_name(name, version, arch),
+        source=recipe.source,
+    )
 
 
 def _document() -> dict:
@@ -43,12 +60,7 @@ class ManifestTest(unittest.TestCase):
                 # source host that package's recipe reviews.
                 self.assertEqual(
                     target.url,
-                    release_download_url(
-                        RECIPES[pkg.name].repo,
-                        RECIPES[pkg.name].tag_prefix + pkg.version,
-                        asset_name(pkg.name, pkg.version, arch),
-                        source=RECIPES[pkg.name].source,
-                    ),
+                    expected_target_url(pkg.name, pkg.version, arch),
                 )
                 self.assertRegex(target.sha256, r"^[0-9a-f]{64}$")
                 self.assertNotIn("latest", target.url)
@@ -410,6 +422,7 @@ PINNED_PUBLISHED_AT = {
     "fzf": "2026-10-11T02:39:32Z",
     "tree-sitter-cli": "2026-10-08T17:43:54Z",
     "chezmoi": "2026-10-20T15:14:47Z",
+    "opencode": "2026-10-23T10:13:53Z",
 }
 
 
@@ -432,12 +445,7 @@ class PublishedAtManifestTest(unittest.TestCase):
                 for arch, target in pkg.targets.items():
                     self.assertEqual(
                         target.url,
-                        release_download_url(
-                            RECIPES[pkg.name].repo,
-                            RECIPES[pkg.name].tag_prefix + pkg.version,
-                            asset_name(pkg.name, pkg.version, arch),
-                            source=RECIPES[pkg.name].source,
-                        ),
+                        expected_target_url(pkg.name, pkg.version, arch),
                     )
 
     def test_a_document_without_the_field_stays_valid(self) -> None:
@@ -574,6 +582,108 @@ class HistoricalBaselineTest(unittest.TestCase):
         cargo["targets"]["riscv64"] = copy.deepcopy(cargo["targets"]["amd64"])
         with self.assertRaises(ValueError):
             parse_baseline_manifest(data)
+
+
+class NpmManifestTest(unittest.TestCase):
+    """A reviewed npm package pins its registry archive and nothing else."""
+
+    def _document(self) -> dict:
+        targets = {}
+        for arch, platform in (
+            ("amd64", "@opencode/cli-linux-x64"),
+            ("arm64", "@opencode/cli-linux-arm64"),
+        ):
+            stem = platform.split("/")[-1]
+            targets[arch] = {
+                "url": (
+                    f"https://registry.npmjs.org/{platform}/-/{stem}-2.1.3.tgz"
+                ),
+                "sha256": "a" * 64,
+                "archive_member": "package/bin/opencode",
+                "binary": "opencode",
+            }
+        return {
+            "manifest_version": 1,
+            "debian_revision": "-1",
+            "maintainer": "APT At Home <apt-at-home@localhost>",
+            "section": "utils",
+            "priority": "optional",
+            "packages": [
+                {
+                    "name": NPM_RECIPE.name,
+                    "version": "2.1.3",
+                    "homepage": "https://opencode.ai/v2/",
+                    "description": "OpenCode V2 command line tool",
+                    "license": "MIT",
+                    "copyright": "Copyright (c) 2025 opencode",
+                    "license_url": (
+                        "https://raw.githubusercontent.com/anomalyco/opencode/"
+                        "v2.1.3/LICENSE"
+                    ),
+                    "upstream_published_at": "2026-10-22T12:44:20Z",
+                    "targets": targets,
+                }
+            ],
+        }
+
+    def test_the_reviewed_registry_archives_are_accepted(self) -> None:
+        with npm_recipe():
+            manifest = parse_manifest(self._document())
+
+        pkg = manifest.packages[0]
+        self.assertEqual(pkg.name, NPM_RECIPE.name)
+        self.assertEqual(pkg.version, "2.1.3")
+        self.assertEqual(pkg.upstream_published_at, "2026-10-22T12:44:20Z")
+        self.assertEqual(
+            pkg.targets["amd64"].url,
+            "https://registry.npmjs.org/@opencode/cli-linux-x64/-/"
+            "cli-linux-x64-2.1.3.tgz",
+        )
+        self.assertEqual(pkg.targets["amd64"].archive_member, "package/bin/opencode")
+
+    def test_any_other_registry_url_is_refused(self) -> None:
+        official = (
+            "https://registry.npmjs.org/@opencode/cli-linux-x64/-/"
+            "cli-linux-x64-2.1.3.tgz"
+        )
+        cases = {
+            "other_host": official.replace("registry.npmjs.org", "registry.example.com"),
+            "other_package": official.replace(
+                "@opencode/cli-linux-x64", "@opencode/cli-linux-x86"
+            ),
+            "other_version": official.replace("2.1.3", "2.1.4"),
+            "other_asset": official.replace("cli-linux-x64-2.1.3.tgz", "other.tgz"),
+            "plain_package": "https://registry.npmjs.org/@opencode/cli",
+            "credentials": official.replace("https://", "https://user:secret@"),
+            "port": official.replace(
+                "https://registry.npmjs.org", "https://registry.npmjs.org:8443"
+            ),
+            "query": official + "?token=secret",
+            "fragment": official + "#secret",
+            "plain_http": official.replace("https://", "http://"),
+        }
+        for label, url in cases.items():
+            with self.subTest(case=label):
+                with npm_recipe():
+                    data = self._document()
+                    data["packages"][0]["targets"]["amd64"]["url"] = url
+                    with self.assertRaises(ValueError, msg=label):
+                        parse_manifest(data)
+
+    def test_a_member_the_recipe_does_not_name_is_refused(self) -> None:
+        with npm_recipe():
+            data = self._document()
+            data["packages"][0]["targets"]["amd64"]["archive_member"] = (
+                "package/package.json"
+            )
+            with self.assertRaises(ValueError):
+                parse_manifest(data)
+
+    def test_a_recipe_whose_asset_name_is_not_the_archive_name_is_refused(self) -> None:
+        recipe = replace(NPM_RECIPE, asset="cli-linux-{triple}-{version}.zip")
+        with npm_recipe(recipe):
+            with self.assertRaises(ValueError):
+                parse_manifest(self._document())
 
 
 if __name__ == "__main__":

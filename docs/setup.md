@@ -178,7 +178,11 @@ the exact three steps, reproduced here for operators.
   were verified by direct download against the GitHub API digests. Zellij
   upstream `.sha256sum` files cover the inner binary
   (`target/<triple>/release/zellij`), not the tarball; starship
-  `.tar.gz.sha256` files cover the tarball. See `checksum_provenance` in the
+  `.tar.gz.sha256` files cover the tarball. OpenCode publishes through the npm
+  registry, which carries a sha512 subresource-integrity digest for every
+  package version: each platform archive is verified in full against that
+  digest before its SHA256 is computed and pinned, and registry signature blobs
+  are not treated as verified authenticity. See `checksum_provenance` in the
   manifest.
 - `forgejo-cli` comes from Codeberg, which publishes no release digest: its
   archives are pinned by a SHA256 this repository computes from the official
@@ -186,6 +190,12 @@ the exact three steps, reproduced here for operators.
   later discovery recomputes it. One discovery run downloads about 18 MiB of
   Codeberg archives, and an unreachable archive, a renamed asset, or changed
   license bytes stops the update instead of skipping the package.
+- `opencode` comes from the official npm registry, whose archives are read in
+  full to compute their SHA256 after the integrity check. One discovery run
+  downloads about 220 MiB of OpenCode archives; a missing, malformed, or
+  mismatching digest, a deprecated release, or a platform package the wrapper
+  does not pin at the same exact version stops the update instead of skipping
+  the package.
 - Neovim is the full upstream release tree, installed under `/usr` from one
   archive root. It declares `Conflicts` and `Replaces` on `neovim-runtime`, so an
   APT upgrade removes the distribution runtime through the normal solver. Its
@@ -194,12 +204,13 @@ the exact three steps, reproduced here for operators.
 - The command-line packages are `bottom` (`btm`), `bun` (`bun`), `cargo-tauri`
   (`cargo-tauri` and `cargo tauri`, requires `cargo`), `chezmoi`, `fd-find`
   (`fdfind`), `forgejo-cli` (`fj`), `fzf`, `git-delta` (`delta`), `neovim`
-  (`nvim`), `rustfs-cli` (`rc`), `sccache`, `starship`, `tree-sitter-cli`
-  (`tree-sitter`, requires glibc 2.39), `uv` (`uv` and `uvx`), `zellij`, and
-  `zoxide` for both architectures. The arm64 `cargo-tauri` build needs glibc
-  2.18 and the amd64 build keeps its glibc 2.34 and liblzma requirements.
-  Zoxide shell initialization is opt-in; users may add
-  `eval "$(zoxide init bash)"` to their own Bash configuration. Package
+  (`nvim`), `opencode` (OpenCode V2, standalone: no Node or Bun; amd64 needs
+  AVX2 and both architectures need glibc 2.17), `rustfs-cli` (`rc`), `sccache`,
+  `starship`, `tree-sitter-cli` (`tree-sitter`, requires glibc 2.39), `uv`
+  (`uv` and `uvx`), `zellij`, and `zoxide` for both architectures. The arm64
+  `cargo-tauri` build needs glibc 2.18 and the amd64 build keeps its glibc 2.34
+  and liblzma requirements. Zoxide shell initialization is opt-in; users may
+  add `eval "$(zoxide init bash)"` to their own Bash configuration. Package
   installation never edits shell configuration.
 - `fd-find` installs upstream's `fd` binary as `fdfind`; `/usr/bin/fd` is left
   to the distribution's unrelated `fdclone` package.

@@ -4,6 +4,7 @@ import unittest
 
 from scripts.license_sources import check_license_sources, vendor_license_sources
 from scripts.upstream_assets import license_urls_for
+from tests.test_upstream_npm import NPM_RECIPE, npm_recipe
 
 
 class FakeHttp:
@@ -94,6 +95,42 @@ class LicenseSourcesTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "supplemental license LICENSE-APACHE bytes changed"):
             check_license_sources(FakeHttp(payloads), "fd-find", "v10.5.0")
+
+    def test_an_npm_package_reads_its_license_from_its_reviewed_source(self) -> None:
+        """A release from the registry may publish its license text on GitHub."""
+        with npm_recipe():
+            urls = license_urls_for(NPM_RECIPE.name, "v2.1.3")
+            self.assertEqual(
+                urls,
+                (
+                    "https://raw.githubusercontent.com/anomalyco/opencode/"
+                    "v2.1.3/LICENSE",
+                ),
+            )
+            client = FakeHttp({urls[0]: b"MIT license text"})
+
+            primary, extras = check_license_sources(
+                client,
+                NPM_RECIPE.name,
+                "v2.1.3",
+                vendored={"LICENSE": b"MIT license text"},
+            )
+
+            self.assertEqual((primary, extras), (urls[0], ()))
+            self.assertEqual([url for url, _ in client.requests], list(urls))
+
+    def test_changed_npm_license_bytes_fail_closed(self) -> None:
+        with npm_recipe():
+            urls = license_urls_for(NPM_RECIPE.name, "v2.1.3")
+            client = FakeHttp({urls[0]: b"a different license text"})
+
+            with self.assertRaisesRegex(ValueError, "license bytes changed"):
+                check_license_sources(
+                    client,
+                    NPM_RECIPE.name,
+                    "v2.1.3",
+                    vendored={"LICENSE": b"MIT license text"},
+                )
 
 
 if __name__ == "__main__":

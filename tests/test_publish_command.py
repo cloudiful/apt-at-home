@@ -56,7 +56,9 @@ class Store:
         return payload
 
 
-def _fake_fetch(url: str, expected_sha256: str, dest: Path) -> Path:
+def _fake_fetch(
+    url: str, expected_sha256: str, dest: Path, *, max_bytes: int | None = None
+) -> Path:
     """Stand in for the pinned upstream download with a local stub archive.
 
     The archive carries the exact member the manifest pins, including the
