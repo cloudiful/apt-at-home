@@ -89,6 +89,14 @@ export interface InstallStepsCopy {
   readonly auth: AuthDetailsCopy
 }
 
+/** Prose for the anonymous public request counters. */
+export interface PublicStatsCopy {
+  readonly heading: string
+  readonly visits: string
+  readonly downloads: string
+  readonly note: string
+}
+
 /** The prose contract every locale satisfies. */
 export interface HomepageCopy {
   readonly documentTitle: string
@@ -107,6 +115,7 @@ export interface HomepageCopy {
   readonly steps: InstallStepsCopy
   readonly commands: CommandCopy
   readonly fairUse: FairUseCopy
+  readonly publicStats: PublicStatsCopy
 }
 
 /**
@@ -196,6 +205,12 @@ const en: HomepageCopy = {
     unit: 'requests/min',
     retry: 'If you are temporarily limited, wait about a minute and try again.',
   },
+  publicStats: {
+    heading: 'Last 30 days',
+    visits: 'Visits',
+    downloads: 'Download requests',
+    note: 'Approximate request counts, not unique visitors or completed installs.',
+  },
 }
 
 const zh: HomepageCopy = {
@@ -271,6 +286,12 @@ const zh: HomepageCopy = {
     },
     unit: '次请求/分钟',
     retry: '如果暂时受限，请等待约 1 分钟后重试。',
+  },
+  publicStats: {
+    heading: '最近 30 天',
+    visits: '访问次数',
+    downloads: '下载请求数',
+    note: '近似请求次数，不是独立访客数，也不是已完成的安装数。',
   },
 }
 

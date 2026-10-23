@@ -16,6 +16,15 @@
       "bucket_name": "apt"
     }
   ],
+  "analytics_engine_datasets": [
+    {
+      "binding": "ANALYTICS",
+      "dataset": "apt_at_home_events"
+    }
+  ],
+  "analytics": {
+    "binding": "ANALYTICS_SQL"
+  },
   "ratelimits": [
     {
       "name": "INDEX_LIMITER",

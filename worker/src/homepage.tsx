@@ -21,6 +21,7 @@ import { CLIENT_SCRIPT_URL, CLIENT_STYLE_URLS, THEME_INIT_URL } from './assets.j
 import { documentLanguage, resolveLocale } from './i18n.js';
 import { loadCatalog } from './packages.js';
 import { methodNotAllowed } from './responses.js';
+import { loadPublicStats } from './telemetry.js';
 import type { AppProps, PackageSummary } from '../../web/src/lib/types';
 import type { Locale } from './i18n.js';
 import type { Env } from './types.js';
@@ -64,9 +65,19 @@ export async function handleRoot(request: Request, env: Env): Promise<Response |
   if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed();
   const locale = resolveLocale(url.searchParams.get('lang'), request.headers.get('accept-language'));
   const now = new Date().toISOString();
-  const catalog = await loadCatalog(env);
+  // The catalog and the anonymous counters are independent, so they are read
+  // together: the counters are bounded on their own and never hold the page
+  // longer than their own budget.
+  const [catalog, stats] = await Promise.all([loadCatalog(env), loadPublicStats(env)]);
   const packages: readonly PackageSummary[] | null = catalog.ok ? catalog.packages : null;
-  return homepageResponse(request.method, url.origin, locale, packages, now);
+  return homepageResponse(
+    request.method,
+    url.origin,
+    locale,
+    packages,
+    now,
+    stats === null ? undefined : stats,
+  );
 }
 
 function homepageResponse(
@@ -75,8 +86,9 @@ function homepageResponse(
   locale: Locale,
   packages: readonly PackageSummary[] | null,
   now: string,
+  stats: AppProps['stats'],
 ): Response {
-  const document = renderHomepageDocument({ locale, origin, packages, now });
+  const document = renderHomepageDocument({ locale, origin, packages, now, stats });
   const length = encoder.encode(document).byteLength;
   const headers = {
     'Content-Type': 'text/html; charset=utf-8',

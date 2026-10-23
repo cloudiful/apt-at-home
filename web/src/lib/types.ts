@@ -21,6 +21,22 @@ export interface PackageSummary {
   readonly upstreamPublishedAt?: string
 }
 
+/**
+ * The anonymous request counters the public page shows.
+ *
+ * The numbers count requests, never people: there is no visitor identity, no
+ * cookie and no address in them. A visit is one served homepage request and a
+ * download is one served package request, so both are approximate by nature.
+ */
+export interface PublicStats {
+  /** Length of the rolling window the counters cover. */
+  readonly days: 30
+  /** Homepage requests that answered with the page. */
+  readonly visits: number
+  /** Package file requests that answered with the file. */
+  readonly downloads: number
+}
+
 /** Everything the page renders from. */
 export interface AppProps {
   /** Locale the page is served in. */
@@ -31,4 +47,11 @@ export interface AppProps {
   readonly packages: readonly PackageSummary[] | null
   /** Request-time UTC clock reference, serialized for deterministic SSR/hydration. */
   readonly now: string
+  /**
+   * Anonymous request counters, or absent when they could not be read.
+   *
+   * The page omits the counters entirely in that case: an absent counter and a
+   * counter of zero are different facts and must not look alike.
+   */
+  readonly stats?: PublicStats
 }

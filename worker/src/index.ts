@@ -32,67 +32,88 @@ import {
   tooManyRequests,
   unauthorized,
 } from './responses.js';
+import { recordRequest } from './telemetry.js';
 import { POINTER_KEY } from './types.js';
 import type { ClassifiedPath } from './paths.js';
 import type { Env, ResolvedObject } from './types.js';
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const asset = await serveAsset(request, env);
-    if (asset !== null) return asset;
-
-    const root = await handleRoot(request, env);
-    if (root !== null) return root;
-
-    const classified = classifyPath(new URL(request.url).pathname);
-    const artifactMethod = request.method === 'GET' || request.method === 'HEAD';
-    if (
-      artifactMethod &&
-      classified !== null &&
-      (await isRateLimited(env, request, classified))
-    ) {
-      return tooManyRequests(request.method);
-    }
-
-    const authMode = resolveAuthMode(env.AUTH_REQUIRED);
-    if (!authMode.ok) return serviceUnavailable();
-
-    if (authMode.mode === 'required') {
-      const config = parseCredentialConfig(env.CREDENTIALS);
-      if (!config.ok) return serviceUnavailable();
-
-      if (!(await isAuthorized(request.headers.get('authorization'), config.credentials))) {
-        return unauthorized(challengeHeaders());
-      }
-    }
-    if (!artifactMethod) {
-      return methodNotAllowed();
-    }
-
-    if (classified === null) return notFound();
-
-    const target = await resolveTarget(env, classified);
-    if (!target.ok) {
-      return target.reason === 'absent' ? notFound() : serviceUnavailable();
-    }
-    const resolved = target.object;
-
-    const cacheControl = cacheControlFor(resolved.immutable);
-    const mayUseCache = resolved.immutable && request.method === 'GET';
-    const bypassCache = shouldBypassCache(request);
-
-    if (mayUseCache && !bypassCache) {
-      const cached = await cacheLookup(resolved.key);
-      if (cached !== null) return toClientResponse(cached, cacheControl);
-    }
-
-    const response = await serveObject(env, request, resolved);
-    if (mayUseCache && isCacheableBody(response)) {
-      ctx.waitUntil(cacheStore(resolved.key, response.clone()));
-    }
+    const response = await handleRequest(request, env, ctx);
+    // The counters see the response the client receives, so a request that was
+    // refused is never counted as a visit or a download.
+    recordRequest(env, request, response);
     return response;
   },
 };
+
+/**
+ * The request routing of the gateway, unchanged.
+ *
+ * The order of the operations is the security contract and is kept exactly as
+ * it was: the credential secret is validated, then the request is
+ * authenticated, and only then may the release pointer, the cache or the
+ * bucket be touched.
+ */
+async function handleRequest(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const asset = await serveAsset(request, env);
+  if (asset !== null) return asset;
+
+  const root = await handleRoot(request, env);
+  if (root !== null) return root;
+
+  const classified = classifyPath(new URL(request.url).pathname);
+  const artifactMethod = request.method === 'GET' || request.method === 'HEAD';
+  if (
+    artifactMethod &&
+    classified !== null &&
+    (await isRateLimited(env, request, classified))
+  ) {
+    return tooManyRequests(request.method);
+  }
+
+  const authMode = resolveAuthMode(env.AUTH_REQUIRED);
+  if (!authMode.ok) return serviceUnavailable();
+
+  if (authMode.mode === 'required') {
+    const config = parseCredentialConfig(env.CREDENTIALS);
+    if (!config.ok) return serviceUnavailable();
+
+    if (!(await isAuthorized(request.headers.get('authorization'), config.credentials))) {
+      return unauthorized(challengeHeaders());
+    }
+  }
+  if (!artifactMethod) {
+    return methodNotAllowed();
+  }
+
+  if (classified === null) return notFound();
+
+  const target = await resolveTarget(env, classified);
+  if (!target.ok) {
+    return target.reason === 'absent' ? notFound() : serviceUnavailable();
+  }
+  const resolved = target.object;
+
+  const cacheControl = cacheControlFor(resolved.immutable);
+  const mayUseCache = resolved.immutable && request.method === 'GET';
+  const bypassCache = shouldBypassCache(request);
+
+  if (mayUseCache && !bypassCache) {
+    const cached = await cacheLookup(resolved.key);
+    if (cached !== null) return toClientResponse(cached, cacheControl);
+  }
+
+  const response = await serveObject(env, request, resolved);
+  if (mayUseCache && isCacheableBody(response)) {
+    ctx.waitUntil(cacheStore(resolved.key, response.clone()));
+  }
+  return response;
+}
 
 /** Prefix the public browser assets are served under. */
 const ASSET_PREFIX = '/assets/';
