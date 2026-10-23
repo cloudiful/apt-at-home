@@ -20,18 +20,18 @@
   --light-card-foreground: oklch(0.145 0 0);
   --light-popover: oklch(1 0 0);
   --light-popover-foreground: oklch(0.145 0 0);
-  --light-primary: oklch(0.205 0 0);
-  --light-primary-foreground: oklch(0.985 0 0);
+  --light-primary: oklch(0.52 0.19 256);
+  --light-primary-foreground: oklch(0.99 0 0);
   --light-secondary: oklch(0.97 0 0);
   --light-secondary-foreground: oklch(0.205 0 0);
   --light-muted: oklch(0.97 0 0);
   --light-muted-foreground: oklch(0.556 0 0);
-  --light-accent: oklch(0.97 0 0);
-  --light-accent-foreground: oklch(0.205 0 0);
+  --light-accent: oklch(0.96 0.02 256);
+  --light-accent-foreground: oklch(0.32 0.11 256);
   --light-destructive: oklch(0.577 0.245 27.325);
   --light-border: oklch(0.922 0 0);
   --light-input: oklch(0.922 0 0);
-  --light-ring: oklch(0.708 0 0);
+  --light-ring: oklch(0.58 0.17 256);
 
   --dark-background: oklch(0.145 0 0);
   --dark-foreground: oklch(0.985 0 0);
@@ -39,18 +39,18 @@
   --dark-card-foreground: oklch(0.985 0 0);
   --dark-popover: oklch(0.205 0 0);
   --dark-popover-foreground: oklch(0.985 0 0);
-  --dark-primary: oklch(0.922 0 0);
-  --dark-primary-foreground: oklch(0.205 0 0);
+  --dark-primary: oklch(0.72 0.15 256);
+  --dark-primary-foreground: oklch(0.18 0.03 256);
   --dark-secondary: oklch(0.269 0 0);
   --dark-secondary-foreground: oklch(0.985 0 0);
   --dark-muted: oklch(0.269 0 0);
   --dark-muted-foreground: oklch(0.708 0 0);
-  --dark-accent: oklch(0.269 0 0);
-  --dark-accent-foreground: oklch(0.985 0 0);
+  --dark-accent: oklch(0.3 0.05 256);
+  --dark-accent-foreground: oklch(0.93 0.03 256);
   --dark-destructive: oklch(0.704 0.191 22.216);
   --dark-border: oklch(1 0 0 / 10%);
   --dark-input: oklch(1 0 0 / 15%);
-  --dark-ring: oklch(0.556 0 0);
+  --dark-ring: oklch(0.65 0.14 256);
 
   --background: var(--light-background);
   --foreground: var(--light-foreground);
@@ -164,6 +164,11 @@
   html {
     -webkit-text-size-adjust: 100%;
   }
+  @media (prefers-reduced-motion: no-preference) {
+    html {
+      scroll-behavior: smooth;
+    }
+  }
   body {
     margin: 0;
     background: var(--background);
@@ -184,21 +189,37 @@
     padding: 1.5rem;
   }
   .code-block {
-    margin: 0.5rem 0;
+    margin: 0;
     padding: 0.75rem;
     max-width: 100%;
-    overflow-x: auto;
     background: var(--muted);
     border: 1px solid var(--border);
+    border-left: 3px solid var(--primary);
     border-radius: 0.5rem;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 0.85rem;
     line-height: 1.5;
-    white-space: pre;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
   .code-block code {
     font-family: inherit;
     font-size: inherit;
+  }
+  /*
+   * A command keeps its canonical text for copying while the visible block
+   * wraps, so even the long complete install command never widens the page.
+   */
+  .command-block {
+    display: grid;
+    gap: 0.25rem;
+    min-width: 0;
+    margin: 0.5rem 0;
+  }
+  .command-controls {
+    display: flex;
+    justify-content: flex-end;
+    min-width: 0;
   }
   .more {
     min-width: 0;
@@ -225,6 +246,9 @@
   .steps > li {
     min-width: 0;
     padding-left: 0.25rem;
+  }
+  .steps > li > h3 {
+    color: var(--primary);
   }
   /*
    * The section navigation is one landmark for both breakpoints: a compact
@@ -260,7 +284,7 @@
     white-space: nowrap;
   }
   .section-nav-link:hover {
-    color: var(--foreground);
+    color: var(--primary);
     text-decoration: underline;
   }
   main h2[id] {

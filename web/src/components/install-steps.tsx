@@ -1,5 +1,6 @@
 import * as React from 'react'
 
+import { CommandBlock } from '@/components/command-block'
 import {
   authCommands,
   installCommands,
@@ -30,22 +31,19 @@ export function InstallSteps({
     <ol className="steps">
       <li>
         <h3 className="font-medium">{copy.steps.key.title}</h3>
-        <pre className="code-block">
-          <code>{keyCommand(origin)}</code>
-        </pre>
+        <CommandBlock command={keyCommand(origin)} labels={copy.commands} />
         <details className="more">
           <summary>{copy.steps.key.fingerprintSummary}</summary>
           <p>{copy.steps.key.fingerprintNote}</p>
-          <pre className="code-block">
-            <code>gpg --show-keys /etc/apt/keyrings/apt-at-home.asc</code>
-          </pre>
+          <CommandBlock
+            command="gpg --show-keys /etc/apt/keyrings/apt-at-home.asc"
+            labels={copy.commands}
+          />
         </details>
       </li>
       <li>
         <h3 className="font-medium">{copy.steps.sources.title}</h3>
-        <pre className="code-block">
-          <code>{sourcesCommand(origin)}</code>
-        </pre>
+        <CommandBlock command={sourcesCommand(origin)} labels={copy.commands} />
       </li>
       <li>
         <h3 className="font-medium">{copy.steps.install.title}</h3>
@@ -55,9 +53,7 @@ export function InstallSteps({
         }).map((block) => (
           <div key={block.command}>
             {block.label ? <p className="my-2">{block.label}</p> : null}
-            <pre className="code-block">
-              <code>{block.command}</code>
-            </pre>
+            <CommandBlock command={block.command} labels={copy.commands} />
           </div>
         ))}
       </li>
@@ -74,23 +70,17 @@ export function InstallSteps({
  * never carries a real token, only placeholders.
  */
 export function AuthDetails({ origin, copy }: { origin: string; copy: HomepageCopy }) {
-  const [credential, machine, curl] = authCommands(origin)
+  const [credential = '', machine = '', curl = ''] = authCommands(origin)
 
   return (
     <details className="more">
       <summary>{copy.steps.auth.summary}</summary>
       <p>{copy.steps.auth.intro}</p>
-      <pre className="code-block">
-        <code>{credential}</code>
-      </pre>
+      <CommandBlock command={credential} labels={copy.commands} />
       <p>{keywordProse(copy.steps.auth.fileLabel)}</p>
-      <pre className="code-block">
-        <code>{machine}</code>
-      </pre>
+      <CommandBlock command={machine} labels={copy.commands} />
       <p>{copy.steps.auth.curlNote}</p>
-      <pre className="code-block">
-        <code>{curl}</code>
-      </pre>
+      <CommandBlock command={curl} labels={copy.commands} />
     </details>
   )
 }

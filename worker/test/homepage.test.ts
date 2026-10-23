@@ -4,6 +4,7 @@ import gateway from '../src/index.js';
 import { renderHomepageDocument } from '../src/homepage.js';
 import manifest from '../dist/assets/.vite/manifest.json';
 import { markTheme } from '../../web/src/components/theme-provider.js';
+import { copyFor } from '../../web/src/lib/locales.js';
 import { authorized, createEnv, FakeContext, plain } from './fakes.js';
 import {
   CLIENT,
@@ -661,6 +662,56 @@ describe('root page content', () => {
   });
 });
 
+describe('command copy controls', () => {
+  it('localizes the copy state labels for both locales', () => {
+    expect(copyFor('en').commands).toEqual({
+      copy: 'Copy',
+      copied: 'Copied',
+      failed: 'Copy failed',
+    });
+    expect(copyFor('zh').commands).toEqual({
+      copy: '复制',
+      copied: '已复制',
+      failed: '复制失败',
+    });
+  });
+
+  it('gives every command block its own localized copy button and live status', async () => {
+    const fixture = await createFixture();
+    for (const [path, label] of [
+      ['/', 'Copy'],
+      ['/?lang=zh', '复制'],
+    ] as const) {
+      const html = await (await fixture.call(plain(path))).text();
+      const blocks = html.match(/<div class="command-block">[\s\S]*?<\/div><\/div>/g) ?? [];
+      expect(blocks.length, path).toBeGreaterThan(0);
+      for (const block of blocks) {
+        expect(block, path).toContain('<pre class="code-block"><code>');
+        expect(block, path).toMatch(/<button[^>]*type="button"/);
+        expect(block, path).toContain('data-variant="outline"');
+        expect(block, path).toContain(`<span>${label}</span>`);
+        expect(block, path).toContain('role="status"');
+        expect(block, path).toContain('aria-live="polite"');
+      }
+      // The collapsed fingerprint and device-credential commands carry the
+      // same control as the always-visible steps.
+      expect(html, path).toContain('gpg --show-keys /etc/apt/keyrings/apt-at-home.asc');
+      expect(html, path).toContain('/etc/apt/auth.conf.d/apt-at-home.conf');
+    }
+  });
+
+  it('keeps the canonical heredoc command text inside its copyable block', async () => {
+    const fixture = await createFixture();
+    const html = await (await fixture.call(plain('/'))).text();
+    const blocks = html.match(/<div class="command-block">[\s\S]*?<\/div><\/div>/g) ?? [];
+    const sources = blocks.find((block) => block.includes('sudo tee')) ?? '';
+    expect(sources).toContain("sudo tee /etc/apt/sources.list.d/apt-at-home.sources");
+    expect(sources).toContain('Types: deb');
+    expect(sources).toContain('EOF');
+    expect(sources).toMatch(/<button[^>]*type="button"/);
+  });
+});
+
 describe('public browser assets', () => {
   it('serves the built assets without a credential', async () => {
     const fixture = await createFixture();
@@ -855,6 +906,44 @@ describe('the wide-screen layout', () => {
     // The minifier may write the range either way round.
     expect(built).toMatch(/@media \((?:min-width: ?|width>=)64rem\)/);
     expect(built).toMatch(/@media \((?:min-width: ?|width>=)90rem\)/);
+  });
+});
+
+describe('command readability and navigation styling', () => {
+  const styles = readSource('../../web/src/styles/app.css');
+  const built = readSource(`../dist/assets/${CLIENT_STYLE}`);
+
+  it('wraps command text instead of clipping it horizontally', () => {
+    expect(styles).toMatch(/\.code-block \{[^}]*white-space: pre-wrap;/);
+    expect(styles).toMatch(/\.code-block \{[^}]*overflow-wrap: anywhere;/);
+    expect(styles).not.toMatch(/\.code-block \{[^}]*white-space: pre;/);
+    expect(styles).toMatch(/\.command-block \{[^}]*min-width: 0;/);
+    expect(built).toContain('white-space:pre-wrap');
+    expect(built).toContain('overflow-wrap:anywhere');
+  });
+
+  it('scrolls smoothly only when motion is not reduced and keeps the anchor margin', () => {
+    expect(styles).toMatch(
+      /@media \(prefers-reduced-motion: no-preference\) \{[\s\S]*?scroll-behavior: smooth;/,
+    );
+    expect(styles.match(/scroll-behavior: smooth/g) ?? []).toHaveLength(1);
+    expect(styles).toMatch(/main h2\[id\] \{[^}]*scroll-margin-top:/);
+    expect(built).toContain('prefers-reduced-motion:no-preference');
+    expect(built).toContain('scroll-behavior:smooth');
+  });
+
+  it('uses coordinated blue primary, accent and ring tokens in both palettes', () => {
+    for (const token of [
+      '--light-primary',
+      '--light-accent',
+      '--light-ring',
+      '--dark-primary',
+      '--dark-accent',
+      '--dark-ring',
+    ]) {
+      const value = styles.match(new RegExp(`${token}: ([^;]+);`))?.[1] ?? '';
+      expect(value, token).toMatch(/^oklch\(0\.\d+ 0\.\d+ 256\)$/);
+    }
   });
 });
 

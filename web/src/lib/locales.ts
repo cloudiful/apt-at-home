@@ -64,6 +64,13 @@ export interface InstallStepCopy {
   readonly arm64Intro: string
 }
 
+/** Labels for a command block's copy control. */
+export interface CommandCopy {
+  readonly copy: string
+  readonly copied: string
+  readonly failed: string
+}
+
 /** Prose for the collapsed device-credential details. */
 export interface AuthDetailsCopy {
   readonly summary: string
@@ -95,6 +102,7 @@ export interface HomepageCopy {
   readonly catalog: CatalogCopy
   readonly stepsHeading: string
   readonly steps: InstallStepsCopy
+  readonly commands: CommandCopy
   readonly fairUse: FairUseCopy
 }
 
@@ -165,6 +173,11 @@ const en: HomepageCopy = {
         'With the gate enabled, the key fetch uses your device name and prompts for the password instead of the anonymous command above:',
     },
   },
+  commands: {
+    copy: 'Copy',
+    copied: 'Copied',
+    failed: 'Copy failed',
+  },
   fairUse: {
     heading: 'Fair use',
     summary:
@@ -232,6 +245,11 @@ const zh: HomepageCopy = {
       curlNote:
         '启用校验后，获取公钥改用设备名并提示输入密码，而非上面的匿名命令：',
     },
+  },
+  commands: {
+    copy: '复制',
+    copied: '已复制',
+    failed: '复制失败',
   },
   fairUse: {
     heading: '合理使用',
