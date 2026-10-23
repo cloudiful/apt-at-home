@@ -263,6 +263,31 @@ class CliTest(unittest.TestCase):
         package = self.repo.commit("packaging")
         self.assert_decision("push", web, package, "true")
 
+    def test_container_ownership_requires_exact_command_scoped_trust(self) -> None:
+        self.repo.write("web/app.ts")
+        base = self.repo.commit("base")
+        self.repo.write("web/feature.ts")
+        light = self.repo.commit("frontend")
+        self.repo.write("packaging/manifest.json", "{}\n")
+        heavy = self.repo.commit("artifact")
+        self.repo.env["GIT_TEST_ASSUME_DIFFERENT_OWNER"] = "1"
+        for key in list(self.repo.env):
+            if key.startswith("GIT_CONFIG_") and key not in (
+                "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL"
+            ):
+                del self.repo.env[key]
+        self.assert_decision("push", base, light, "true")
+        self.repo.env.update({
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "safe.directory",
+            "GIT_CONFIG_VALUE_0": str(self.repo.path),
+        })
+        self.assert_decision("push", base, light, "false")
+        self.assert_decision("push", light, heavy, "true")
+        self.assert_decision("push", "f" * 40, light, "true")
+        self.repo.env["GIT_CONFIG_VALUE_0"] = str(self.repo.path / "other")
+        self.assert_decision("push", base, light, "true")
+
     def test_deleting_a_package_path_stays_heavy(self) -> None:
         self.repo.write("packaging/x.txt")
         base = self.repo.commit("base")
