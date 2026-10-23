@@ -231,6 +231,18 @@ class CiTierSelectionTest(unittest.TestCase):
         )
         self.assertNotIn("${{", run_line)
 
+    def test_detector_trust_is_exact_and_command_scoped(self) -> None:
+        detect = self.python_step("python3 -m scripts.ci_scope")
+        self.assertIn(
+            'run: GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory '
+            'GIT_CONFIG_VALUE_0="$PWD" python3 -m scripts.ci_scope >> "$GITHUB_OUTPUT"',
+            detect,
+        )
+        self.assertEqual(self.ci.count("GIT_CONFIG_COUNT"), 1)
+        self.assertEqual(self.ci.count("safe.directory"), 1)
+        self.assertNotIn("git config --global", self.ci)
+        self.assertNotIn("git config --system", self.ci)
+
     def test_python_job_exposes_fail_closed_output(self) -> None:
         self.assertIn(
             "outputs:\n      heavy: ${{ steps.scope.outputs.heavy != 'false' }}",

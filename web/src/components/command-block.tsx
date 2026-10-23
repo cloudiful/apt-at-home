@@ -9,6 +9,23 @@ type CopyState = 'idle' | 'copied' | 'failed'
 /** How long a copy result stays visible before the control resets. */
 const FEEDBACK_RESET_MS = 2000
 
+export function createCopyFeedback(update: (state: CopyState) => void) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let disposed = false
+  return {
+    show(result: Exclude<CopyState, 'idle'>) {
+      if (disposed) return
+      clearTimeout(timer)
+      update(result)
+      timer = setTimeout(() => update('idle'), FEEDBACK_RESET_MS)
+    },
+    dispose() {
+      disposed = true
+      clearTimeout(timer)
+    },
+  }
+}
+
 /**
  * One shell command with its copy control.
  *
@@ -19,22 +36,24 @@ const FEEDBACK_RESET_MS = 2000
 export function CommandBlock({ command, labels }: { command: string; labels: CommandCopy }) {
   const [state, setState] = React.useState<CopyState>('idle')
 
+  const feedback = React.useRef<ReturnType<typeof createCopyFeedback> | null>(null)
+
   React.useEffect(() => {
-    if (state === 'idle') return
-    const timer = setTimeout(() => setState('idle'), FEEDBACK_RESET_MS)
-    return () => clearTimeout(timer)
-  }, [state])
+    const controller = createCopyFeedback(setState)
+    feedback.current = controller
+    return () => controller.dispose()
+  }, [])
 
   const handleCopy = React.useCallback(async () => {
     try {
       if (typeof navigator === 'undefined' || navigator.clipboard === undefined) {
-        setState('failed')
+        feedback.current?.show('failed')
         return
       }
       await navigator.clipboard.writeText(command)
-      setState('copied')
+      feedback.current?.show('copied')
     } catch {
-      setState('failed')
+      feedback.current?.show('failed')
     }
   }, [command])
 

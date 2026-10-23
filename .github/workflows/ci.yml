@@ -60,7 +60,7 @@ jobs:
           CI_EVENT_NAME: ${{ github.event_name }}
           CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           CI_HEAD_SHA: ${{ github.sha }}
-        run: python3 -m scripts.ci_scope >> "$GITHUB_OUTPUT"
+        run: GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$PWD" python3 -m scripts.ci_scope >> "$GITHUB_OUTPUT"
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
       - name: Verify portable public dependency lock
         run: uv lock --check
