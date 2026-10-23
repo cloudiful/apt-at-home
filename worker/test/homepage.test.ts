@@ -52,6 +52,7 @@ function readSource(relative: string): string {
 describe('public root landing page', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it('serves GET / as a public HTML page from the published catalog', async () => {
@@ -257,6 +258,7 @@ describe('the rendered document', () => {
       locale: 'en',
       origin: 'https://apt.example.test',
       packages: [{ name: '</script><script>alert(1)</script>', version: '1.0.0', architectures: ['amd64'] }],
+      now: '2026-10-12T00:00:00Z',
     });
     expect(html).not.toContain('</script><script>alert(1)');
     expect(html).toContain('\\u003c/script>');
@@ -546,6 +548,7 @@ describe('root page content', () => {
         locale,
         origin: 'https://evil"</code><script>alert(1)</script>',
         packages: null,
+        now: '2026-10-12T00:00:00Z',
       });
       expect(html, locale).not.toContain('<script>alert(1)');
       expect(html, locale).toContain('&lt;script&gt;');
@@ -563,27 +566,139 @@ describe('root page content', () => {
   });
 
   it('shows the upstream release date as a UTC date and an unknown as an em dash', async () => {
-    const fixture = await createFixture();
-    const html = await (await fixture.call(plain('/?lang=en'))).text();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-12T00:00:00Z'));
+    try {
+      const fixture = await createFixture();
+      const html = await (await fixture.call(plain('/?lang=en'))).text();
 
-    expect(html).toContain('Upstream release');
-    // alpha declares 2026-10-09T15:43:25Z; the cell shows the UTC day only and
-    // carries the full canonical value in the time element's dateTime.
-    expect(html).toContain('dateTime="2026-10-09T15:43:25Z">2026-10-09</time>');
-    // beta and gamma declare nothing, so they show the em dash.
-    expect(html.match(/>—<\/td>/g) ?? []).toHaveLength(2);
-    expect(html).not.toContain('1970-01-01');
-    expect(html).not.toContain('2026-02-31');
+      expect(html).toContain('Upstream release');
+      // alpha declares 2026-10-09T15:43:25Z; the cell shows the relative age
+      // first, then the UTC day, and carries the full canonical value in
+      // the time element's dateTime.
+      expect(html).toContain('dateTime="2026-10-09T15:43:25Z">2026-10-09</time>');
+      expect(html).toContain('3 days ago');
+      expect(html.indexOf('3 days ago')).toBeLessThan(
+        html.indexOf('dateTime="2026-10-09T15:43:25Z"'),
+      );
+      // beta and gamma declare nothing, so they show the em dash.
+      expect(html.match(/>—<\/td>/g) ?? []).toHaveLength(2);
+      expect(html).not.toContain('1970-01-01');
+      expect(html).not.toContain('2026-02-31');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('renders the same UTC date in both locales', async () => {
-    const fixture = await createFixture();
-    const en = await (await fixture.call(plain('/?lang=en'))).text();
-    const zh = await (await fixture.call(plain('/?lang=zh'))).text();
-    const cell = 'dateTime="2026-10-09T15:43:25Z">2026-10-09</time>';
-    expect(en).toContain(cell);
-    expect(zh).toContain(cell);
-    expect(zh).toContain('上游发布');
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-12T00:00:00Z'));
+    try {
+      const fixture = await createFixture();
+      const en = await (await fixture.call(plain('/?lang=en'))).text();
+      const zh = await (await fixture.call(plain('/?lang=zh'))).text();
+      const cell = 'dateTime="2026-10-09T15:43:25Z">2026-10-09</time>';
+      expect(en).toContain(cell);
+      expect(zh).toContain(cell);
+      expect(en).toContain('3 days ago');
+      expect(zh).toContain('3 天前');
+      expect(zh).toContain('上游发布');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('serializes one request clock for markup and hydration', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-12T00:00:00Z'));
+    try {
+      const fixture = await createFixture();
+      const html = await (await fixture.call(plain('/'))).text();
+      const start =
+        html.indexOf('<script id="app-props" type="application/json">') +
+        '<script id="app-props" type="application/json">'.length;
+      const payload = JSON.parse(html.slice(start, html.indexOf('</script>', start)));
+      expect(payload.now).toBe('2026-10-12T00:00:00.000Z');
+      expect(payload.packages[0].upstreamPublishedAt).toBe('2026-10-09T15:43:25Z');
+      expect(html).toContain('3 days ago');
+      expect(html).toContain('dateTime="2026-10-09T15:43:25Z">2026-10-09</time>');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('renders today, yesterday, future-only and unknown from a fixed clock', () => {
+    const packages = [
+      {
+        name: 'today-pkg',
+        version: '1.0.0',
+        architectures: ['amd64'],
+        upstreamPublishedAt: '2026-10-12T08:00:00Z',
+      },
+      {
+        name: 'yesterday-pkg',
+        version: '1.0.0',
+        architectures: ['amd64'],
+        upstreamPublishedAt: '2026-10-11T23:59:59Z',
+      },
+      {
+        name: 'future-pkg',
+        version: '1.0.0',
+        architectures: ['amd64'],
+        upstreamPublishedAt: '2026-10-13T00:00:00Z',
+      },
+      { name: 'unknown-pkg', version: '1.0.0', architectures: ['amd64'] },
+    ] as const;
+    const en = renderHomepageDocument({
+      locale: 'en',
+      origin: 'https://apt.example.test',
+      packages,
+      now: '2026-10-12T12:00:00Z',
+    });
+    expect(en).toContain('Today');
+    expect(en).toContain('Yesterday');
+    expect(en).toContain('dateTime="2026-10-13T00:00:00Z">2026-10-13</time>');
+    expect(en).toContain('>—</td>');
+    expect(en.match(/class="release-date"/g) ?? []).toHaveLength(2);
+    expect(en.indexOf('Today')).toBeLessThan(en.indexOf('dateTime="2026-10-12T08:00:00Z"'));
+
+    const zh = renderHomepageDocument({
+      locale: 'zh',
+      origin: 'https://apt.example.test',
+      packages,
+      now: '2026-10-12T12:00:00Z',
+    });
+    expect(zh).toContain('今天');
+    expect(zh).toContain('昨天');
+    expect(zh).toContain('dateTime="2026-10-13T00:00:00Z">2026-10-13</time>');
+  });
+
+  it('keeps labels coherent when the system clock differs', () => {
+    const props = {
+      locale: 'en',
+      origin: 'https://apt.example.test',
+      packages: [
+        {
+          name: 'alpha',
+          version: '1.2.3',
+          architectures: ['amd64'],
+          upstreamPublishedAt: '2026-10-09T15:43:25Z',
+        },
+      ],
+      now: '2026-10-12T00:00:00Z',
+    } as const;
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-12T00:00:00Z'));
+      const serverHtml = renderHomepageDocument(props);
+      vi.setSystemTime(new Date('2030-01-01T00:00:00Z'));
+      const lateHtml = renderHomepageDocument(props);
+      expect(serverHtml).toContain('3 days ago');
+      expect(lateHtml).toContain('3 days ago');
+      expect(lateHtml).not.toContain('1180 days ago');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('offers one section navigation landmark with the three anchors', async () => {
@@ -607,7 +722,7 @@ describe('root page content', () => {
     }
   });
 
-  it('keeps the wide-screen layout hooks and the document order', async () => {
+  it('keeps the reader layout hooks and the document order', async () => {
     const fixture = await createFixture();
     const html = await (await fixture.call(plain('/'))).text();
 
@@ -615,8 +730,8 @@ describe('root page content', () => {
     expect(html).toContain('class="catalog-section"');
     expect(html).toContain('class="steps-section mt-8"');
     expect(html).toContain('class="fair-use-section mt-8"');
-    // The document order stays catalog, guide, usage: the wide grid places
-    // the sections with CSS, never by reordering the markup.
+    // The document order stays catalog, guide, usage: the single reading
+    // column stacks the sections vertically, never by reordering the markup.
     expect(html.indexOf('id="catalog"')).toBeLessThan(html.indexOf('id="steps"'));
     expect(html.indexOf('id="steps"')).toBeLessThan(html.indexOf('id="usage"'));
     // The page still carries exactly one navigation landmark.
@@ -889,23 +1004,27 @@ describe('the theme markers', () => {
 describe('the wide-screen layout', () => {
   const styles = readSource('../../web/src/styles/app.css');
 
-  it('bounds the page and puts the guide beside the catalog on a wide screen', () => {
-    // The page grows with the window and stops at 1440 pixels.
+  it('bounds the page shell and stacks the guide under the catalog in a reader column', () => {
+    // The page shell still stops at 1440 pixels.
     expect(styles).toMatch(/\.page \{[^}]*max-width: 90rem;/);
-    // The shell gains its navigation column at 64rem, the content grid at 90rem.
+    // The shell keeps its navigation column at 64rem, but the content no
+    // longer splits into side-by-side columns at 90rem.
     expect(styles).toMatch(/@media \(min-width: 64rem\)/);
-    expect(styles).toMatch(/@media \(min-width: 90rem\)/);
+    expect(styles).not.toMatch(/@media \(min-width: 90rem\)/);
     expect(styles).toMatch(/grid-template-columns: 10rem minmax\(0, 1fr\)/);
-    expect(styles).toMatch(/grid-template-columns: minmax\(0, 1fr\) 25rem/);
-    // The fair-use note spans both columns underneath them.
-    expect(styles).toMatch(/\.fair-use-section \{[^}]*grid-column: 1 \/ -1;/);
+    expect(styles).not.toMatch(/grid-template-columns: minmax\(0, 1fr\) 25rem/);
+    expect(styles).not.toMatch(/\.fair-use-section \{[^}]*grid-column:/);
+    // The reading column stays within a 60rem cap inside the 90rem shell.
+    expect(styles).toMatch(/\.page-content \{[^}]*max-width: 60rem;/);
+    // The relative date groups its label and exact day compactly.
+    expect(styles).toMatch(/\.release-date \{[^}]*display: inline-flex;/);
   });
 
-  it('carries the wide layout into the stylesheet the browser loads', () => {
+  it('carries the single-column shell into the stylesheet the browser loads', () => {
     const built = readSource(`../dist/assets/${CLIENT_STYLE}`);
     // The minifier may write the range either way round.
     expect(built).toMatch(/@media \((?:min-width: ?|width>=)64rem\)/);
-    expect(built).toMatch(/@media \((?:min-width: ?|width>=)90rem\)/);
+    expect(built).not.toMatch(/@media \((?:min-width: ?|width>=)90rem\)/);
   });
 });
 
@@ -913,13 +1032,15 @@ describe('command readability and navigation styling', () => {
   const styles = readSource('../../web/src/styles/app.css');
   const built = readSource(`../dist/assets/${CLIENT_STYLE}`);
 
-  it('wraps command text instead of clipping it horizontally', () => {
-    expect(styles).toMatch(/\.code-block \{[^}]*white-space: pre-wrap;/);
-    expect(styles).toMatch(/\.code-block \{[^}]*overflow-wrap: anywhere;/);
-    expect(styles).not.toMatch(/\.code-block \{[^}]*white-space: pre;/);
+  it('scrolls command text horizontally inside its block', () => {
+    expect(styles).toMatch(/\.code-block \{[^}]*white-space: pre;/);
+    expect(styles).toMatch(/\.code-block \{[^}]*overflow-x: auto;/);
+    expect(styles).not.toMatch(/\.code-block \{[^}]*white-space: pre-wrap;/);
+    expect(styles).not.toMatch(/\.code-block \{[^}]*overflow-wrap: anywhere;/);
     expect(styles).toMatch(/\.command-block \{[^}]*min-width: 0;/);
-    expect(built).toContain('white-space:pre-wrap');
-    expect(built).toContain('overflow-wrap:anywhere');
+    expect(built).toContain('white-space:pre');
+    expect(built).not.toContain('white-space:pre-wrap');
+    expect(built).not.toContain('overflow-wrap:anywhere');
   });
 
   it('scrolls smoothly only when motion is not reduced and keeps the anchor margin', () => {
