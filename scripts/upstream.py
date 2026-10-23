@@ -4,10 +4,12 @@ Each recipe names the source host its release comes from. GitHub's API is the
 only source for most packages and must supply the asset digests: an archive is
 never accepted on a guessed checksum. Codeberg publishes no release digest, so
 the assets of a Codeberg package are pinned by a SHA256 computed here from the
-official download. Asset names, archive members, binaries, and dependencies come
-from the reviewed recipe rather than from the release payload, and the license
-bytes are compared against the vendored copy, so a licensing change stops the
-run instead of being assumed equivalent.
+official download. GitLab publishes a release checksums.txt instead of a digest
+per asset, so its selected digests are read from that file. Asset names, archive
+members, binaries, and dependencies come from the reviewed recipe rather than
+from the release payload, and the license bytes are compared against the
+vendored copy, so a licensing change stops the run instead of being assumed
+equivalent.
 """
 
 from __future__ import annotations
@@ -373,12 +375,19 @@ def latest_release(client: HttpClient, package_name: str) -> DiscoveredRelease:
     architectures carry assets. A GitHub release supplies the asset digest; a
     Codeberg release supplies none, so its digest is computed from the
     official download; an npm release supplies its own integrity digest, and
-    its sha256 is computed from the verified archive bytes.
+    its sha256 is computed from the verified archive bytes; a GitLab release
+    supplies its selected digests in the release's checksums.txt.
     """
     repo = repo_of(package_name)
     source = source_for(package_name)
     if source == "npm":
         return _latest_npm_release(client, package_name, repo)
+    if source == "gitlab":
+        # The GitLab adapter lives in its own module; the deferred import keeps
+        # this module's source table the single dispatch point.
+        from .upstream_gitlab import latest_release as latest_gitlab_release
+
+        return latest_gitlab_release(client, package_name, repo)
     if exact_tag_release_for(package_name):
         tag = _latest_exact_tag(client, package_name, repo)
         # The tag must carry this project's own prefix and be an exact stable

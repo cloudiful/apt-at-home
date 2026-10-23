@@ -30,12 +30,19 @@ from .catalog import (
     check_known_names,
     check_relations,
     extra_license_urls_for,
+    license_path_for,
     npm_platform_package_for,
     repo_of,
     source_for,
     tag_for,
 )
-from .upstream_assets import npm_tarball_name, npm_tarball_url, release_download_url, version_key
+from .upstream_assets import (
+    license_url,
+    npm_tarball_name,
+    npm_tarball_url,
+    release_download_url,
+    version_key,
+)
 
 from .download import canonical_member
 
@@ -45,12 +52,20 @@ _VERSION = re.compile(r"^[0-9][A-Za-z0-9.+~:-]*$")
 _BINARY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 # The canonical upstream publication instant: UTC RFC3339 with second precision.
 _PUBLISHED_AT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-# The two reviewed release hosts, in their fixed download form. Credentials, a
-# port, a query, and a fragment are all outside the shape, and the canonical
-# check below binds every URL to its own recipe, release, and asset.
+# The reviewed release hosts other than GitLab, in their fixed download form.
+# Credentials, a port, a query, and a fragment are all outside the shape, and
+# the canonical check below binds every URL to its own recipe, release, and
+# asset.
 _URL = re.compile(
     r"^https://(?:github\.com|codeberg\.org)/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
     r"/releases/download/[^/?#\s]+/[^/?#\s]+$"
+)
+# GitLab's release download form, including its `/-/releases/.../downloads/`
+# path. A foreign host, a credential, a port, a query, and a fragment are all
+# outside the shape, and the canonical check binds the project, tag, and asset.
+_GITLAB_URL = re.compile(
+    r"^https://gitlab\.com/(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+"
+    r"/-/releases/[^/?#\s]+/downloads/[^/?#\s]+$"
 )
 # The npm registry archive form. The host, the package path, and the archive
 # name are the only shapes this accepts, and the canonical check below binds
@@ -284,9 +299,13 @@ def _check_target_url(name: str, version: str, arch: str, url: str) -> str:
     package's own source, repository, release tag, and asset, so a swapped
     host, repository, path, or tag can never pass.
     """
-    if name in KNOWN_PACKAGES and source_for(name) == "npm":
+    source = source_for(name) if name in KNOWN_PACKAGES else ""
+    if source == "npm":
         return _check_npm_target_url(name, version, arch, url)
-    if not _URL.match(url):
+    if source == "gitlab":
+        if not _GITLAB_URL.match(url):
+            raise ValueError(f"invalid pinned URL for {name} {arch}: {url}")
+    elif not _URL.match(url):
         raise ValueError(f"invalid pinned URL for {name} {arch}: {url}")
     if name not in KNOWN_PACKAGES:
         return url
@@ -316,6 +335,11 @@ def _parse_source(
     if has_tree:
         if bundle_type:
             raise ValueError(f"{name} {arch} must use its reviewed {bundle_type} archive member")
+        if name in KNOWN_PACKAGES and source_for(name) == "gitlab":
+            raise ValueError(
+                f"{name} {arch} is a reviewed flat GitLab package and must use "
+                "its archive_member"
+            )
         tree = str(target_raw["install_tree"])
         try:
             top_root(tree)
@@ -337,6 +361,14 @@ def _parse_source(
     ):
         raise ValueError(
             f"{name} {arch} archive_member does not match the reviewed npm recipe"
+        )
+    if (
+        name in KNOWN_PACKAGES
+        and source_for(name) == "gitlab"
+        and member != archive_member(name, version, arch)
+    ):
+        raise ValueError(
+            f"{name} {arch} archive_member does not match the reviewed GitLab recipe"
         )
     return member, "", bundle_type
 
@@ -375,6 +407,27 @@ def _parse_additional_binaries(
     return MappingProxyType(parsed)
 
 
+def _check_license_url(name: str, version: str, url: str) -> str:
+    """Require a GitLab package's license URL to be its reviewed raw file.
+
+    The URL is bound to the reviewed project, tag, and license path, so a
+    swapped host, project, or tag can never claim to be this release's license.
+    """
+    if name not in KNOWN_PACKAGES or source_for(name) != "gitlab":
+        return url
+    expected = license_url(
+        repo_of(name),
+        tag_for(name, version),
+        license_path_for(name),
+        source="gitlab",
+    )
+    if url != expected:
+        raise ValueError(
+            f"license_url for {name} is not the reviewed official license: {url}"
+        )
+    return url
+
+
 def parse_package(raw: object) -> Package:
     if not isinstance(raw, dict):
         raise ValueError("package entry must be an object")
@@ -386,6 +439,7 @@ def parse_package(raw: object) -> Package:
     version = str(raw["version"])
     if not _VERSION.match(version):
         raise ValueError(f"invalid version for {name}: {version}")
+    license_source_url = _check_license_url(name, version, str(raw["license_url"]))
     extra_raw = raw.get("extra_license_urls", [])
     if not isinstance(extra_raw, list) or any(not isinstance(url, str) for url in extra_raw):
         raise ValueError(f"extra_license_urls must be a string list for {name}")
@@ -443,7 +497,7 @@ def parse_package(raw: object) -> Package:
         description=str(raw["description"]),
         license=str(raw["license"]),
         copyright=str(raw["copyright"]),
-        license_url=str(raw["license_url"]),
+        license_url=license_source_url,
         targets=targets,
         upstream_published_at=published_at,
         extra_license_urls=extra_urls,

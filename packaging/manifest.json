@@ -5,7 +5,7 @@
   "section": "utils",
   "priority": "optional",
   "source_date_epoch": 1767225600,
-  "checksum_provenance": "Archive SHA256 verified by direct download against GitHub API digests. Zellij upstream .sha256sum files cover the inner binary (target/<triple>/release/zellij), not the tarball; starship .tar.gz.sha256 files cover the tarball and match the API digests. Codeberg publishes no release digest, so the forgejo-cli archives are pinned by SHA256 computed from the official Codeberg download and recomputed on every discovery. OpenCode publishes through the npm registry, which carries a sha512 subresource-integrity digest for every package version: each platform archive is verified in full against that digest before its SHA256 is computed and pinned, and registry signature blobs are not treated as verified authenticity.",
+  "checksum_provenance": "Archive SHA256 verified by direct download against GitHub API digests. Zellij upstream .sha256sum files cover the inner binary (target/<triple>/release/zellij), not the tarball; starship .tar.gz.sha256 files cover the tarball and match the API digests. Codeberg publishes no release digest, so the forgejo-cli archives are pinned by SHA256 computed from the official Codeberg download and recomputed on every discovery. OpenCode publishes through the npm registry, which carries a sha512 subresource-integrity digest for every package version: each platform archive is verified in full against that digest before its SHA256 is computed and pinned, and registry signature blobs are not treated as verified authenticity. GitLab publishes an unsigned checksums.txt beside each release: the glab archive digests are read from that file, so they trust GitLab's TLS transport and repository integrity rather than a cryptographic signature.",
   "packages": [
     {
       "name": "zellij",
@@ -476,6 +476,30 @@
           "archive_member": "package/bin/opencode",
           "binary": "opencode",
           "depends": "libc6 (>= 2.17)"
+        }
+      }
+    },
+    {
+      "name": "glab",
+      "version": "1.124.0",
+      "homepage": "https://gitlab.com/gitlab-org/cli",
+      "description": "GitLab CLI",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2022-present GitLab Inc.; Copyright (c) 2019 GitHub Inc.",
+      "license_url": "https://gitlab.com/gitlab-org/cli/-/raw/v1.124.0/LICENSE",
+      "upstream_published_at": "2026-10-20T12:17:01Z",
+      "targets": {
+        "amd64": {
+          "url": "https://gitlab.com/gitlab-org/cli/-/releases/v1.124.0/downloads/glab_1.124.0_linux_amd64.tar.gz",
+          "sha256": "63df684842b0697e418649dd64374d37ac1da0fbcdcb422d6a5557222f8bb40f",
+          "archive_member": "bin/glab",
+          "binary": "glab"
+        },
+        "arm64": {
+          "url": "https://gitlab.com/gitlab-org/cli/-/releases/v1.124.0/downloads/glab_1.124.0_linux_arm64.tar.gz",
+          "sha256": "0716395a0efeb991fc844b33fe55310645afcbd9b9746e50c725e9d1cd1b8d16",
+          "archive_member": "bin/glab",
+          "binary": "glab"
         }
       }
     }

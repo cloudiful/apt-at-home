@@ -97,8 +97,8 @@ repository, so no GitHub workflow deploys the Worker.
 
 `package.json` keeps a pinned `allowScripts` map for the only two install
 scripts the lock needs (`esbuild` and `workerd`). Nothing is approved by name
-or wildcard. `ci.yml` still bundles the Worker with a Wrangler `--dry-run` and
-synthetic credentials as a CI check; it never uploads.
+or wildcard. Use `bun run worker:dry-run` locally to exercise the same bundling
+without uploading.
 
 ## 4. GitHub environment `prod`
 
@@ -137,14 +137,14 @@ Every published release binds the manifest it was built from into its signed
 not match. Run one `publish.yml` manifest publish from `main` if the published
 baseline needs to be rebuilt.
 
-`ci.yml` runs the package build, verification, and native amd64/arm64 smoke on
-every push, and pins `UV_DEFAULT_INDEX` to public PyPI so the committed lock
-stays portable. It needs no cloud secrets: the CI signing key is ephemeral and
-the Wrangler step is a dry run. The build and test jobs install `reprepro`,
-which generates the `Packages` indices, so a missing tool fails the job
-instead of silently producing a different index. Package publication and
-Worker deploys have separate owners, so the GitHub environment holds only the
-R2 and GPG material.
+`publish.yml` runs the complete Python suite, the portable public-PyPI lock
+checks, the package build, and its pool smoke check before any production
+write, so a failure stops the release before public data changes. Local runs
+use the focused commands in `docs/publishing.md`. The publish job installs
+`reprepro`, which generates the `Packages` indices, so a missing tool fails the
+job instead of silently producing a different index. Package publication and
+Worker deploys have separate owners: Cloudflare Worker Builds deploys the
+Worker, so the GitHub environment holds only the R2 and GPG material.
 
 ## 5. Client bootstrap
 
@@ -182,7 +182,10 @@ the exact three steps, reproduced here for operators.
   registry, which carries a sha512 subresource-integrity digest for every
   package version: each platform archive is verified in full against that
   digest before its SHA256 is computed and pinned, and registry signature blobs
-  are not treated as verified authenticity. See `checksum_provenance` in the
+  are not treated as verified authenticity. GitLab publishes an unsigned
+  `checksums.txt` beside each release, so the `glab` archive digests are read
+  from that file and trust GitLab's TLS transport and repository integrity
+  rather than a cryptographic signature. See `checksum_provenance` in the
   manifest.
 - `forgejo-cli` comes from Codeberg, which publishes no release digest: its
   archives are pinned by a SHA256 this repository computes from the official
@@ -190,6 +193,12 @@ the exact three steps, reproduced here for operators.
   later discovery recomputes it. One discovery run downloads about 18 MiB of
   Codeberg archives, and an unreachable archive, a renamed asset, or changed
   license bytes stops the update instead of skipping the package.
+- `glab` comes from GitLab's official release tarballs. GitLab publishes an
+  unsigned `checksums.txt` beside each release instead of a per-asset digest or
+  signature, so the selected archive digests are read from that file; an
+  unreachable or renamed archive, a foreign download link, a malformed or
+  missing selected checksum, a non-canonical release entry, or changed license
+  bytes stops the update instead of skipping the package.
 - `opencode` comes from the official npm registry, whose archives are read in
   full to compute their SHA256 after the integrity check. One discovery run
   downloads about 220 MiB of OpenCode archives; a missing, malformed, or
@@ -203,7 +212,8 @@ the exact three steps, reproduced here for operators.
   parser.
 - The command-line packages are `bottom` (`btm`), `bun` (`bun`), `cargo-tauri`
   (`cargo-tauri` and `cargo tauri`, requires `cargo`), `chezmoi`, `fd-find`
-  (`fdfind`), `forgejo-cli` (`fj`), `fzf`, `git-delta` (`delta`), `neovim`
+  (`fdfind`), `forgejo-cli` (`fj`), `fzf`, `git-delta` (`delta`), `glab`
+  (static, no runtime dependencies), `neovim`
   (`nvim`), `opencode` (OpenCode V2, standalone: no Node or Bun; amd64 needs
   AVX2 and both architectures need glibc 2.17), `rustfs-cli` (`rc`), `sccache`,
   `starship`, `tree-sitter-cli` (`tree-sitter`, requires glibc 2.39), `uv`

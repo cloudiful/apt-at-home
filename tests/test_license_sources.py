@@ -70,6 +70,27 @@ class LicenseSourcesTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "license bytes changed"):
             check_license_sources(FakeHttp(payloads), "forgejo-cli", "v0.7.0")
 
+    def test_a_gitlab_package_reads_its_license_from_its_own_source(self) -> None:
+        vendored = vendor_license_sources("glab")
+        urls = license_urls_for("glab", "v1.124.0")
+        self.assertEqual(
+            urls,
+            ("https://gitlab.com/gitlab-org/cli/-/raw/v1.124.0/LICENSE",),
+        )
+        client = FakeHttp(dict(zip(urls, vendored.values(), strict=True)))
+
+        primary, extras = check_license_sources(client, "glab", "v1.124.0")
+
+        self.assertEqual((primary, extras), (urls[0], ()))
+        self.assertEqual([url for url, _ in client.requests], list(urls))
+
+    def test_changed_gitlab_license_bytes_fail_closed(self) -> None:
+        urls = license_urls_for("glab", "v1.124.0")
+        payloads = {urls[0]: b"a different license text"}
+
+        with self.assertRaisesRegex(ValueError, "license bytes changed"):
+            check_license_sources(FakeHttp(payloads), "glab", "v1.124.0")
+
     def test_fd_find_checks_primary_and_supplemental_bytes_in_recipe_order(self) -> None:
         vendored = vendor_license_sources("fd-find")
         urls = license_urls_for("fd-find", "v10.5.0")

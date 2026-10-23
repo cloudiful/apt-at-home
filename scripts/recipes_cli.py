@@ -238,4 +238,21 @@ def make_cli_recipes(recipe_type: type[Recipe]) -> dict[str, Recipe]:
             max_archive_bytes=128 * 1024 * 1024,
             max_binary_bytes=256 * 1024 * 1024,
         ),
+        "glab": recipe_type(
+            name="glab",
+            upstream="glab",
+            repo="gitlab-org/cli",
+            tag_prefix="v",
+            license_id="MIT",
+            license_path="LICENSE",
+            # GitLab publishes the release archives, checksums, and the tagged
+            # license on its own host. Both Linux builds are static Go ELFs.
+            source="gitlab",
+            asset="{upstream}_{version}_linux_{arch}.tar.gz",
+            member="bin/{binary}",
+            binary="glab",
+            triples=_NO_TRIPLES,
+            # The CLI reports its version through a subcommand, not a flag.
+            smoke=("version",),
+        ),
     }

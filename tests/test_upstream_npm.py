@@ -255,7 +255,7 @@ class NpmRecipeTest(unittest.TestCase):
 
     def test_an_unreviewed_license_source_is_refused(self) -> None:
         with self.assertRaises(ValueError):
-            self._recipe(license_source="gitlab")
+            self._recipe(license_source="sourcehut")
 
     def test_the_catalog_serves_the_reviewed_npm_settings(self) -> None:
         with npm_recipe():

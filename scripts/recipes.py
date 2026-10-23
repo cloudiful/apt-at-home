@@ -29,11 +29,11 @@ _NO_PACKAGES: Mapping[str, str] = MappingProxyType({})
 # The upstream hosts a reviewed recipe may be fetched from. The set is closed:
 # a source nobody reviewed fails closed instead of building a URL for a host
 # this repository never vetted.
-SOURCES = ("github", "codeberg", "npm")
+SOURCES = ("github", "codeberg", "npm", "gitlab")
 
 # The hosts whose raw license text a reviewed recipe may name. A license
 # override may only point at one of them, never at a new origin.
-LICENSE_SOURCES = ("github", "codeberg")
+LICENSE_SOURCES = ("github", "codeberg", "gitlab")
 
 # One npm package name: an optional scope, a lowercase name, and no other
 # character. A name outside this shape can never be a reviewed package.

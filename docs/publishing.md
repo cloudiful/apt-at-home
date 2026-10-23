@@ -42,22 +42,6 @@ and the read-only storage credentials to restore and compare the published
 baseline, but never the private key. Every path reuses the same seven `prod`
 secrets; there are no Cloudflare secrets in the publication path.
 
-## CI tiers
-
-`.github/workflows/ci.yml` always runs the Worker gateway gates and, in the
-Python job, the lock/sync checks, the full Python suite, and both CLI help
-checks. Signing-key generation, the archive and `.deb` build, verification,
-artifact upload, and the four native smoke/upgrade jobs run only when the
-changed paths are package-relevant: `packaging/`, `scripts/`, `tests/`,
-`.github/`, `pyproject.toml`, or `uv.lock`.
-
-Changes limited to `web/`, `worker/`, `docs/`, `client/`, or the listed root
-frontend and config files skip package validation. `workflow_dispatch` always
-runs it, and any unknown path, invalid event or commit, empty diff, malformed
-path data, or Git failure also runs it, so a detection problem never turns
-into a false skip. The classifier is `scripts/ci_scope.py`; it never executes
-event-provided paths or shell input.
-
 ## Local build
 
 ```sh
@@ -103,7 +87,7 @@ uv run python -m scripts.repo verify --output dist/repo
 
 ## Dependency locks
 
-Both locks stay reproducible against public sources, so any CI or Cloudflare
+Both locks stay reproducible against public sources, so any local or Cloudflare
 build works without a private mirror and without upgrading anything:
 
 - `uv.lock` pins the exact resolved versions and artifact hashes.
@@ -120,8 +104,8 @@ build works without a private mirror and without upgrading anything:
 
 GitHub's dependency graph is independent of this publication path: GitHub builds
 it automatically from the committed `uv.lock` and `package-lock.json`, so it
-needs no workflow, no CI job, and no repository file. `publish.yml` and CI never
-submit dependencies and never touch the graph; it stays a separate supply-chain
+needs no workflow, no job, and no repository file. `publish.yml` never submits
+dependencies and never touches the graph; it stays a separate supply-chain
 view.
 
 ## Verify
@@ -156,8 +140,8 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   `X-Manifest-Size`) before it reads a single package byte, then compares that
   signed baseline against the latest stable upstream release of every package
   in the catalog: bottom, bun, cargo-tauri, chezmoi, fd-find, forgejo-cli,
-  fzf, git-delta, kandev, neovim, opencode, rustfs-cli, sccache, starship,
-  tree-sitter-cli, uv, zellij, and zoxide.
+  fzf, git-delta, glab, kandev, neovim, opencode, rustfs-cli, sccache,
+  starship, tree-sitter-cli, uv, zellij, and zoxide.
   `cargo-tauri` selects the highest stable `tauri-cli-vN.N.N` tag and that exact
   release's official Linux assets, so another product line's latest release
   never selects it.
@@ -170,6 +154,10 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   every asset. `forgejo-cli` comes from Codeberg, which publishes none, so
   its archives are pinned by a SHA256 computed from the official download and
   recomputed on every discovery; that costs about 18 MiB of downloads per run.
+  `glab` comes from GitLab releases, which publish an unsigned `checksums.txt`
+  instead of per-asset digests: the selected archive SHA256 values are read
+  from that file, so they trust GitLab's TLS transport and repository integrity
+  rather than a cryptographic signature.
   `opencode` comes from the official npm registry: its archives are read in
   full, verified against the sha512 subresource-integrity digest the registry
   publishes for the exact package version, and only then pinned by their
@@ -207,8 +195,8 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
 - A no-op is a success: nothing is built, signed, uploaded, or pointed at, and
   a second run against the new baseline finds nothing left to do.
 - Versions only move forward. A downgrade, a missing architecture asset, a
-  missing GitHub API digest, an unreachable Codeberg archive, or a non-exact
-  stable tag stops the run.
+  missing GitHub API digest, an unreachable Codeberg archive, a non-canonical
+  GitLab release or checksum, or a non-exact stable tag stops the run.
 
 ### When an update stops
 
@@ -227,6 +215,12 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   release digest, so its archives are hashed from the official download; an
   outage, a renamed asset, or changed bytes stops the run instead of skipping
   the package.
+- **A GitLab release is missing, not canonical, or lacks a selected checksum.**
+  The listing must carry the exact stable tag, both reviewed archives, and the
+  release's checksums file at their canonical GitLab download URLs. A missing
+  or duplicate asset, a foreign link, a malformed or repeated checksum line, or
+  no digest for a selected archive stops the run instead of skipping the
+  package.
 - **An npm release is missing, deprecated, or does not match its digest.** The
   registry must name the exact reviewed wrapper and platform packages at one
   stable version, and every archive must match the sha512 integrity digest the
