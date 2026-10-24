@@ -27,12 +27,12 @@ from .catalog import (
     arches_for,
     archive_member,
     asset_name,
+    canonical_source_for,
     check_known_names,
     check_relations,
     extra_license_urls_for,
     license_path_for,
     npm_platform_package_for,
-    repo_of,
     source_for,
     tag_for,
 )
@@ -295,11 +295,15 @@ def _check_target_url(name: str, version: str, arch: str, url: str) -> str:
     """Require the pinned URL to be the reviewed package's official asset.
 
     The shape check refuses every other host form, a credential, a port, a
-    query, and a fragment. The canonical check then binds the URL to this
-    package's own source, repository, release tag, and asset, so a swapped
-    host, repository, path, or tag can never pass.
+    query, and a fragment. The canonical check then binds the URL to the
+    source, repository, release tag, and asset that published this exact
+    version, so a swapped host, repository, path, or tag can never pass.
     """
-    source = source_for(name) if name in KNOWN_PACKAGES else ""
+    if name not in KNOWN_PACKAGES:
+        if not _URL.match(url):
+            raise ValueError(f"invalid pinned URL for {name} {arch}: {url}")
+        return url
+    source, repo = canonical_source_for(name, version)
     if source == "npm":
         return _check_npm_target_url(name, version, arch, url)
     if source == "gitlab":
@@ -307,13 +311,11 @@ def _check_target_url(name: str, version: str, arch: str, url: str) -> str:
             raise ValueError(f"invalid pinned URL for {name} {arch}: {url}")
     elif not _URL.match(url):
         raise ValueError(f"invalid pinned URL for {name} {arch}: {url}")
-    if name not in KNOWN_PACKAGES:
-        return url
     expected = release_download_url(
-        repo_of(name),
+        repo,
         tag_for(name, version),
         asset_name(name, version, arch),
-        source=source_for(name),
+        source=source,
     )
     if url != expected:
         raise ValueError(
@@ -415,8 +417,9 @@ def _check_license_url(name: str, version: str, url: str) -> str:
     """
     if name not in KNOWN_PACKAGES or source_for(name) != "gitlab":
         return url
+    _, repo = canonical_source_for(name, version)
     expected = license_url(
-        repo_of(name),
+        repo,
         tag_for(name, version),
         license_path_for(name),
         source="gitlab",

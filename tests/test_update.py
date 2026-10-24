@@ -14,13 +14,24 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts.catalog import KNOWN_PACKAGES, npm_platform_package_for, repo_of, source_for, tag_for
+from scripts.catalog import (
+    KNOWN_PACKAGES,
+    canonical_source_for,
+    npm_platform_package_for,
+    repo_of,
+    source_for,
+    tag_for,
+)
 from scripts.manifest import default_manifest_path
 from scripts.release_manifest import validated_document
 from scripts.update_plan import build_plan, merge_catalog
 from scripts.upstream import Candidate
 from scripts.upstream_assets import (
-    asset_name, license_urls_for, npm_tarball_url, release_download_url,
+    asset_name,
+    license_url,
+    license_urls_for,
+    npm_tarball_url,
+    release_download_url,
 )
 from tests.release_fixtures import (
     historical_cargo_baseline_data,
@@ -718,35 +729,94 @@ class SameVersionArchitectureExpansionTest(unittest.TestCase):
         self.assertIn("discovered", str(ctx.exception))
 
 
-class CodebergPlanTest(unittest.TestCase):
-    """A package from a source without release digests still plans and freezes."""
+class ForkPlanTest(unittest.TestCase):
+    """The personal-use fork plans as a normal upgrade of its published base."""
 
-    def test_a_new_codeberg_version_moves_only_its_own_fields(self) -> None:
+    def _pre_fork_entry(self) -> dict:
+        """The published Forgejo CLI entry from before the personal-use fork."""
+        version = "0.7.0"
+        source, repo = canonical_source_for("forgejo-cli", version)
+        tag = tag_for("forgejo-cli", version)
+        return {
+            "name": "forgejo-cli",
+            "version": version,
+            "homepage": "https://codeberg.org/forgejo-contrib/forgejo-cli",
+            "description": "Command line client for Forgejo",
+            "license": "MIT OR Apache-2.0",
+            "copyright": "Copyright (c) 2026 The forgejo-cli developers",
+            "license_url": license_url(repo, tag, "LICENSE-MIT", source=source),
+            "upstream_published_at": "2026-10-16T02:09:08Z",
+            "extra_license_urls": [
+                license_url(repo, tag, "LICENSE-APACHE", source=source)
+            ],
+            "targets": {
+                arch: {
+                    "url": release_download_url(
+                        repo, tag, asset_name("forgejo-cli", version, arch), source=source
+                    ),
+                    "sha256": "a" * 64,
+                    "archive_member": "fj",
+                    "binary": "fj",
+                    "depends": "libc6 (>= 2.39), libgcc-s1, libssl3t64, zlib1g",
+                }
+                for arch in ("amd64", "arm64")
+            },
+        }
+
+    def test_the_fork_revision_upgrades_the_published_release(self) -> None:
+        baseline = baseline_document()
+        baseline["packages"].append(self._pre_fork_entry())
+        plan = build_plan(
+            baseline_release_id="20260102-030405",
+            baseline_data=baseline,
+            catalog_data=catalog_document(),
+            candidates=_catalog_candidates(),
+        )
+        pkg = next(p for p in plan.manifest.packages if p.name == "forgejo-cli")
+        self.assertEqual(pkg.version, "0.7.0+cloudiful.2")
+        self.assertIn("forgejo-cli", plan.changed)
+        self.assertEqual(
+            pkg.targets["amd64"].url,
+            "https://github.com/cloudiful/forgejo-cli/releases/download/"
+            "v0.7.0-cloudiful.2/forgejo-cli-x86_64-linux.tar.gz",
+        )
+        self.assertEqual(
+            pkg.targets["amd64"].sha256,
+            committed_sha("forgejo-cli", "amd64"),
+        )
+        self.assertEqual(
+            pkg.license_url,
+            "https://raw.githubusercontent.com/cloudiful/forgejo-cli/"
+            "v0.7.0-cloudiful.2/LICENSE-MIT",
+        )
+        self.assertEqual(pkg.targets["amd64"].archive_member, "fj")
+
+    def test_a_new_fork_revision_moves_only_its_own_fields(self) -> None:
         plan = build_plan(
             baseline_release_id="20260102-030405",
             baseline_data=baseline_document(),
             catalog_data=catalog_document(),
-            candidates=_catalog_candidates(**{"forgejo-cli": "0.8.0"}),
+            candidates=_catalog_candidates(**{"forgejo-cli": "0.8.0+cloudiful.1"}),
         )
         pkg = next(p for p in plan.manifest.packages if p.name == "forgejo-cli")
-        self.assertEqual(pkg.version, "0.8.0")
+        self.assertEqual(pkg.version, "0.8.0+cloudiful.1")
         self.assertIn("forgejo-cli", plan.changed)
         self.assertEqual(
             pkg.targets["amd64"].url,
-            "https://codeberg.org/forgejo-contrib/forgejo-cli/releases/download/"
-            "v0.8.0/forgejo-cli-x86_64-linux.tar.gz",
+            "https://github.com/cloudiful/forgejo-cli/releases/download/"
+            "v0.8.0-cloudiful.1/forgejo-cli-x86_64-linux.tar.gz",
         )
         self.assertEqual(
             pkg.license_url,
-            "https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/v0.8.0/LICENSE-MIT",
+            "https://raw.githubusercontent.com/cloudiful/forgejo-cli/"
+            "v0.8.0-cloudiful.1/LICENSE-MIT",
         )
         self.assertEqual(pkg.targets["amd64"].archive_member, "fj")
-        self.assertEqual(pkg.targets["arm64"].depends, "libc6 (>= 2.39), libgcc-s1")
 
-    def test_a_republished_codeberg_tag_is_refused(self) -> None:
+    def test_a_republished_fork_tag_is_refused(self) -> None:
         """The same version with different bytes is a republished tag, not a no-op."""
         candidates = _catalog_candidates()
-        moved = candidate("forgejo-cli", "0.7.0", sha="cd" * 32)
+        moved = candidate("forgejo-cli", "0.7.0+cloudiful.2", sha="cd" * 32)
         candidates["forgejo-cli"] = moved
         with self.assertRaises(ValueError) as ctx:
             build_plan(
@@ -758,6 +828,79 @@ class CodebergPlanTest(unittest.TestCase):
         message = str(ctx.exception)
         self.assertIn("immutable", message)
         self.assertIn("amd64", message)
+
+    def test_the_source_change_refreshes_the_reviewed_metadata(self) -> None:
+        """The fork's homepage and description come from the reviewed catalog."""
+        baseline = baseline_document()
+        baseline["packages"].append(self._pre_fork_entry())
+        plan = build_plan(
+            baseline_release_id="20260102-030405",
+            baseline_data=baseline,
+            catalog_data=catalog_document(),
+            candidates=_catalog_candidates(),
+        )
+        pkg = next(p for p in plan.manifest.packages if p.name == "forgejo-cli")
+        self.assertEqual(pkg.homepage, "https://github.com/cloudiful/forgejo-cli")
+        self.assertEqual(pkg.description, "Forgejo CLI — cloudiful personal-use fork")
+
+    def test_a_same_origin_bump_keeps_the_published_metadata(self) -> None:
+        """A version bump inside one origin keeps the published description."""
+        baseline = baseline_document()
+        zellij = next(e for e in baseline["packages"] if e["name"] == "zellij")
+        zellij["homepage"] = "https://zellij.example/published"
+        zellij["description"] = "The published description"
+        plan = build_plan(
+            baseline_release_id="20260102-030405",
+            baseline_data=baseline,
+            catalog_data=catalog_document(),
+            candidates=_catalog_candidates(**{"zellij": "0.46.0"}),
+        )
+        pkg = next(p for p in plan.manifest.packages if p.name == "zellij")
+        self.assertEqual(pkg.version, "0.46.0")
+        self.assertIn("zellij", plan.changed)
+        self.assertEqual(pkg.homepage, "https://zellij.example/published")
+        self.assertEqual(pkg.description, "The published description")
+
+    def test_a_source_change_without_reviewed_metadata_fails_closed(self) -> None:
+        """The catalog carries the description of the package it publishes."""
+        catalog = catalog_document()
+        entry = next(e for e in catalog["packages"] if e["name"] == "forgejo-cli")
+        entry["description"] = ""
+        baseline = baseline_document()
+        baseline["packages"].append(self._pre_fork_entry())
+        with self.assertRaisesRegex(
+            ValueError, "carries no homepage and description"
+        ):
+            build_plan(
+                baseline_release_id="20260102-030405",
+                baseline_data=baseline,
+                catalog_data=catalog,
+                candidates=_catalog_candidates(),
+            )
+
+    def test_the_published_targets_are_not_reused_by_the_fork_revision(self) -> None:
+        """The published 0.7.0-1 targets stay immutable and are never reused."""
+        published = self._pre_fork_entry()
+        baseline = baseline_document()
+        baseline["packages"].append(published)
+        plan = build_plan(
+            baseline_release_id="20260102-030405",
+            baseline_data=baseline,
+            catalog_data=catalog_document(),
+            candidates=_catalog_candidates(),
+        )
+        pkg = next(p for p in plan.manifest.packages if p.name == "forgejo-cli")
+        for arch in ("amd64", "arm64"):
+            with self.subTest(arch=arch):
+                self.assertNotEqual(
+                    pkg.targets[arch].url, published["targets"][arch]["url"]
+                )
+                self.assertNotEqual(
+                    pkg.targets[arch].sha256, published["targets"][arch]["sha256"]
+                )
+                self.assertEqual(
+                    pkg.targets[arch].sha256, committed_sha("forgejo-cli", arch)
+                )
 
 
 class DiscoverExactTagTest(unittest.TestCase):

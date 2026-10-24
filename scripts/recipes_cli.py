@@ -46,10 +46,10 @@ _BUN_LIBC = MappingProxyType({
 # The Forgejo CLI publishes one GNU tarball per architecture, named with its
 # own short architecture names.
 _FORGEJO_LIBC = MappingProxyType({"amd64": "x86_64", "arm64": "aarch64"})
-# The amd64 build links against OpenSSL and zlib; the arm64 build does not.
+# Both Forgejo CLI builds link against OpenSSL, zlib, and glibc 2.39.
 _FORGEJO_LIBC_DEPENDS = MappingProxyType({
     "amd64": "libc6 (>= 2.39), libgcc-s1, libssl3t64, zlib1g",
-    "arm64": "libc6 (>= 2.39), libgcc-s1",
+    "arm64": "libc6 (>= 2.39), libgcc-s1, libssl3t64, zlib1g",
 })
 # OpenCode publishes its official CLI through npm: one wrapper package that
 # names the platform packages, one platform package per Linux architecture,
@@ -139,10 +139,9 @@ def make_cli_recipes(recipe_type: type[Recipe]) -> dict[str, Recipe]:
         "forgejo-cli": recipe_type(
             name="forgejo-cli",
             upstream="forgejo-cli",
-            repo="forgejo-contrib/forgejo-cli",
-            # The Forgejo CLI is published on Codeberg, which serves no release
-            # digest: its archives are pinned by a locally computed SHA256.
-            source="codeberg",
+            # The personal-use fork of the Forgejo CLI publishes its own
+            # releases on GitHub, beside the upstream tags it carries.
+            repo="cloudiful/forgejo-cli",
             tag_prefix="v",
             license_id="MIT OR Apache-2.0",
             license_path="LICENSE-MIT",
@@ -151,6 +150,9 @@ def make_cli_recipes(recipe_type: type[Recipe]) -> dict[str, Recipe]:
             binary="fj",
             triples=_FORGEJO_LIBC,
             depends=_FORGEJO_LIBC_DEPENDS,
+            # The fork's own release tag carries its revision suffix, so the
+            # highest reviewed fork tag is selected from the tag list.
+            exact_tag_release=True,
             # The CLI reports its version through a subcommand, not a flag.
             smoke=("version",),
             extra_license_paths=("LICENSE-APACHE",),

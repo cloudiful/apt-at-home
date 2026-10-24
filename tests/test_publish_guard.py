@@ -5,19 +5,23 @@ tests publish a real signed release into an in-memory store and then try to
 replace it with an older, equal, and newer manifest.
 """
 
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.manifest import load_manifest, parse_manifest
+from scripts.catalog import canonical_source_for, tag_for
+from scripts.manifest import Manifest, load_manifest, parse_manifest
 from scripts.publish_guard import (
     check_not_older,
     guard_publish,
     published_versions,
     upstream_version,
 )
+from scripts.release_manifest import validated_document
 from scripts.release_verify import BaselineUnavailable, TrustedRelease, restore_metadata
 from scripts.storage import ObjectNotFound
+from scripts.upstream_assets import asset_name, license_url, release_download_url
 from tests.helpers import make_gpg_home_with_key, move_package_version
 from tests.release_fixtures import build_release_objects
 
@@ -119,6 +123,92 @@ class CandidateComparisonTest(unittest.TestCase):
 
     def test_a_package_absent_from_the_index_is_not_a_downgrade(self) -> None:
         check_not_older(self._manifest("1.27.0", "0.46.0"), {"zellij": "0.46.0-1"})
+
+
+def _forgejo_entry(version: str) -> dict:
+    """One reviewed Forgejo CLI entry at a version, with its canonical URLs."""
+    source, repo = canonical_source_for("forgejo-cli", version)
+    tag = tag_for("forgejo-cli", version)
+    return {
+        "name": "forgejo-cli",
+        "version": version,
+        "homepage": "https://github.com/cloudiful/forgejo-cli",
+        "description": "Forgejo CLI — cloudiful personal-use fork",
+        "license": "MIT OR Apache-2.0",
+        "copyright": "Copyright (c) 2026 The forgejo-cli developers",
+        "license_url": license_url(repo, tag, "LICENSE-MIT", source=source),
+        "upstream_published_at": "2026-10-24T15:48:56Z",
+        "extra_license_urls": [license_url(repo, tag, "LICENSE-APACHE", source=source)],
+        "targets": {
+            arch: {
+                "url": release_download_url(
+                    repo, tag, asset_name("forgejo-cli", version, arch), source=source
+                ),
+                "sha256": "a" * 64,
+                "archive_member": "fj",
+                "binary": "fj",
+                "depends": "libc6 (>= 2.39), libgcc-s1, libssl3t64, zlib1g",
+            }
+            for arch in ("amd64", "arm64")
+        },
+    }
+
+
+class ForkVersionGuardTest(unittest.TestCase):
+    """A fork revision orders like the Debian version comparison."""
+
+    def _manifest(self, version: str) -> Manifest:
+        from scripts.manifest import default_manifest_path
+
+        data, _ = validated_document(default_manifest_path())
+        data["packages"] = [
+            _forgejo_entry(version) if entry["name"] == "forgejo-cli" else entry
+            for entry in data["packages"]
+        ]
+        return parse_manifest(data)
+
+    def test_a_fork_revision_is_not_a_downgrade_of_its_base(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            check_not_older(
+                self._manifest("0.7.0"), {"forgejo-cli": "0.7.0+cloudiful.2-1"}
+            )
+        self.assertIn("must not downgrade", str(ctx.exception))
+        self.assertIn("forgejo-cli", str(ctx.exception))
+
+    def test_a_fork_revision_upgrades_the_published_base(self) -> None:
+        check_not_older(
+            self._manifest("0.7.0+cloudiful.2"), {"forgejo-cli": "0.7.0-1"}
+        )
+
+    def test_a_later_fork_revision_upgrades_an_earlier_one(self) -> None:
+        check_not_older(
+            self._manifest("0.7.0+cloudiful.10"), {"forgejo-cli": "0.7.0+cloudiful.2-1"}
+        )
+
+    def test_the_next_upstream_release_upgrades_the_latest_fork_revision(self) -> None:
+        check_not_older(
+            self._manifest("0.7.1"), {"forgejo-cli": "0.7.0+cloudiful.10-1"}
+        )
+
+    def test_the_guard_agrees_with_the_debian_version_comparison(self) -> None:
+        cases = [
+            ("0.7.0+cloudiful.2", "0.7.0-1"),
+            ("0.7.0+cloudiful.10", "0.7.0+cloudiful.2-1"),
+            ("0.7.1", "0.7.0+cloudiful.10-1"),
+        ]
+        for newer, older in cases:
+            with self.subTest(newer=newer, older=older):
+                compared = subprocess.run(
+                    ["dpkg", "--compare-versions", newer, "gt", older],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                self.assertEqual(compared.returncode, 0, msg=compared.stderr)
+                check_not_older(self._manifest(newer), {"forgejo-cli": older})
+                with self.assertRaises(ValueError):
+                    check_not_older(self._manifest(older), {"forgejo-cli": newer})
 
 
 class GuardPublishTest(unittest.TestCase):

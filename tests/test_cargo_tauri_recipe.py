@@ -52,12 +52,19 @@ class CargoTauriRecipeTest(unittest.TestCase):
         self.assertEqual(arches_for("cargo-tauri"), ("amd64", "arm64"))
         self.assertTrue(exact_tag_release_for("cargo-tauri"))
         # Every reviewed recipe publishes both architectures, while exact-tag
-        # release selection stays this package's alone.
+        # release selection stays with the packages whose own tags name their
+        # release: the multiproduct Tauri repository and the personal-use
+        # Forgejo CLI fork, which carries the upstream tags beside its own.
+        exact_tag_packages = {"cargo-tauri", "forgejo-cli"}
         for name, recipe in RECIPES.items():
             with self.subTest(package=name):
                 self.assertEqual(recipe.arches, ("amd64", "arm64"))
-                if name != "cargo-tauri":
+                if name not in exact_tag_packages:
                     self.assertFalse(recipe.exact_tag_release)
+        self.assertEqual(
+            {name for name, recipe in RECIPES.items() if recipe.exact_tag_release},
+            exact_tag_packages,
+        )
 
     def test_both_assets_and_the_flat_member_are_the_reviewed_ones(self) -> None:
         self.assertEqual(

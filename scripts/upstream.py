@@ -26,6 +26,7 @@ from typing import Protocol
 from .catalog import (
     arches_for,
     exact_tag_release_for,
+    fork_label_for,
     license_path_for,
     max_archive_bytes_for,
     npm_package_for,
@@ -285,8 +286,14 @@ def _latest_exact_tag(client: HttpClient, package_name: str, repo: str) -> str:
             "without a completed page"
         )
     if not versions:
+        label = fork_label_for(package_name)
+        expected = (
+            f"reviewed {label} fork release"
+            if label
+            else f"{prefix}N.N.N release"
+        )
         raise ValueError(
-            f"{repo} tags no {prefix}N.N.N release for {package_name}"
+            f"{repo} tags no {expected} for {package_name}"
         )
     best = max(versions, key=version_key)
     return tag_for(package_name, best)

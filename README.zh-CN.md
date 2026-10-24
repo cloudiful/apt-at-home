@@ -5,8 +5,8 @@
 ## 特性
 
 - 私有鉴权源：经鉴权网关按设备令牌访问。
-- 面向 Debian 13 的 amd64 与 arm64 软件包：bottom、bun、cargo-tauri、chezmoi、fd-find、forgejo-cli、fzf、git-delta、glab、kandev、neovim、opencode、rustfs-cli、sccache、starship、tree-sitter-cli、uv、zellij 与 zoxide，均来自各自官方发布产物。
-- `forgejo-cli` 来自 Codeberg，其发布不提供摘要校验值：归档的 SHA256 由本仓库从官方下载自行计算，每次发现约需下载 18 MiB。
+- 面向 Debian 13 的 amd64 与 arm64 软件包：bottom、bun、cargo-tauri、chezmoi、fd-find、forgejo-cli、fzf、git-delta、glab、kandev、neovim、opencode、rustfs-cli、sccache、starship、tree-sitter-cli、uv、zellij 与 zoxide，均来自各自经审阅的上游发布产物。
+- `forgejo-cli` 来自 `cloudiful/forgejo-cli` 个人使用分支，并非上游官方发行版；该分支新增了 `fj pr attach`。归档按其 GitHub 发布为每个归档公布的 sha256 摘要固定。
 - `glab` 来自 GitLab 官方发布归档。GitLab 提供的是未签名的 `checksums.txt` 而非加密签名，因此每个归档按其列出的 SHA256 固定；该校验值信任 GitLab 的 TLS 传输与仓库完整性。
 - 经 GitHub Actions 签名并发布到私有对象存储的仓库。
 - `publish.yml` 每六小时检查一次：其中任一软件包出现更新的上游稳定版时发布新版本，否则不做任何操作。`cargo-tauri` 跟踪最高的稳定 `tauri-cli-vN.N.N` 标签及其该版本的官方 Linux 产物。
