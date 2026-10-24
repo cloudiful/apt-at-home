@@ -4,6 +4,7 @@ import unittest
 
 from scripts.license_sources import check_license_sources, vendor_license_sources
 from scripts.upstream_assets import license_urls_for
+from tests.test_upstream import CODEBERG_RECIPE, codeberg_recipe
 from tests.test_upstream_npm import NPM_RECIPE, npm_recipe
 
 
@@ -45,30 +46,67 @@ class LicenseSourcesTest(unittest.TestCase):
         self.assertEqual(client.requests, [])
 
     def test_a_codeberg_package_reads_its_licenses_from_its_own_source(self) -> None:
+        with codeberg_recipe():
+            vendored = vendor_license_sources("forgejo-cli")
+            urls = license_urls_for("forgejo-cli", "v0.7.0")
+            self.assertEqual(
+                urls,
+                (
+                    "https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/v0.7.0/LICENSE-MIT",
+                    (
+                    "https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/"
+                    "v0.7.0/LICENSE-APACHE"
+                ),
+                ),
+            )
+            client = FakeHttp(dict(zip(urls, vendored.values(), strict=True)))
+
+            primary, extras = check_license_sources(client, "forgejo-cli", "v0.7.0")
+
+            self.assertEqual((primary, extras), (urls[0], urls[1:]))
+            self.assertEqual([url for url, _ in client.requests], list(urls))
+
+    def test_changed_codeberg_license_bytes_fail_closed(self) -> None:
+        with codeberg_recipe():
+            urls = license_urls_for("forgejo-cli", "v0.7.0")
+            vendored = vendor_license_sources("forgejo-cli")
+            payloads = dict(zip(urls, vendored.values(), strict=True))
+            payloads[urls[0]] = b"a different license text"
+
+            with self.assertRaisesRegex(ValueError, "license bytes changed"):
+                check_license_sources(FakeHttp(payloads), "forgejo-cli", "v0.7.0")
+
+    def test_the_fork_package_reads_its_licenses_from_its_own_source(self) -> None:
         vendored = vendor_license_sources("forgejo-cli")
-        urls = license_urls_for("forgejo-cli", "v0.7.0")
+        urls = license_urls_for("forgejo-cli", "v0.7.0-cloudiful.2")
         self.assertEqual(
             urls,
             (
-                "https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/v0.7.0/LICENSE-MIT",
-                "https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/v0.7.0/LICENSE-APACHE",
+                "https://raw.githubusercontent.com/cloudiful/forgejo-cli/"
+                "v0.7.0-cloudiful.2/LICENSE-MIT",
+                "https://raw.githubusercontent.com/cloudiful/forgejo-cli/"
+                "v0.7.0-cloudiful.2/LICENSE-APACHE",
             ),
         )
         client = FakeHttp(dict(zip(urls, vendored.values(), strict=True)))
 
-        primary, extras = check_license_sources(client, "forgejo-cli", "v0.7.0")
+        primary, extras = check_license_sources(
+            client, "forgejo-cli", "v0.7.0-cloudiful.2"
+        )
 
         self.assertEqual((primary, extras), (urls[0], urls[1:]))
         self.assertEqual([url for url, _ in client.requests], list(urls))
 
-    def test_changed_codeberg_license_bytes_fail_closed(self) -> None:
-        urls = license_urls_for("forgejo-cli", "v0.7.0")
+    def test_changed_fork_license_bytes_fail_closed(self) -> None:
+        urls = license_urls_for("forgejo-cli", "v0.7.0-cloudiful.2")
         vendored = vendor_license_sources("forgejo-cli")
         payloads = dict(zip(urls, vendored.values(), strict=True))
-        payloads[urls[0]] = b"a different license text"
+        payloads[urls[1]] = b"a different Apache license text"
 
-        with self.assertRaisesRegex(ValueError, "license bytes changed"):
-            check_license_sources(FakeHttp(payloads), "forgejo-cli", "v0.7.0")
+        with self.assertRaisesRegex(
+            ValueError, "supplemental license LICENSE-APACHE bytes changed"
+        ):
+            check_license_sources(FakeHttp(payloads), "forgejo-cli", "v0.7.0-cloudiful.2")
 
     def test_a_gitlab_package_reads_its_license_from_its_own_source(self) -> None:
         vendored = vendor_license_sources("glab")

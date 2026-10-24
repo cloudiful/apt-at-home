@@ -187,12 +187,16 @@ the exact three steps, reproduced here for operators.
   from that file and trust GitLab's TLS transport and repository integrity
   rather than a cryptographic signature. See `checksum_provenance` in the
   manifest.
-- `forgejo-cli` comes from Codeberg, which publishes no release digest: its
-  archives are pinned by a SHA256 this repository computes from the official
-  download, so the first pinned digest trusts that first download and every
-  later discovery recomputes it. One discovery run downloads about 18 MiB of
-  Codeberg archives, and an unreachable archive, a renamed asset, or changed
-  license bytes stops the update instead of skipping the package.
+- `forgejo-cli` comes from the `cloudiful/forgejo-cli` personal-use fork, not
+  from the upstream official distribution. The fork publishes its own releases
+  on GitHub, whose API reports a sha256 digest for every asset, so each archive
+  is pinned by the digest that release reports for it. The fork's release tag
+  carries its revision (`vX.Y.Z-cloudiful.N`) and the packaged Debian version
+  carries the matching `X.Y.Z+cloudiful.N`, so a fork revision upgrades the
+  release it forked and never downgrades a newer upstream release. The fork
+  adds `fj pr attach`. Discovery ignores plain upstream and prerelease tag
+  candidates. An unreachable archive, a renamed asset, a selected release marked
+  draft or prerelease, or changed license bytes stops the update.
 - `glab` comes from GitLab's official release tarballs. GitLab publishes an
   unsigned `checksums.txt` beside each release instead of a per-asset digest or
   signature, so the selected archive digests are read from that file; an

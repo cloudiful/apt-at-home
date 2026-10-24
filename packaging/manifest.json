@@ -5,7 +5,7 @@
   "section": "utils",
   "priority": "optional",
   "source_date_epoch": 1767225600,
-  "checksum_provenance": "Archive SHA256 verified by direct download against GitHub API digests. Zellij upstream .sha256sum files cover the inner binary (target/<triple>/release/zellij), not the tarball; starship .tar.gz.sha256 files cover the tarball and match the API digests. Codeberg publishes no release digest, so the forgejo-cli archives are pinned by SHA256 computed from the official Codeberg download and recomputed on every discovery. OpenCode publishes through the npm registry, which carries a sha512 subresource-integrity digest for every package version: each platform archive is verified in full against that digest before its SHA256 is computed and pinned, and registry signature blobs are not treated as verified authenticity. GitLab publishes an unsigned checksums.txt beside each release: the glab archive digests are read from that file, so they trust GitLab's TLS transport and repository integrity rather than a cryptographic signature.",
+  "checksum_provenance": "Archive SHA256 verified by direct download against GitHub API digests. Zellij upstream .sha256sum files cover the inner binary (target/<triple>/release/zellij), not the tarball; starship .tar.gz.sha256 files cover the tarball and match the API digests. The forgejo-cli archives are the personal-use fork's GitHub release assets, pinned by the sha256 digest that release publishes for each of them. OpenCode publishes through the npm registry, which carries a sha512 subresource-integrity digest for every package version: each platform archive is verified in full against that digest before its SHA256 is computed and pinned, and registry signature blobs are not treated as verified authenticity. GitLab publishes an unsigned checksums.txt beside each release: the glab archive digests are read from that file, so they trust GitLab's TLS transport and repository integrity rather than a cryptographic signature.",
   "packages": [
     {
       "name": "zellij",
@@ -324,30 +324,30 @@
     },
     {
       "name": "forgejo-cli",
-      "version": "0.7.0",
-      "homepage": "https://codeberg.org/forgejo-contrib/forgejo-cli",
-      "description": "Command line client for Forgejo",
+      "version": "0.7.0+cloudiful.2",
+      "homepage": "https://github.com/cloudiful/forgejo-cli",
+      "description": "Forgejo CLI — cloudiful personal-use fork",
       "license": "MIT OR Apache-2.0",
       "copyright": "Copyright (c) 2026 The forgejo-cli developers",
-      "license_url": "https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/v0.7.0/LICENSE-MIT",
-      "upstream_published_at": "2026-10-16T02:09:08Z",
+      "license_url": "https://raw.githubusercontent.com/cloudiful/forgejo-cli/v0.7.0-cloudiful.2/LICENSE-MIT",
+      "upstream_published_at": "2026-10-24T15:48:56Z",
       "extra_license_urls": [
-        "https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/v0.7.0/LICENSE-APACHE"
+        "https://raw.githubusercontent.com/cloudiful/forgejo-cli/v0.7.0-cloudiful.2/LICENSE-APACHE"
       ],
       "targets": {
         "amd64": {
-          "url": "https://codeberg.org/forgejo-contrib/forgejo-cli/releases/download/v0.7.0/forgejo-cli-x86_64-linux.tar.gz",
-          "sha256": "6803c12eed17bfadb40ba95da2a6ab58f9b4a7dc10eabfe3512fce7e2fe6216f",
+          "url": "https://github.com/cloudiful/forgejo-cli/releases/download/v0.7.0-cloudiful.2/forgejo-cli-x86_64-linux.tar.gz",
+          "sha256": "4e1e609bc89df86c28fc63f7158918c54098189117adba2c8ce6d7e86bf39164",
           "archive_member": "fj",
           "binary": "fj",
           "depends": "libc6 (>= 2.39), libgcc-s1, libssl3t64, zlib1g"
         },
         "arm64": {
-          "url": "https://codeberg.org/forgejo-contrib/forgejo-cli/releases/download/v0.7.0/forgejo-cli-aarch64-linux.tar.gz",
-          "sha256": "198987908e194704b4a350119596547bc95cd9b6518024d6d02c26f061cfce83",
+          "url": "https://github.com/cloudiful/forgejo-cli/releases/download/v0.7.0-cloudiful.2/forgejo-cli-aarch64-linux.tar.gz",
+          "sha256": "66bb4310f3d63c84e222d947ea09981d4fd7fd0ac52a40f01402f266984b896b",
           "archive_member": "fj",
           "binary": "fj",
-          "depends": "libc6 (>= 2.39), libgcc-s1"
+          "depends": "libc6 (>= 2.39), libgcc-s1, libssl3t64, zlib1g"
         }
       }
     },

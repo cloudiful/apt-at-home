@@ -11,6 +11,7 @@ that publishes no release digest is covered too: its assets are pinned by the
 bytes it serves.
 """
 
+import contextlib
 import hashlib
 import tempfile
 import unittest
@@ -18,9 +19,12 @@ import urllib.error
 import urllib.request
 from dataclasses import replace
 from pathlib import Path
+from types import MappingProxyType
+from typing import Iterator
 from unittest import mock
 
 from scripts.catalog import RECIPES, archive_member, asset_name, extra_license_paths_for
+from scripts.recipes import Recipe
 from scripts.upstream import (
     HttpError,
     SameOriginRedirectHandler,
@@ -32,12 +36,65 @@ from scripts.upstream import (
 from scripts.upstream_assets import (
     license_url,
     release_download_url,
+    release_tag_api_url,
     releases_api_url,
+    tags_api_url,
 )
 from tests.test_upstream_npm import ARCHIVES, NPM_RECIPE, npm_payloads, npm_recipe
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ZELLIJ = "zellij-org/zellij"
+
+# The personal-use fork of the Forgejo CLI, and the upstream repository it
+# publishes its own releases from.
+FORK_REPO = "cloudiful/forgejo-cli"
+FORK_TAG = "v0.7.0-cloudiful.2"
+FORK_VERSION = "0.7.0+cloudiful.2"
+FORK_ASSETS = {
+    "amd64": "forgejo-cli-x86_64-linux.tar.gz",
+    "arm64": "forgejo-cli-aarch64-linux.tar.gz",
+}
+
+# The Codeberg recipe the Forgejo CLI was published from before the fork took
+# over. The Codeberg adapter stays a reviewed source, so its behavior is still
+# covered by the recipe it was reviewed with.
+CODEBERG_RECIPE = Recipe(
+    name="forgejo-cli",
+    upstream="forgejo-cli",
+    repo="forgejo-contrib/forgejo-cli",
+    tag_prefix="v",
+    license_id="MIT OR Apache-2.0",
+    license_path="LICENSE-MIT",
+    source="codeberg",
+    asset="{upstream}-{triple}-linux.tar.gz",
+    member="{binary}",
+    binary="fj",
+    triples=MappingProxyType({"amd64": "x86_64", "arm64": "aarch64"}),
+    depends=MappingProxyType({
+        "amd64": "libc6 (>= 2.39), libgcc-s1, libssl3t64, zlib1g",
+        "arm64": "libc6 (>= 2.39), libgcc-s1",
+    }),
+    extra_license_paths=("LICENSE-APACHE",),
+)
+
+
+@contextlib.contextmanager
+def codeberg_recipe(recipe: Recipe = CODEBERG_RECIPE) -> Iterator[Recipe]:
+    """Install the reviewed Codeberg recipe for the length of one test.
+
+    The recipe table is the only place a package is reviewed, so a test that
+    needs a Codeberg package installs that recipe there and puts the current
+    one back afterwards.
+    """
+    original = RECIPES.get(recipe.name)
+    RECIPES[recipe.name] = recipe
+    try:
+        yield recipe
+    finally:
+        if original is None:
+            RECIPES.pop(recipe.name, None)
+        else:
+            RECIPES[recipe.name] = original
 
 # name -> (repo, tag, license path, {arch: asset name})
 # A representative set of upstream formats, kept independent of the catalog so
@@ -340,18 +397,19 @@ class PublishedAtTest(unittest.TestCase):
                 for arch in ("amd64", "arm64")
             ],
         }
-        release = latest_release(
-            FakeHttp({
-                releases_api_url(repo, source="codeberg"): payload,
-                **{
-                    release_download_url(
-                        repo, tag, asset_name("forgejo-cli", "0.7.0", arch), source="codeberg"
-                    ): f"forgejo-cli-{arch}-bytes".encode()
-                    for arch in ("amd64", "arm64")
-                },
-            }),
-            "forgejo-cli",
-        )
+        with codeberg_recipe():
+            release = latest_release(
+                FakeHttp({
+                    releases_api_url(repo, source="codeberg"): payload,
+                    **{
+                        release_download_url(
+                            repo, tag, asset_name("forgejo-cli", "0.7.0", arch), source="codeberg"
+                        ): f"forgejo-cli-{arch}-bytes".encode()
+                        for arch in ("amd64", "arm64")
+                    },
+                }),
+                "forgejo-cli",
+            )
         self.assertEqual(release.upstream_published_at, "2026-10-16T02:09:08Z")
 
 
@@ -604,7 +662,11 @@ class CargoTauriTagSpecificTest(unittest.TestCase):
 
 
 class CodebergDiscoveryTest(unittest.TestCase):
-    """A source that publishes no release digest is pinned by its own bytes."""
+    """A source that publishes no release digest is pinned by its own bytes.
+
+    No catalog package is published from Codeberg any more, so the adapter is
+    still covered by the recipe it was reviewed with.
+    """
 
     REPO = "forgejo-contrib/forgejo-cli"
     TAG = "v0.7.0"
@@ -647,8 +709,9 @@ class CodebergDiscoveryTest(unittest.TestCase):
         return payloads
 
     def test_the_digest_is_computed_from_the_official_bytes(self) -> None:
-        client = FakeHttp(self._payloads())
-        candidate = discover(client, "forgejo-cli")
+        with codeberg_recipe():
+            client = FakeHttp(self._payloads())
+            candidate = discover(client, "forgejo-cli")
         self.assertEqual(candidate.repo, self.REPO)
         self.assertEqual(candidate.tag, self.TAG)
         self.assertEqual(candidate.version, self.VERSION)
@@ -667,16 +730,18 @@ class CodebergDiscoveryTest(unittest.TestCase):
             self.assertNotIn("digest", asset)
 
     def test_the_licenses_come_from_the_reviewed_codeberg_source(self) -> None:
-        client = FakeHttp(self._payloads())
-        candidate = discover(client, "forgejo-cli")
+        with codeberg_recipe():
+            client = FakeHttp(self._payloads())
+            candidate = discover(client, "forgejo-cli")
         self.assertEqual(candidate.license_url, self._license_url("LICENSE-MIT"))
         self.assertEqual(candidate.extra_license_urls, (self._license_url("LICENSE-APACHE"),))
 
     def test_an_unreachable_asset_stops_the_run(self) -> None:
         payloads = self._payloads()
         payloads[self._asset_url("arm64")] = HttpError("request failed: codeberg is down")
-        with self.assertRaises(HttpError):
-            discover(FakeHttp(payloads), "forgejo-cli")
+        with codeberg_recipe():
+            with self.assertRaises(HttpError):
+                discover(FakeHttp(payloads), "forgejo-cli")
 
     def test_a_missing_asset_stops_the_run(self) -> None:
         payload = self._payloads()[releases_api_url(self.REPO, source="codeberg")]
@@ -686,8 +751,9 @@ class CodebergDiscoveryTest(unittest.TestCase):
         ]
         payloads = self._payloads()
         payloads[releases_api_url(self.REPO, source="codeberg")] = payload
-        with self.assertRaisesRegex(ValueError, "missing asset"):
-            discover(FakeHttp(payloads), "forgejo-cli")
+        with codeberg_recipe():
+            with self.assertRaisesRegex(ValueError, "missing asset"):
+                discover(FakeHttp(payloads), "forgejo-cli")
 
     def test_an_asset_from_a_foreign_origin_is_refused(self) -> None:
         payloads = self._payloads()
@@ -696,12 +762,132 @@ class CodebergDiscoveryTest(unittest.TestCase):
             "https://github.com/forgejo-contrib/forgejo-cli/releases/download/"
             f"{self.TAG}/forgejo-cli-x86_64-linux.tar.gz"
         )
-        with self.assertRaisesRegex(ValueError, "not the official"):
-            discover(FakeHttp(payloads), "forgejo-cli")
+        with codeberg_recipe():
+            with self.assertRaisesRegex(ValueError, "not the official"):
+                discover(FakeHttp(payloads), "forgejo-cli")
 
     def test_changed_license_bytes_stop_the_run(self) -> None:
         payloads = self._payloads()
         payloads[self._license_url("LICENSE-MIT")] = b"a different license text"
+        with codeberg_recipe():
+            with self.assertRaisesRegex(ValueError, "license bytes changed"):
+                discover(FakeHttp(payloads), "forgejo-cli")
+
+
+class ForkDiscoveryTest(unittest.TestCase):
+    """The personal-use fork is discovered by its own reviewed release tag.
+
+    The fork's repository carries the upstream tags beside its own releases, so
+    the highest reviewed fork tag is selected from the tag list and its exact
+    release is fetched.
+    """
+
+    DIGESTS = {"amd64": "4e" * 32, "arm64": "66" * 32}
+
+    def _tags(self, *names: str) -> list[dict[str, object]]:
+        return [{"name": name, "commit": {"sha": "0" * 40}} for name in names]
+
+    def _release(self, *, tag: str = FORK_TAG, draft: bool = False,
+                 prerelease: bool = False) -> dict[str, object]:
+        return {
+            "tag_name": tag,
+            "draft": draft,
+            "prerelease": prerelease,
+            "published_at": "2026-10-24T15:48:56Z",
+            "assets": [
+                {
+                    "name": FORK_ASSETS[arch],
+                    "digest": f"sha256:{self.DIGESTS[arch]}",
+                    "browser_download_url": release_download_url(
+                        FORK_REPO, tag, FORK_ASSETS[arch], source="github"
+                    ),
+                }
+                for arch in ("amd64", "arm64")
+            ],
+        }
+
+    def _payloads(self, *, tags: list[dict[str, object]] | None = None,
+                   release: dict[str, object] | None = None) -> dict[str, object]:
+        vendor = REPO_ROOT / "packaging" / "licenses" / "forgejo-cli"
+        return {
+            tags_api_url(FORK_REPO): tags if tags is not None else self._tags(
+                "v0.7.0", "v0.7.0-cloudiful.1", FORK_TAG,
+            ),
+            release_tag_api_url(FORK_REPO, FORK_TAG): (
+                release if release is not None else self._release()
+            ),
+            license_url(FORK_REPO, FORK_TAG, "LICENSE-MIT", source="github"): (
+                vendor / "LICENSE.txt"
+            ).read_bytes(),
+            license_url(FORK_REPO, FORK_TAG, "LICENSE-APACHE", source="github"): (
+                vendor / "LICENSE-APACHE"
+            ).read_bytes(),
+        }
+
+    def test_the_highest_fork_tag_selects_the_release(self) -> None:
+        client = FakeHttp(self._payloads())
+        candidate = discover(client, "forgejo-cli")
+        self.assertEqual(candidate.repo, FORK_REPO)
+        self.assertEqual(candidate.tag, FORK_TAG)
+        self.assertEqual(candidate.version, FORK_VERSION)
+        self.assertEqual(candidate.upstream_published_at, "2026-10-24T15:48:56Z")
+        for arch in ("amd64", "arm64"):
+            self.assertEqual(
+                candidate.targets[arch]["url"],
+                release_download_url(
+                    FORK_REPO, FORK_TAG, FORK_ASSETS[arch], source="github"
+                ),
+            )
+            self.assertEqual(candidate.targets[arch]["sha256"], self.DIGESTS[arch])
+
+    def test_the_upstream_tags_the_fork_carries_are_never_selected(self) -> None:
+        """A plain upstream tag names no reviewed fork release."""
+        client = FakeHttp(self._payloads(tags=self._tags("v0.7.0", "v0.6.0")))
+        with self.assertRaisesRegex(ValueError, "fork release"):
+            discover(client, "forgejo-cli")
+
+    def test_a_prerelease_fork_tag_is_never_selected(self) -> None:
+        client = FakeHttp(self._payloads(tags=self._tags("v0.7.0-cloudiful.2-rc1")))
+        with self.assertRaisesRegex(ValueError, "fork release"):
+            discover(client, "forgejo-cli")
+
+    def test_a_draft_or_prerelease_release_is_refused(self) -> None:
+        for label, release in {
+            "draft": self._release(draft=True),
+            "prerelease": self._release(prerelease=True),
+        }.items():
+            with self.subTest(case=label):
+                client = FakeHttp(self._payloads(release=release))
+                with self.assertRaisesRegex(ValueError, "draft or prerelease"):
+                    discover(client, "forgejo-cli")
+
+    def test_a_fork_asset_from_a_foreign_origin_is_refused(self) -> None:
+        release = self._release()
+        release["assets"][0]["browser_download_url"] = (  # type: ignore[index]
+            "https://github.com/attacker/forgejo-cli/releases/download/"
+            f"{FORK_TAG}/{FORK_ASSETS['amd64']}"
+        )
+        client = FakeHttp(self._payloads(release=release))
+        with self.assertRaisesRegex(ValueError, "not the official"):
+            discover(client, "forgejo-cli")
+
+    def test_the_licenses_come_from_the_reviewed_fork_source(self) -> None:
+        client = FakeHttp(self._payloads())
+        candidate = discover(client, "forgejo-cli")
+        self.assertEqual(
+            candidate.license_url,
+            f"https://raw.githubusercontent.com/{FORK_REPO}/{FORK_TAG}/LICENSE-MIT",
+        )
+        self.assertEqual(
+            candidate.extra_license_urls,
+            (f"https://raw.githubusercontent.com/{FORK_REPO}/{FORK_TAG}/LICENSE-APACHE",),
+        )
+
+    def test_changed_license_bytes_stop_the_run(self) -> None:
+        payloads = self._payloads()
+        payloads[
+            license_url(FORK_REPO, FORK_TAG, "LICENSE-MIT", source="github")
+        ] = b"a different license text"
         with self.assertRaisesRegex(ValueError, "license bytes changed"):
             discover(FakeHttp(payloads), "forgejo-cli")
 

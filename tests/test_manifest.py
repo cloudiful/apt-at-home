@@ -2,7 +2,14 @@ import copy
 import unittest
 from dataclasses import replace
 
-from scripts.catalog import KNOWN_PACKAGES, RECIPES, arches_for, check_known_names
+from scripts.catalog import (
+    KNOWN_PACKAGES,
+    RECIPES,
+    arches_for,
+    canonical_source_for,
+    check_known_names,
+    tag_for,
+)
 from scripts.manifest import (
     deb_filename,
     debian_version,
@@ -38,11 +45,12 @@ def expected_target_url(name: str, version: str, arch: str) -> str:
     recipe = RECIPES[name]
     if recipe.source == "npm":
         return npm_tarball_url(npm_platform_package_for(name, arch), version)
+    source, repo = canonical_source_for(name, version)
     return release_download_url(
-        recipe.repo,
-        recipe.tag_prefix + version,
+        repo,
+        tag_for(name, version),
         asset_name(name, version, arch),
-        source=recipe.source,
+        source=source,
     )
 
 
@@ -490,7 +498,7 @@ PINNED_PUBLISHED_AT = {
     "kandev": "2026-10-04T21:52:30Z",
     "cargo-tauri": "2026-10-14T18:54:05Z",
     "bun": "2026-10-22T10:11:32Z",
-    "forgejo-cli": "2026-10-16T02:09:08Z",
+    "forgejo-cli": "2026-10-24T15:48:56Z",
     "fd-find": "2026-08-26T07:59:09Z",
     "fzf": "2026-10-11T02:39:32Z",
     "tree-sitter-cli": "2026-10-08T17:43:54Z",
@@ -656,6 +664,81 @@ class HistoricalBaselineTest(unittest.TestCase):
         cargo["targets"]["riscv64"] = copy.deepcopy(cargo["targets"]["amd64"])
         with self.assertRaises(ValueError):
             parse_baseline_manifest(data)
+
+
+class PreForkBaselineTest(unittest.TestCase):
+    """The published pre-fork release stays readable after the fork took over."""
+
+    PRE_FORK = {
+        "name": "forgejo-cli",
+        "version": "0.7.0",
+        "homepage": "https://codeberg.org/forgejo-contrib/forgejo-cli",
+        "description": "Command line client for Forgejo",
+        "license": "MIT OR Apache-2.0",
+        "copyright": "Copyright (c) 2026 The forgejo-cli developers",
+        "license_url": (
+            "https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/v0.7.0/LICENSE-MIT"
+        ),
+        "upstream_published_at": "2026-10-16T02:09:08Z",
+        "extra_license_urls": [
+            "https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/v0.7.0/LICENSE-APACHE"
+        ],
+        "targets": {
+            "amd64": {
+                "url": (
+                    "https://codeberg.org/forgejo-contrib/forgejo-cli/releases/download/"
+                    "v0.7.0/forgejo-cli-x86_64-linux.tar.gz"
+                ),
+                "sha256": "6803c12eed17bfadb40ba95da2a6ab58f9b4a7dc10eabfe3512fce7e2fe6216f",
+                "archive_member": "fj",
+                "binary": "fj",
+                "depends": "libc6 (>= 2.39), libgcc-s1, libssl3t64, zlib1g",
+            },
+            "arm64": {
+                "url": (
+                    "https://codeberg.org/forgejo-contrib/forgejo-cli/releases/download/"
+                    "v0.7.0/forgejo-cli-aarch64-linux.tar.gz"
+                ),
+                "sha256": "198987908e194704b4a350119596547bc95cd9b6518024d6d02c26f061cfce83",
+                "archive_member": "fj",
+                "binary": "fj",
+                "depends": "libc6 (>= 2.39), libgcc-s1",
+            },
+        },
+    }
+
+    def _pre_fork(self) -> dict:
+        """The current document with the published pre-fork entry."""
+        data = _document()
+        data["packages"] = [
+            copy.deepcopy(self.PRE_FORK) if e["name"] == "forgejo-cli" else e
+            for e in data["packages"]
+        ]
+        return data
+
+    def test_the_published_pre_fork_release_stays_readable(self) -> None:
+        manifest = parse_baseline_manifest(self._pre_fork())
+        pkg = next(p for p in manifest.packages if p.name == "forgejo-cli")
+        self.assertEqual(pkg.version, "0.7.0")
+        self.assertEqual(
+            pkg.targets["amd64"].url, self.PRE_FORK["targets"]["amd64"]["url"]
+        )
+
+    def test_a_fork_version_never_carries_the_pre_fork_source(self) -> None:
+        """The fork's own release names the fork's own repository."""
+        data = self._pre_fork()
+        entry = next(e for e in data["packages"] if e["name"] == "forgejo-cli")
+        entry["version"] = "0.7.0+cloudiful.2"
+        entry["license_url"] = (
+            "https://raw.githubusercontent.com/cloudiful/forgejo-cli/"
+            "v0.7.0-cloudiful.2/LICENSE-MIT"
+        )
+        entry["extra_license_urls"] = [
+            "https://raw.githubusercontent.com/cloudiful/forgejo-cli/"
+            "v0.7.0-cloudiful.2/LICENSE-APACHE"
+        ]
+        with self.assertRaisesRegex(ValueError, "not the reviewed official asset"):
+            parse_manifest(data)
 
 
 class NpmManifestTest(unittest.TestCase):

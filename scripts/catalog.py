@@ -10,6 +10,9 @@ member instead of reusing a stale prefix.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 
 from .download import canonical_member
 from .recipes import RECIPES, Recipe
@@ -22,7 +25,13 @@ __all__ = [
     "Recipe",
     "archive_suffix_for",
     "arches_for",
+    "canonical_license_source_for",
+    "canonical_source_for",
     "exact_tag_release_for",
+    "fork_label_for",
+    "fork_tag_from_version",
+    "fork_version_from_tag",
+    "fork_version_parts",
     "license_source_for",
     "max_archive_bytes_for",
     "max_binary_bytes_for",
@@ -54,6 +63,47 @@ _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 # simply cannot match, so a relation string can never escape the control file.
 _TERM = r"[A-Za-z0-9][A-Za-z0-9.+~:-]*(?: \([<>=]{1,2} [A-Za-z0-9][A-Za-z0-9.+~:-]*\))?"
 _RELATIONS = re.compile(rf"^{_TERM}(?:, {_TERM})*$")
+
+# The reviewed personal-use forks, keyed by the upstream repository that
+# publishes them: a fork names its releases `<base>-<label>.<N>` beside the
+# upstream tags it carries. Only the registered label of the registered
+# repository is ever accepted, so no other recipe can read a fork suffix and
+# no other suffix can pass as one.
+_FORK_LABELS: Mapping[str, str] = MappingProxyType(
+    {"cloudiful/forgejo-cli": "cloudiful"}
+)
+
+# One fork release tag: a strictly numeric base version, the fork label, and a
+# positive revision.
+_FORK_TAG = re.compile(r"^(\d+)\.(\d+)\.(\d+)-([a-z][a-z0-9]*)\.(\d+)$")
+# The Debian upstream version the same release publishes: the base version with
+# the fork label and revision as `+<label>.<N>`.
+_FORK_VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)\+([a-z][a-z0-9]*)\.(\d+)$")
+
+@dataclass(frozen=True)
+class PublishedOrigin:
+    """The upstream that published one already released version of a package."""
+
+    version: str
+    source: str
+    repo: str
+    license_source: str
+
+
+# The one published origin that is not the current recipe: the Forgejo CLI was
+# published from its Codeberg release before the personal-use fork took over,
+# so that published version keeps naming the release it was published from and
+# the updater can still read the release it published. The record is exact: one
+# package and one version, so no other version and no other package can name
+# another upstream.
+_PUBLISHED_ORIGINS: Mapping[str, PublishedOrigin] = MappingProxyType({
+    "forgejo-cli": PublishedOrigin(
+        version="0.7.0",
+        source="codeberg",
+        repo="forgejo-contrib/forgejo-cli",
+        license_source="codeberg",
+    ),
+})
 
 
 def recipe_for(package_name: str) -> Recipe:
@@ -120,6 +170,36 @@ def license_source_for(package_name: str) -> str:
     return recipe.license_source or recipe.source
 
 
+def _published_origin(package_name: str, version: str) -> PublishedOrigin | None:
+    """Return the recorded published origin of one exact version, or None."""
+    origin = _PUBLISHED_ORIGINS.get(package_name)
+    if origin is None or origin.version != version:
+        return None
+    return origin
+
+
+def canonical_source_for(package_name: str, version: str) -> tuple[str, str]:
+    """Return the (source, repo) that published one exact version.
+
+    A version comes from one reviewed release. A package whose upstream moved
+    keeps naming the source its already published version came from, so the
+    updater can still read the release it published, while every other version
+    comes from the current recipe.
+    """
+    origin = _published_origin(package_name, version)
+    if origin is not None:
+        return origin.source, origin.repo
+    return source_for(package_name), repo_of(package_name)
+
+
+def canonical_license_source_for(package_name: str, version: str) -> str:
+    """Return the host that published one exact version's license text."""
+    origin = _published_origin(package_name, version)
+    if origin is not None:
+        return origin.license_source
+    return license_source_for(package_name)
+
+
 def npm_package_for(package_name: str) -> str:
     """Return the npm wrapper package this package's platform packages live in."""
     return recipe_for(package_name).npm_package
@@ -155,9 +235,79 @@ def tag_prefix_for(package_name: str) -> str:
     return recipe_for(package_name).tag_prefix
 
 
+def fork_label_for(package_name: str) -> str:
+    """Return the reviewed fork label of one package's upstream, or ''.
+
+    The label belongs to the upstream repository that publishes the fork's
+    releases, so a package whose reviewed repository is the fork reads its
+    fork tags and every other package keeps the plain stable parser.
+    """
+    return _FORK_LABELS.get(recipe_for(package_name).repo, "")
+
+
+def _fork_parts(
+    pattern: re.Pattern[str], text: str
+) -> tuple[str, tuple[int, int, int, int]] | None:
+    """Return the label and the numeric parts of one fork tag or version."""
+    match = pattern.match(text)
+    if match is None:
+        return None
+    revision = int(match.group(5))
+    if revision < 1:
+        return None
+    parts = (int(match.group(1)), int(match.group(2)), int(match.group(3)), revision)
+    return match.group(4), parts
+
+
+def fork_version_from_tag(package_name: str, tag: str) -> str | None:
+    """Return the version one reviewed fork tag publishes, or None.
+
+    A fork tag is `<base>-<label>.<N>` and the version it publishes is
+    `<base>+<label>.<N>`. Only the package's own reviewed label is accepted
+    and the revision must be a positive number, so a plain upstream tag or any
+    other suffix never passes as a reviewed fork release.
+    """
+    label = fork_label_for(package_name)
+    if not label:
+        return None
+    parsed = _fork_parts(_FORK_TAG, tag)
+    if parsed is None or parsed[0] != label:
+        return None
+    base, revision = parsed[1][:3], parsed[1][3]
+    return f"{base[0]}.{base[1]}.{base[2]}+{label}.{revision}"
+
+
+def fork_tag_from_version(package_name: str, version: str) -> str | None:
+    """Return the fork tag one version publishes, or None."""
+    label = fork_label_for(package_name)
+    if not label:
+        return None
+    parsed = _fork_parts(_FORK_VERSION, version)
+    if parsed is None or parsed[0] != label:
+        return None
+    base, revision = parsed[1][:3], parsed[1][3]
+    return f"{base[0]}.{base[1]}.{base[2]}-{label}.{revision}"
+
+
+def fork_version_parts(version: str) -> tuple[int, int, int, int] | None:
+    """Return the base version and revision of one reviewed fork version.
+
+    Only a version whose label is a reviewed fork label qualifies, so an
+    arbitrary `+suffix` never passes as a fork version.
+    """
+    parsed = _fork_parts(_FORK_VERSION, version)
+    if parsed is None or parsed[0] not in _FORK_LABELS.values():
+        return None
+    return parsed[1]
+
+
 def tag_for(package_name: str, version: str) -> str:
     """Return the upstream release tag this project uses for a version."""
-    return recipe_for(package_name).tag_prefix + version
+    recipe = recipe_for(package_name)
+    fork = fork_tag_from_version(package_name, version)
+    if fork is not None:
+        return recipe.tag_prefix + fork
+    return recipe.tag_prefix + version
 
 
 def asset_name(package_name: str, version: str, arch: str) -> str:
@@ -243,8 +393,12 @@ def extra_license_urls_for(package_name: str, version: str) -> tuple[str, ...]:
 
     recipe = recipe_for(package_name)
     tag = tag_for(package_name, version)
+    source, repo = canonical_source_for(package_name, version)
     return tuple(
-        license_url(recipe.repo, tag, path, source=license_source_for(package_name))
+        license_url(
+            repo, tag, path,
+            source=canonical_license_source_for(package_name, version),
+        )
         for path in recipe.extra_license_paths
     )
 

@@ -19,6 +19,7 @@ from .catalog import (
     arches_for,
     archive_member,
     binary_name,
+    canonical_source_for,
     conflicts_for,
     depends_for,
     expected_license_for,
@@ -204,6 +205,40 @@ def overlay_package(
     return result
 
 
+def origin_changed(name: str, published_version: str, candidate: Candidate) -> bool:
+    """Whether the package's upstream origin differs from the published one.
+
+    A package whose upstream moved is published from another repository, so
+    the release it replaces describes another product. Both origins are the
+    reviewed ones, so a version bump inside one origin never changes them.
+    """
+    return canonical_source_for(name, published_version) != canonical_source_for(
+        name, candidate.version
+    )
+
+
+def refresh_origin_metadata(
+    entry: dict[str, object], *, name: str, catalog: Manifest
+) -> None:
+    """Take the package's homepage and description from the reviewed catalog.
+
+    A package whose upstream origin changed is described by the reviewed
+    catalog, not by the release it replaces: the published entry still names
+    the old upstream's homepage and description. A catalog that carries no
+    metadata for it fails closed, so the metadata of the replaced release is
+    never published as the new one's.
+    """
+    pkg = next((p for p in catalog.packages if p.name == name), None)
+    if pkg is None or not pkg.homepage.strip() or not pkg.description.strip():
+        raise ValueError(
+            f"{name} changed its upstream origin and the reviewed catalog "
+            "carries no homepage and description for it; refusing to publish "
+            "the metadata of the release it replaces"
+        )
+    entry["homepage"] = pkg.homepage
+    entry["description"] = pkg.description
+
+
 def check_same_version_immutable(entry: dict[str, object], candidate: Candidate) -> None:
     """Refuse to treat an unchanged version as a no-op when its bytes changed.
 
@@ -343,7 +378,8 @@ def build_plan(
     data = copy.deepcopy(baseline_data)
     baseline = parse_baseline_manifest(baseline_data)
     catalog = parse_manifest(catalog_data)
-    baseline_names = {pkg.name for pkg in baseline.packages}
+    baseline_by_name = {pkg.name: pkg for pkg in baseline.packages}
+    baseline_names = set(baseline_by_name)
     validated = baseline_names | {pkg.name for pkg in catalog.packages}
     # All three inputs are still distinct here, so every equality the contract
     # requires is checked before any of them is merged away.
@@ -394,6 +430,12 @@ def build_plan(
                 changed.append(name)
             continue
         rebuilt = overlay_package(entry, candidate)
+        published = baseline_by_name.get(name)
+        if published is not None and origin_changed(name, published.version, candidate):
+            # The package moved to another upstream: its homepage and
+            # description come from the reviewed catalog, because the published
+            # entry still describes the release it replaces.
+            refresh_origin_metadata(rebuilt, name=name, catalog=catalog)
         entry.clear()
         entry.update(rebuilt)
         changed.append(name)

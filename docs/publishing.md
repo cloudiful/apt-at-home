@@ -144,16 +144,20 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   starship, tree-sitter-cli, uv, zellij, and zoxide.
   `cargo-tauri` selects the highest stable `tauri-cli-vN.N.N` tag and that exact
   release's official Linux assets, so another product line's latest release
-  never selects it.
+  never selects it. `forgejo-cli` selects the highest `vX.Y.Z-cloudiful.N` fork
+  tag from the same tag list, so the upstream tags the fork carries never
+  select it.
 - Each package has one reviewed recipe: the official repository, its source
   host, the release tag prefix, asset names, archive members, installed
   commands, dependencies, and SPDX license sources. Version bumps recompute
   member paths from the new version, preserving uvx and uv's supplemental
   Apache provenance without trusting release metadata to choose files.
 - Most packages come from GitHub, whose API publishes a sha256 digest for
-  every asset. `forgejo-cli` comes from Codeberg, which publishes none, so
-  its archives are pinned by a SHA256 computed from the official download and
-  recomputed on every discovery; that costs about 18 MiB of downloads per run.
+  every asset. `forgejo-cli` comes from the `cloudiful/forgejo-cli`
+  personal-use fork on GitHub, so its archives are pinned by the digest that
+  release reports for each of them; the fork's own release tag carries its
+  revision, and the packaged Debian version carries the matching
+  `X.Y.Z+cloudiful.N`.
   `glab` comes from GitLab releases, which publish an unsigned `checksums.txt`
   instead of per-asset digests: the selected archive SHA256 values are read
   from that file, so they trust GitLab's TLS transport and repository integrity

@@ -22,6 +22,9 @@ from .catalog import (
     ARCHES,
     asset_name,
     extra_license_paths_for,
+    fork_label_for,
+    fork_version_from_tag,
+    fork_version_parts,
     license_path_for,
     license_source_for,
     recipe_for,
@@ -122,12 +125,33 @@ def license_path(package_name: str) -> str:
 
 
 def parse_stable_tag(package_name: str, tag: str) -> str:
-    """Return the version of an exact stable release tag, or fail closed."""
+    """Return the version of an exact stable release tag, or fail closed.
+
+    A package that publishes a personal-use fork names its releases with that
+    fork's own reviewed suffix, and only that form is accepted for it: a plain
+    upstream tag, a prerelease suffix, or any other fork label fails closed.
+    Every other package keeps accepting exactly one stable `N.N.N` version.
+    """
     recipe = recipe_for(package_name)
     if not isinstance(tag, str):
         raise ValueError("release tag must be a string")
-    match = _STABLE_TAG.match(tag.removeprefix(recipe.tag_prefix))
-    if match is None or not tag.startswith(recipe.tag_prefix):
+    if not tag.startswith(recipe.tag_prefix):
+        raise ValueError(
+            f"{package_name} release tag {tag!r} is not an exact stable "
+            f"{recipe.tag_prefix}N.N.N version"
+        )
+    body = tag.removeprefix(recipe.tag_prefix)
+    label = fork_label_for(package_name)
+    if label:
+        version = fork_version_from_tag(package_name, body)
+        if version is None:
+            raise ValueError(
+                f"{package_name} release tag {tag!r} is not a reviewed "
+                f"{label} fork version tag"
+            )
+        return version
+    match = _STABLE_TAG.match(body)
+    if match is None:
         raise ValueError(
             f"{package_name} release tag {tag!r} is not an exact stable "
             f"{recipe.tag_prefix}N.N.N version"
@@ -135,12 +159,20 @@ def parse_stable_tag(package_name: str, tag: str) -> str:
     return ".".join(match.groups())
 
 
-def version_key(version: str) -> tuple[int, int, int]:
-    """Order two stable versions numerically; prereleases never reach here."""
+def version_key(version: str) -> tuple[int, int, int, int, int]:
+    """Order two stable versions numerically; prereleases never reach here.
+
+    A reviewed fork revision sorts above the release it forked and below the
+    next upstream release, and its own revisions sort numerically, so the
+    order agrees with the Debian version comparison of the same versions.
+    """
     match = _STABLE_TAG.match(version.removeprefix("v"))
-    if match is None:
+    if match is not None:
+        return (*(int(part) for part in match.groups()), 0, 0)
+    parts = fork_version_parts(version.removeprefix("v"))
+    if parts is None:
         raise ValueError(f"version is not an exact stable N.N.N version: {version!r}")
-    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+    return (*parts[:3], 1, parts[3])
 
 
 def parse_asset_digest(asset: object) -> str:

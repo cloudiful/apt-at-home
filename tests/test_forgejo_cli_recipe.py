@@ -1,10 +1,12 @@
-"""The Forgejo CLI recipe: official Codeberg release tarballs for amd64 and arm64.
+"""The Forgejo CLI recipe: the personal-use fork's official release tarballs.
 
-The Forgejo CLI is published on Codeberg, which serves no release digest, so
-its archives are pinned by a SHA256 computed from the official download. Only
-the reviewed repository, source, tag prefix, asset names, archive member,
-binary, smoke command, license sources, and dependencies are pinned here; the
-version and the digests come from the manifest and from discovery.
+The Forgejo CLI is packaged from the `cloudiful/forgejo-cli` personal-use fork,
+whose GitHub release publishes the official binary archives for amd64 and
+arm64. The fork names its releases `vX.Y.Z-cloudiful.N`, which the Debian
+upstream version `X.Y.Z+cloudiful.N` maps to, so the recipe pins the fork's
+own repository, its exact-tag selection, its asset names, archive member,
+binary, smoke command, license sources, and dependencies; the version and the
+digests come from the manifest and from discovery.
 """
 
 from __future__ import annotations
@@ -42,31 +44,36 @@ from tests.helpers import write_fake_archive
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-VERSION = "0.7.0"
-TAG = "v0.7.0"
+REPO = "cloudiful/forgejo-cli"
+VERSION = "0.7.0+cloudiful.2"
+TAG = "v0.7.0-cloudiful.2"
 AMD64_ASSET = "forgejo-cli-x86_64-linux.tar.gz"
 ARM64_ASSET = "forgejo-cli-aarch64-linux.tar.gz"
-AMD64_DEPENDS = "libc6 (>= 2.39), libgcc-s1, libssl3t64, zlib1g"
-ARM64_DEPENDS = "libc6 (>= 2.39), libgcc-s1"
+DEPENDS = "libc6 (>= 2.39), libgcc-s1, libssl3t64, zlib1g"
 # The upstream license bytes vendored at the pinned tag.
 MIT_SHA256 = "f4cfb2e3ed810aac9923da015c97868af7a668c1e8e7ebb8201ac53c8370c54a"
 APACHE_SHA256 = "f4feae6d79a020a00852124ab4b76b9d0f786e0b9a727e14d7959ba09b2119fb"
-# The digests of the official archives, computed from the bytes Codeberg serves.
-AMD64_SHA256 = "6803c12eed17bfadb40ba95da2a6ab58f9b4a7dc10eabfe3512fce7e2fe6216f"
-ARM64_SHA256 = "198987908e194704b4a350119596547bc95cd9b6518024d6d02c26f061cfce83"
+# The digests of the official archives, as the fork's release reports them.
+AMD64_SHA256 = "4e1e609bc89df86c28fc63f7158918c54098189117adba2c8ce6d7e86bf39164"
+ARM64_SHA256 = "66bb4310f3d63c84e222d947ea09981d4fd7fd0ac52a40f01402f266984b896b"
 
 
 class ForgejoCliRecipeTest(unittest.TestCase):
     def test_the_package_is_registered_for_both_architectures(self) -> None:
         self.assertIn("forgejo-cli", KNOWN_PACKAGES)
         self.assertEqual(arches_for("forgejo-cli"), ("amd64", "arm64"))
-        self.assertFalse(exact_tag_release_for("forgejo-cli"))
 
-    def test_the_source_is_codeberg_and_the_repository_is_the_reviewed_one(self) -> None:
-        self.assertEqual(source_for("forgejo-cli"), "codeberg")
-        self.assertEqual(repo_of("forgejo-cli"), "forgejo-contrib/forgejo-cli")
+    def test_the_source_is_github_and_the_repository_is_the_reviewed_fork(self) -> None:
+        self.assertEqual(source_for("forgejo-cli"), "github")
+        self.assertEqual(repo_of("forgejo-cli"), REPO)
+
+    def test_the_release_is_selected_by_its_exact_fork_tag(self) -> None:
+        """The fork carries the upstream tags beside its own releases."""
+        self.assertTrue(exact_tag_release_for("forgejo-cli"))
+
+    def test_the_tag_carries_the_fork_revision(self) -> None:
         self.assertEqual(tag_for("forgejo-cli", VERSION), TAG)
-        self.assertEqual(tag_for("forgejo-cli", "0.8.0"), "v0.8.0")
+        self.assertEqual(tag_for("forgejo-cli", "0.7.0+cloudiful.10"), "v0.7.0-cloudiful.10")
 
     def test_assets_are_the_official_tarballs(self) -> None:
         self.assertEqual(asset_name("forgejo-cli", VERSION, "amd64"), AMD64_ASSET)
@@ -84,9 +91,9 @@ class ForgejoCliRecipeTest(unittest.TestCase):
     def test_the_smoke_command_is_the_clis_own_version_subcommand(self) -> None:
         self.assertEqual(smoke_args("forgejo-cli"), ("version",))
 
-    def test_depends_are_the_reviewed_runtime(self) -> None:
-        self.assertEqual(depends_for("forgejo-cli", "amd64"), AMD64_DEPENDS)
-        self.assertEqual(depends_for("forgejo-cli", "arm64"), ARM64_DEPENDS)
+    def test_both_architectures_depend_on_the_same_runtime(self) -> None:
+        self.assertEqual(depends_for("forgejo-cli", "amd64"), DEPENDS)
+        self.assertEqual(depends_for("forgejo-cli", "arm64"), DEPENDS)
 
     def test_the_license_is_the_reviewed_dual_license(self) -> None:
         self.assertEqual(expected_license_for("forgejo-cli"), "MIT OR Apache-2.0")
@@ -94,7 +101,7 @@ class ForgejoCliRecipeTest(unittest.TestCase):
         self.assertEqual(extra_license_paths_for("forgejo-cli"), ("LICENSE-APACHE",))
         self.assertEqual(
             extra_license_urls_for("forgejo-cli", VERSION),
-            (f"https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/{TAG}/LICENSE-APACHE",),
+            (f"https://raw.githubusercontent.com/{REPO}/{TAG}/LICENSE-APACHE",),
         )
 
     def test_the_vendored_licenses_are_the_upstream_bytes(self) -> None:
@@ -125,32 +132,35 @@ class ForgejoCliRecipeTest(unittest.TestCase):
         manifest = load_manifest()
         pkg = next(p for p in manifest.packages if p.name == "forgejo-cli")
         self.assertEqual(pkg.version, VERSION)
+        self.assertEqual(pkg.homepage, f"https://github.com/{REPO}")
+        self.assertEqual(pkg.description, "Forgejo CLI — cloudiful personal-use fork")
         self.assertEqual(pkg.license, "MIT OR Apache-2.0")
         self.assertEqual(
             pkg.license_url,
-            f"https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/{TAG}/LICENSE-MIT",
+            f"https://raw.githubusercontent.com/{REPO}/{TAG}/LICENSE-MIT",
         )
         self.assertEqual(
             pkg.extra_license_urls,
-            (f"https://codeberg.org/forgejo-contrib/forgejo-cli/raw/tag/{TAG}/LICENSE-APACHE",),
+            (f"https://raw.githubusercontent.com/{REPO}/{TAG}/LICENSE-APACHE",),
         )
+        self.assertEqual(pkg.upstream_published_at, "2026-10-24T15:48:56Z")
         self.assertEqual(set(pkg.targets), {"amd64", "arm64"})
         amd64 = pkg.targets["amd64"]
         self.assertEqual(
             amd64.url,
-            f"https://codeberg.org/forgejo-contrib/forgejo-cli/releases/download/{TAG}/{AMD64_ASSET}",
+            f"https://github.com/{REPO}/releases/download/{TAG}/{AMD64_ASSET}",
         )
         self.assertEqual(amd64.sha256, AMD64_SHA256)
         self.assertEqual((amd64.archive_member, amd64.binary), ("fj", "fj"))
-        self.assertEqual(amd64.depends, AMD64_DEPENDS)
+        self.assertEqual(amd64.depends, DEPENDS)
         arm64 = pkg.targets["arm64"]
         self.assertEqual(
             arm64.url,
-            f"https://codeberg.org/forgejo-contrib/forgejo-cli/releases/download/{TAG}/{ARM64_ASSET}",
+            f"https://github.com/{REPO}/releases/download/{TAG}/{ARM64_ASSET}",
         )
         self.assertEqual(arm64.sha256, ARM64_SHA256)
         self.assertEqual((arm64.archive_member, arm64.binary), ("fj", "fj"))
-        self.assertEqual(arm64.depends, ARM64_DEPENDS)
+        self.assertEqual(arm64.depends, DEPENDS)
 
 
 class ForgejoCliPackageTest(unittest.TestCase):
@@ -173,7 +183,10 @@ class ForgejoCliPackageTest(unittest.TestCase):
             )
             self.assertTrue((stage / "usr" / "bin" / "fj").exists())
             control = (stage / "DEBIAN" / "control").read_text()
-            self.assertIn(f"Depends: {AMD64_DEPENDS}", control)
+            self.assertIn(f"Depends: {DEPENDS}", control)
+            self.assertIn("Version: 0.7.0+cloudiful.2-1", control)
+            self.assertIn("Description: Forgejo CLI — cloudiful personal-use fork", control)
+            self.assertIn(f"Homepage: https://github.com/{REPO}", control)
             copyright = (stage / "usr" / "share" / "doc" / "forgejo-cli" / "copyright").read_text()
             self.assertIn("License: MIT OR Apache-2.0", copyright)
             self.assertIn("MIT License", copyright)

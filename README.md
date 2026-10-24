@@ -8,10 +8,11 @@ Private per-device authenticated APT source for Debian 13. English | [中文](RE
 - Debian 13 packages for amd64 and arm64: bottom, bun, cargo-tauri, chezmoi,
   fd-find, forgejo-cli, fzf, git-delta, glab, kandev, neovim, opencode,
   rustfs-cli, sccache, starship, tree-sitter-cli, uv, zellij, and zoxide, each
-  from its official release asset.
-- `forgejo-cli` comes from Codeberg, which publishes no release digest: its
-  archives are pinned by a SHA256 computed from the official download, which
-  costs about 18 MiB of downloads per discovery run.
+  from its reviewed upstream release.
+- `forgejo-cli` comes from the `cloudiful/forgejo-cli` personal-use fork, not
+  from the upstream official distribution; it adds `fj pr attach`. Its archives
+  are pinned by the sha256 digest the fork's GitHub release reports for each of
+  them.
 - `glab` comes from the official GitLab release archives. GitLab publishes an
   unsigned `checksums.txt` instead of a cryptographic signature, so each
   archive is pinned by the SHA256 that file names; that digest trusts GitLab's
