@@ -57,8 +57,13 @@ const SUCCESS_TTL_MS = 60_000;
 /** How long a failed load is remembered before it is retried. */
 const FAILURE_TTL_MS = 15_000;
 
-/** Total budget for one metadata load, including both storage reads. */
-const LOAD_TIMEOUT_MS = 1500;
+/**
+ * Total budget for one metadata load.
+ *
+ * The pointer and the manifest share this one budget, so a load that is slow
+ * in both reads still answers within it instead of twice over.
+ */
+const LOAD_TIMEOUT_MS = 3000;
 
 /**
  * Debian package name: lowercase, digits and the punctuation Debian allows.

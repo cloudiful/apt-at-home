@@ -337,12 +337,113 @@ describe('published package catalog', () => {
     expect(result.reason).toBe('invalid');
   });
 
+  it('answers a cold read that finishes inside the read budget', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-01T00:00:00Z'));
+    const bucket = publishedBucket();
+    const env = createEnv(bucket, '{}');
+    // A read that is slow but still inside the budget is a normal answer.
+    bucket.delay('current.json', 2000);
+
+    const pending = loadCatalog(env);
+    await vi.advanceTimersByTimeAsync(2000);
+    const result = await pending;
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected a catalog');
+    expect(result.releaseId).toBe(RELEASE_ID);
+    expect(result.packages.map((pkg) => pkg.name)).toEqual(['alpha', 'beta', 'gamma']);
+  });
+
+  it('spends one budget on the pointer and the manifest together', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-01T00:00:00Z'));
+    const bucket = publishedBucket();
+    const env = createEnv(bucket, '{}');
+    const manifestKey = `releases/${RELEASE_ID}/manifest.json`;
+    bucket.delay('current.json', 2000);
+    bucket.delay(manifestKey, 2000);
+
+    const pending = loadCatalog(env);
+    await vi.advanceTimersByTimeAsync(3000);
+    const result = await pending;
+
+    // Both reads together outlast the budget, so the load fails.
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a failure');
+    expect(result.reason).toBe('unavailable');
+    expect(bucket.keysFor('get')).toEqual(['current.json', manifestKey]);
+
+    // The manifest read that lands after the deadline seeds nothing.
+    await vi.advanceTimersByTimeAsync(2000);
+    vi.setSystemTime(new Date('2026-03-01T00:00:20Z'));
+    const second = await loadCatalog(env);
+    expect(second.ok).toBe(true);
+    if (!second.ok) throw new Error('expected a catalog');
+    expect(second.releaseId).toBe(RELEASE_ID);
+    expect(bucket.keysFor('get').filter((key) => key === manifestKey)).toHaveLength(2);
+  });
+
+  it('shares one cold read and one budget between concurrent readers', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-01T00:00:00Z'));
+    const bucket = publishedBucket();
+    const env = createEnv(bucket, '{}');
+    const manifestKey = `releases/${RELEASE_ID}/manifest.json`;
+    bucket.delay('current.json', 2000);
+    bucket.delay(manifestKey, 2000);
+
+    const first = loadCatalog(env);
+    const second = loadCatalog(env);
+    await vi.advanceTimersByTimeAsync(3000);
+    const [one, two] = await Promise.all([first, second]);
+
+    expect(one.ok).toBe(false);
+    expect(two.ok).toBe(false);
+    // One load served both readers, so storage was read once for each object.
+    expect(bucket.keysFor('get')).toEqual(['current.json', manifestKey]);
+  });
+
+  it('keeps a published catalog for a minute', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-01T00:00:00Z'));
+    const bucket = publishedBucket();
+    const env = createEnv(bucket, '{}');
+
+    expect((await loadCatalog(env)).ok).toBe(true);
+
+    vi.setSystemTime(new Date('2026-03-01T00:00:59Z'));
+    expect((await loadCatalog(env)).ok).toBe(true);
+    expect(bucket.keysFor('get')).toHaveLength(2);
+
+    vi.setSystemTime(new Date('2026-03-01T00:01:01Z'));
+    expect((await loadCatalog(env)).ok).toBe(true);
+    expect(bucket.keysFor('get')).toHaveLength(4);
+  });
+
+  it('remembers a failure for a quarter of a minute', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-01T00:00:00Z'));
+    const bucket = new FakeBucket();
+    const env = createEnv(bucket, '{}');
+
+    expect((await loadCatalog(env)).ok).toBe(false);
+
+    vi.setSystemTime(new Date('2026-03-01T00:00:14Z'));
+    expect((await loadCatalog(env)).ok).toBe(false);
+    expect(bucket.keysFor('get')).toHaveLength(1);
+
+    vi.setSystemTime(new Date('2026-03-01T00:00:16Z'));
+    expect((await loadCatalog(env)).ok).toBe(false);
+    expect(bucket.keysFor('get')).toHaveLength(2);
+  });
+
   it('answers within the read budget when storage never replies', async () => {
     vi.useFakeTimers();
     const bucket = new FakeBucket();
     bucket.stall('current.json');
     const pending = loadCatalog(createEnv(bucket, '{}'));
-    await vi.advanceTimersByTimeAsync(2000);
+    await vi.advanceTimersByTimeAsync(3000);
     const result = await pending;
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('expected a failure');
@@ -368,10 +469,10 @@ describe('published package catalog late completions', () => {
     vi.setSystemTime(new Date('2026-03-01T00:00:00Z'));
     const bucket = publishedBucket();
     const env = createEnv(bucket, '{}');
-    bucket.delay('current.json', 2000);
+    bucket.delay('current.json', 4000);
 
     const pending = loadCatalog(env);
-    await vi.advanceTimersByTimeAsync(1500);
+    await vi.advanceTimersByTimeAsync(3000);
     const first = await pending;
     expect(first.ok).toBe(false);
     if (first.ok) throw new Error('expected a failure');
@@ -390,7 +491,7 @@ describe('published package catalog late completions', () => {
     expect(second.releaseId).toBe(NEXT_RELEASE_ID);
 
     // The abandoned read now answers with the release it captured.
-    await vi.advanceTimersByTimeAsync(2000);
+    await vi.advanceTimersByTimeAsync(4000);
 
     const third = await loadCatalog(env);
     expect(third.ok).toBe(true);
@@ -404,15 +505,15 @@ describe('published package catalog late completions', () => {
     vi.setSystemTime(new Date('2026-03-01T00:00:00Z'));
     const bucket = publishedBucket();
     const env = createEnv(bucket, '{}');
-    bucket.delay('current.json', 2000);
+    bucket.delay('current.json', 4000);
 
     const pending = loadCatalog(env);
-    await vi.advanceTimersByTimeAsync(1500);
+    await vi.advanceTimersByTimeAsync(3000);
     const first = await pending;
     expect(first.ok).toBe(false);
 
     // The abandoned read answers while the failure is still cached.
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1000);
     const cached = await loadCatalog(env);
     expect(cached.ok).toBe(false);
     if (cached.ok) throw new Error('expected a failure');
@@ -435,17 +536,17 @@ describe('published package catalog late completions', () => {
     const bucket = publishedBucket();
     const env = createEnv(bucket, '{}');
     const manifestKey = `releases/${RELEASE_ID}/manifest.json`;
-    bucket.delay(manifestKey, 2000);
+    bucket.delay(manifestKey, 4000);
 
     const pending = loadCatalog(env);
-    await vi.advanceTimersByTimeAsync(1500);
+    await vi.advanceTimersByTimeAsync(3000);
     const first = await pending;
     expect(first.ok).toBe(false);
     if (first.ok) throw new Error('expected a failure');
     expect(first.reason).toBe('unavailable');
 
     // The abandoned manifest read answers after the failure was recorded.
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1000);
 
     vi.setSystemTime(new Date('2026-03-01T00:00:20Z'));
     const second = await loadCatalog(env);
