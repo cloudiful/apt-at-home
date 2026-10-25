@@ -7,7 +7,9 @@
  * runtime configuration is broken can still read how to bootstrap a client and
  * what the repository currently publishes. The catalog is optional: when the
  * metadata cannot be read the page still renders, with a short status instead
- * of a package table, and never with a stale or invented catalog.
+ * of a package table, and never with a stale or invented catalog. A page
+ * without a catalog is never stored: it answers with `no-store`, so the next
+ * reader gets a fresh attempt instead of a cached failure.
  *
  * The page is rendered by React on the server and hydrated in the browser, so
  * the same components produce the document and the interactive page. The
@@ -26,8 +28,17 @@ import type { AppProps, PackageSummary } from '../../web/src/lib/types';
 import type { Locale } from './i18n.js';
 import type { Env } from './types.js';
 
-/** Public cache lifetime for the page, in seconds. */
+/** Public cache lifetime for a page that carries the published catalog, in seconds. */
 const HOMEPAGE_CACHE_CONTROL = 'public, max-age=60';
+
+/**
+ * Cache directive for the fallback page.
+ *
+ * A page without a catalog says that the catalog is unavailable right now, so
+ * it must never be stored: a cached fallback would keep serving that status
+ * after the metadata became readable again.
+ */
+const HOMEPAGE_FALLBACK_CACHE_CONTROL = 'no-store';
 
 /** Prefix every generated identifier carries, on the server and in the browser. */
 const IDENTIFIER_PREFIX = 'apt';
@@ -94,7 +105,11 @@ function homepageResponse(
     'Content-Type': 'text/html; charset=utf-8',
     'Content-Length': String(length),
     'Content-Language': documentLanguage(locale),
-    'Cache-Control': HOMEPAGE_CACHE_CONTROL,
+    // Only the page that carries the published catalog is cacheable. The
+    // fallback page reports a missing catalog, so it is never stored, and the
+    // counters never take part in this decision.
+    'Cache-Control':
+      packages === null ? HOMEPAGE_FALLBACK_CACHE_CONTROL : HOMEPAGE_CACHE_CONTROL,
     'Content-Security-Policy': CONTENT_SECURITY_POLICY,
     Vary: 'Accept-Language',
     'X-Content-Type-Options': 'nosniff',

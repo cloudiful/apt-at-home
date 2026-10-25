@@ -178,6 +178,109 @@ describe('public root landing page', () => {
   });
 });
 
+describe('the cache directive of the root page', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('caches the page that carries the published catalog', async () => {
+    const fixture = await createFixture();
+    for (const method of ['GET', 'HEAD']) {
+      const response = await fixture.call(plain('/', { method }));
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Cache-Control')).toBe('public, max-age=60');
+    }
+  });
+
+  it('never stores the fallback page when the catalog is missing', async () => {
+    const fixture = await createFixture();
+    fixture.bucket.entries.delete(`releases/${RELEASE_ID}/manifest.json`);
+    for (const method of ['GET', 'HEAD']) {
+      const response = await fixture.call(plain('/', { method }));
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Cache-Control')).toBe('no-store');
+    }
+    const body = await (await fixture.call(plain('/'))).text();
+    expect(body).toContain('The published package list is unavailable right now.');
+  });
+
+  it('never stores the fallback page when the catalog is invalid', async () => {
+    const fixture = await createFixture();
+    fixture.bucket.seed(`releases/${RELEASE_ID}/manifest.json`, 'not json', {
+      contentType: 'application/json',
+    });
+    for (const method of ['GET', 'HEAD']) {
+      const response = await fixture.call(plain('/', { method }));
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Cache-Control')).toBe('no-store');
+    }
+    const body = await (await fixture.call(plain('/'))).text();
+    expect(body).toContain('The published package list is unavailable right now.');
+  });
+
+  it('never stores the fallback page when the catalog read runs out of time', async () => {
+    vi.useFakeTimers();
+    const fixture = await createFixture();
+    fixture.bucket.delay('current.json', 4000);
+
+    const pending = fixture.call(plain('/'));
+    await vi.advanceTimersByTimeAsync(3000);
+    const response = await pending;
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(await response.text()).toContain(
+      'The published package list is unavailable right now.',
+    );
+  });
+
+  it('never stores the fallback page when the counters were read', async () => {
+    const fixture = await createFixture();
+    const sql = new FakeAnalyticsSql();
+    sql.rows = [{ kind: 'visit', total: 3 }];
+    const env = createEnv(fixture.bucket, fixture.env.CREDENTIALS, undefined, undefined, {}, { sql });
+    fixture.bucket.entries.delete(`releases/${RELEASE_ID}/manifest.json`);
+
+    const response = await gateway.fetch(plain('/'), env, new FakeContext().asBinding());
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(await response.text()).toContain('Last 30 days');
+  });
+
+  it('caches the page with the catalog when the counters are missing', async () => {
+    const fixture = await createFixture();
+    const sql = new FakeAnalyticsSql();
+    sql.failure = new Error('query refused');
+    const env = createEnv(fixture.bucket, fixture.env.CREDENTIALS, undefined, undefined, {}, { sql });
+
+    const response = await gateway.fetch(plain('/'), env, new FakeContext().asBinding());
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=60');
+    expect(html).not.toContain('Last 30 days');
+    expect(html).toContain('Published packages');
+  });
+
+  it('renders the catalog on the first request when the cold read is slow', async () => {
+    vi.useFakeTimers();
+    const fixture = await createFixture();
+    fixture.bucket.delay('current.json', 2000);
+
+    const pending = fixture.call(plain('/'));
+    await vi.advanceTimersByTimeAsync(2000);
+    const response = await pending;
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=60');
+    expect(html).toContain('Published packages');
+    expect(html).toContain('alpha');
+    expect(html).toContain('sudo apt update &amp;&amp; sudo apt install alpha');
+  });
+});
+
 describe('the rendered document', () => {
   it('renders the page as a React tree with the built assets', async () => {
     const fixture = await createFixture();
