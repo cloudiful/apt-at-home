@@ -38,7 +38,10 @@ from .smoke_package import (
 )
 from .smoke_commands import binaries_for_target
 from .smoke_runtime import run_installed
-from .kandev_smoke import check_bundle_payload
+from .kandev_bundle import BUNDLE_TYPE as KANDEV_BUNDLE_TYPE
+from .kandev_smoke import check_bundle_payload as check_kandev_bundle_payload
+from .pi_bundle import BUNDLE_TYPE as PI_BUNDLE_TYPE
+from .pi_smoke import check_bundle_payload as check_pi_bundle_payload
 from .smoke_tree import check_relations, check_tree_payload
 from .smoke_upgrade import check_upgraded_state
 
@@ -65,6 +68,16 @@ def _extract(deb: Path, destination: Path) -> Path:
     if proc.returncode != 0:
         raise SmokeError(f"dpkg-deb -x {deb.name} failed: {proc.stderr.strip()}")
     return destination
+
+
+def check_bundle_payload(pkg: Package, arch: str, package_root: Path) -> list[str]:
+    """Dispatch one installed bundle payload to its own reviewed checker."""
+    bundle_type = pkg.targets[arch].bundle_type
+    if bundle_type == KANDEV_BUNDLE_TYPE:
+        return check_kandev_bundle_payload(pkg, arch, package_root)
+    if bundle_type == PI_BUNDLE_TYPE:
+        return check_pi_bundle_payload(pkg, arch, package_root)
+    raise SmokeError(f"{pkg.name} {arch} declares an unsupported bundle type: {bundle_type!r}")
 
 
 def check_pool(manifest: Manifest, pool: Path, arches: tuple[str, ...]) -> list[str]:

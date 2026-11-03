@@ -19,7 +19,42 @@ from .deb import build_deb, stage_package
 from .download import fetch_verified
 from .manifest import Manifest, Package, deb_filename
 from .package_binaries import extract_binaries
-from .kandev_bundle import inventory_bundle, stage_kandev_package
+from .kandev_bundle import (
+    BUNDLE_TYPE as KANDEV_BUNDLE_TYPE,
+    inventory_bundle as inventory_kandev_bundle,
+    stage_kandev_package,
+)
+from .pi_bundle import (
+    BUNDLE_TYPE as PI_BUNDLE_TYPE,
+    inventory_bundle as inventory_pi_bundle,
+    stage_pi_package,
+)
+
+_BUNDLE_STAGERS = {
+    KANDEV_BUNDLE_TYPE: (inventory_kandev_bundle, stage_kandev_package),
+    PI_BUNDLE_TYPE: (inventory_pi_bundle, stage_pi_package),
+}
+
+
+def _stage_bundle(
+    pkg: Package, arch: str, manifest: Manifest, archive: Path, tmpdir: Path,
+    bundle_type: str,
+) -> Path:
+    """Stage one reviewed bundle type through its own inventory and stager."""
+    try:
+        inventory, stage = _BUNDLE_STAGERS[bundle_type]
+    except KeyError:
+        raise ValueError(
+            f"{pkg.name} {arch} declares an unsupported bundle type: {bundle_type!r}"
+        ) from None
+    bundle = inventory(
+        archive, expected_version=tag_for(pkg.name, pkg.version), expected_arch=arch,
+        bundle_type=bundle_type,
+    )
+    return stage(
+        pkg=pkg, arch=arch, manifest=manifest, archive=archive,
+        inventory=bundle, stage_root=tmpdir / "stages",
+    )
 
 
 def _stage_target(
@@ -28,14 +63,7 @@ def _stage_target(
     """Stage one target from its archive: a flat member or a validated upstream tree."""
     target = pkg.targets[arch]
     if target.bundle_type:
-        inventory = inventory_bundle(
-            archive, expected_version=tag_for(pkg.name, pkg.version), expected_arch=arch,
-            bundle_type=target.bundle_type,
-        )
-        return stage_kandev_package(
-            pkg=pkg, arch=arch, manifest=manifest, archive=archive,
-            inventory=inventory, stage_root=tmpdir / "stages",
-        )
+        return _stage_bundle(pkg, arch, manifest, archive, tmpdir, target.bundle_type)
     if target.install_tree:
         inventory = inventory_tree(archive, target.install_tree)
         return stage_package(

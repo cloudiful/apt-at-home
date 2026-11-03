@@ -5,7 +5,7 @@
 ## 特性
 
 - 私有鉴权源：经鉴权网关按设备令牌访问。
-- 面向 Debian 13 的 amd64 与 arm64 软件包：bottom、bun、cargo-tauri、chezmoi、fd-find、forgejo-cli、fzf、git-delta、glab、kandev、neovim、opencode、rustfs-cli、sccache、starship、tree-sitter-cli、uv、zellij 与 zoxide，均来自各自经审阅的上游发布产物。
+- 面向 Debian 13 的 amd64 与 arm64 软件包：bottom、bun、cargo-tauri、chezmoi、fd-find、forgejo-cli、fzf、git-delta、glab、kandev、neovim、opencode、pi、rustfs-cli、sccache、starship、tree-sitter-cli、uv、zellij 与 zoxide，均来自各自经审阅的上游发布产物。
 - `forgejo-cli` 来自 `cloudiful/forgejo-cli` 个人使用分支，并非上游官方发行版；该分支新增了 `fj pr attach`。归档按其 GitHub 发布为每个归档公布的 sha256 摘要固定。
 - `glab` 来自 GitLab 官方发布归档。GitLab 提供的是未签名的 `checksums.txt` 而非加密签名，因此每个归档按其列出的 SHA256 固定；该校验值信任 GitLab 的 TLS 传输与仓库完整性。
 - 经 GitHub Actions 签名并发布到私有对象存储的仓库。
@@ -18,7 +18,7 @@
 
 ```sh
 sudo apt update
-sudo apt install bottom bun cargo-tauri chezmoi fd-find forgejo-cli fzf git-delta glab kandev neovim opencode rustfs-cli sccache starship tree-sitter-cli uv zellij zoxide
+sudo apt install bottom bun cargo-tauri chezmoi fd-find forgejo-cli fzf git-delta glab kandev neovim opencode pi rustfs-cli sccache starship tree-sitter-cli uv zellij zoxide
 ```
 
 `bottom` 提供 `btm`，`fd-find` 提供 `fdfind`，`forgejo-cli` 提供 `fj`，`git-delta` 提供 `delta`，`glab` 提供 `glab`，`rustfs-cli` 提供 `rc`，`tree-sitter-cli` 提供 `tree-sitter`，`uv` 同时提供 `uv` 与 `uvx`。`bun` 提供 `bun`；上游的 `bunx` 命令以 `bun x` 的形式使用。`cargo-tauri` 提供 `cargo-tauri` 与 `cargo tauri`（Cargo 外部子命令，需要 `cargo`，已声明为依赖）。`zoxide` 的 shell 集成是可选的；如需用于 Bash，可自行将 `eval "$(zoxide init bash)"` 添加到 shell 配置中。安装软件包不会修改 shell 配置。
@@ -29,6 +29,8 @@ sudo apt install bottom bun cargo-tauri chezmoi fd-find forgejo-cli fzf git-delt
 
 `kandev` 安装上游标准服务器套件；运行 `kandev` 才会显式启动服务器，
 安装软件包不会启动服务器。
+
+`pi` 将完整的上游独立套件安装到 `/usr/lib/pi`：Pi 可执行文件，以及主题、资产、导出模板、文档、示例、Photon 图像处理 WASM 模块与原生 X11 剪贴板助手。`/usr/bin/pi` 从该目录启动，并强制把 Pi 的自更新命令指向包内的 `/usr/lib/pi/apt-update`：该助手只向 stderr 输出 `sudo apt upgrade pi` 或 `sudo apt install --only-upgrade pi` 提示并以非零状态退出，请通过 APT 更新 Pi。Pi 的扩展与模型更新命令保持可用，并经启动器原样传递。root 或手动直接运行 `/usr/lib/pi/pi` 仍可改写文件并绕过启动器，Pi 本身也没有内置权限沙箱。
 
 `neovim` 是完整的上游发布目录树（运行时、解析器与手册页）。它会替代发行版的 `neovim-runtime` 包，因此升级时 APT 会移除该包。
 

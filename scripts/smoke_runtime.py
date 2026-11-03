@@ -24,7 +24,16 @@ from .smoke_commands import (
     extra_command_probes,
 )
 from .smoke_package import SmokeError, check_elf, expected_binary
-from .kandev_smoke import check_bundle_payload, check_version_output
+from .kandev_bundle import BUNDLE_TYPE as KANDEV_BUNDLE_TYPE
+from .kandev_smoke import (
+    check_bundle_payload as check_kandev_bundle_payload,
+    check_version_output as check_kandev_version_output,
+)
+from .pi_bundle import BUNDLE_TYPE as PI_BUNDLE_TYPE
+from .pi_smoke import (
+    check_bundle_payload as check_pi_bundle_payload,
+    check_version_output as check_pi_version_output,
+)
 
 # A static Lua contract: each step must hold, and any failure exits 1 explicitly
 # so a silent error can never report success.
@@ -86,6 +95,31 @@ def arguments_for(package_name: str) -> tuple[str, ...]:
     return handler(package_name) if handler else _generic_args(package_name)
 
 
+def _check_bundle_payload(pkg: Package, arch: str, prefix: Path) -> None:
+    """Dispatch an installed bundle to the checker its reviewed type names."""
+    bundle_type = pkg.targets[arch].bundle_type
+    if bundle_type == KANDEV_BUNDLE_TYPE:
+        check_kandev_bundle_payload(pkg, arch, prefix)
+    elif bundle_type == PI_BUNDLE_TYPE:
+        check_pi_bundle_payload(pkg, arch, prefix)
+    else:
+        raise SmokeError(
+            f"{pkg.name} {arch} declares an unsupported bundle type: {bundle_type!r}"
+        )
+
+
+def _check_bundle_version(pkg: Package, arch: str, output: str) -> None:
+    bundle_type = pkg.targets[arch].bundle_type
+    if bundle_type == KANDEV_BUNDLE_TYPE:
+        check_kandev_version_output(pkg, output)
+    elif bundle_type == PI_BUNDLE_TYPE:
+        check_pi_version_output(pkg, output)
+    else:
+        raise SmokeError(
+            f"{pkg.name} {arch} declares an unsupported bundle type: {bundle_type!r}"
+        )
+
+
 def _run_probe(
     pkg: Package, arch: str, probe: CommandProbe, *, prefix: Path, scratch: Path
 ) -> str:
@@ -94,7 +128,7 @@ def _run_probe(
         raise SmokeError(f"{pkg.name} smoke probe names uninstalled command {probe.binary}")
     binary = prefix / "usr" / "bin" / probe.binary
     if target.bundle_type:
-        check_bundle_payload(pkg, arch, prefix)
+        _check_bundle_payload(pkg, arch, prefix)
     else:
         check_elf(pkg, arch, binary)
     proc = _run(binary, probe.args, scratch=scratch)
@@ -108,7 +142,7 @@ def _run_probe(
     except ValueError as exc:
         raise SmokeError(str(exc)) from exc
     if target.bundle_type:
-        check_version_output(pkg, proc.stdout)
+        _check_bundle_version(pkg, arch, proc.stdout)
     first_line = (proc.stdout.strip().splitlines() or [""])[0]
     return f"{binary} [{arch}] {' '.join(probe.args[:2])} exited 0: {first_line[:120]}"
 

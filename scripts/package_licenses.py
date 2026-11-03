@@ -37,6 +37,20 @@ def copyright_text(pkg: Package, license_body: str, *extra_license_bodies: str) 
     )
 
 
+def pi_source_document(version: str) -> str:
+    """Render the Pi source pointer against its exact bundle version."""
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+        raise ValueError(f"invalid Pi version: {version!r}")
+    template = (
+        Path(__file__).resolve().parent.parent / "packaging" / "licenses"
+        / "pi" / "README.source"
+    ).read_text(encoding="utf-8")
+    try:
+        return template.format(version=version, tag=f"v{version}")
+    except (KeyError, ValueError) as exc:
+        raise ValueError(f"invalid Pi README.source template: {exc}") from None
+
+
 def kandev_source_document(version: str, commit: str) -> str:
     """Render the Kandev source pointer against its exact bundle version."""
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):

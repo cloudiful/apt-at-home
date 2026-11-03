@@ -60,6 +60,14 @@ _OPENCODE_LIBC = MappingProxyType({
     "amd64": "libc6 (>= 2.17)",
     "arm64": "libc6 (>= 2.17)",
 })
+# Pi publishes one standalone bundle per architecture, named with its own
+# short architecture names.
+_PI = MappingProxyType({"amd64": "x64", "arm64": "arm64"})
+# Both Pi builds link against glibc 2.17 and need nothing beyond it.
+_PI_LIBC = MappingProxyType({
+    "amd64": "libc6 (>= 2.17)",
+    "arm64": "libc6 (>= 2.17)",
+})
 
 
 def make_cli_recipes(recipe_type: type[Recipe]) -> dict[str, Recipe]:
@@ -120,6 +128,20 @@ def make_cli_recipes(recipe_type: type[Recipe]) -> dict[str, Recipe]:
                 "arm64": "libc6 (>= 2.34)",
             }),
             bundle_type="kandev-standard",
+        ),
+        "pi": recipe_type(
+            name="pi",
+            upstream="pi",
+            repo="earendil-works/pi",
+            tag_prefix="v",
+            license_id="MIT",
+            license_path="LICENSE",
+            asset="pi-linux-{triple}.tar.gz",
+            member="{upstream}/{binary}",
+            binary="pi",
+            triples=_PI,
+            depends=_PI_LIBC,
+            bundle_type="pi-standard",
         ),
         "bun": recipe_type(
             name="bun",

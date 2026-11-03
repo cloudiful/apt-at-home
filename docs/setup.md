@@ -209,6 +209,17 @@ the exact three steps, reproduced here for operators.
   mismatching digest, a deprecated release, or a platform package the wrapper
   does not pin at the same exact version stops the update instead of skipping
   the package.
+- `pi` installs the complete upstream standalone bundle under `/usr/lib/pi`,
+  including themes, assets, export templates, documentation, examples, the
+  Photon image-processing WASM module, and the target-specific X11 clipboard
+  helper; the archive is validated for the reviewed membership, safe modes,
+  ELF architecture, and `package.json` version before staging. `/usr/bin/pi`
+  launches it from that directory and forces `PI_SELF_UPDATE_COMMAND` to the
+  packaged `/usr/lib/pi/apt-update` helper, which prints an APT upgrade
+  instruction and exits nonzero without changing files. Pi's extension and
+  model update commands remain available and pass through the launcher
+  unfiltered. Root or a manual direct run of `/usr/lib/pi/pi` can still bypass
+  the launcher, and Pi has no built-in permission sandbox.
 - Neovim is the full upstream release tree, installed under `/usr` from one
   archive root. It declares `Conflicts` and `Replaces` on `neovim-runtime`, so an
   APT upgrade removes the distribution runtime through the normal solver. Its
@@ -219,7 +230,8 @@ the exact three steps, reproduced here for operators.
   (`fdfind`), `forgejo-cli` (`fj`), `fzf`, `git-delta` (`delta`), `glab`
   (static, no runtime dependencies), `neovim`
   (`nvim`), `opencode` (OpenCode V2, standalone: no Node or Bun; amd64 needs
-  AVX2 and both architectures need glibc 2.17), `rustfs-cli` (`rc`), `sccache`,
+  AVX2 and both architectures need glibc 2.17), `pi` (standalone bundle with
+  its own resources; glibc 2.17), `rustfs-cli` (`rc`), `sccache`,
   `starship`, `tree-sitter-cli` (`tree-sitter`, requires glibc 2.39), `uv`
   (`uv` and `uvx`), `zellij`, and `zoxide` for both architectures. The arm64
   `cargo-tauri` build needs glibc 2.18 and the amd64 build keeps its glibc 2.34

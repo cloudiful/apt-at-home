@@ -33,6 +33,7 @@ from scripts.update_build import apply_update, remove_superseded
 from scripts.update_plan import build_plan
 from tests.helpers import FakeS3, archive_stem, make_gpg_home_with_key, write_target_archive
 from tests.test_kandev_bundle import write_bundle_archive
+from tests.test_pi_bundle import write_bundle_archive as write_pi_bundle_archive
 from tests.release_fixtures import (
     CATALOG_NAMES,
     PUBLISHED_NAMES,
@@ -115,6 +116,8 @@ def _stub_archive():
         payload = f"fake-{name}-{arch}".encode()
         if name == "kandev":
             return write_bundle_archive(dest, version=f"v{pkg.version}", arch=arch)
+        if name == "pi":
+            return write_pi_bundle_archive(dest, version=pkg.version, arch=arch)
         return write_target_archive(dest, pkg, arch, payload)
 
     return mock.patch("scripts.build.fetch_verified", fetch)

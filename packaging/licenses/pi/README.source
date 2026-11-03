@@ -1,0 +1,24 @@
+# Pi {version} — upstream source and bundle layout
+
+This Debian package repackages Pi's official standalone Linux bundle. The
+package contains upstream program and resource files, not a source archive.
+These version-pinned references identify the upstream source; they do not
+assert source closure or make a compliance determination.
+
+## Upstream source
+
+- Release tag: `{tag}`
+- Source tree: <https://github.com/earendil-works/pi/tree/{tag}>
+- Source archive: <https://github.com/earendil-works/pi/archive/refs/tags/{tag}.tar.gz>
+- Official standalone bundle: the `pi-linux-x64.tar.gz` and
+  `pi-linux-arm64.tar.gz` assets of the `{tag}` release.
+
+## Installed layout
+
+The complete upstream bundle root is installed under `/usr/lib/pi`, so the
+executable's own directory is also the package resource directory that Pi
+resolves themes, assets, export templates, documentation, and examples from.
+`/usr/bin/pi` is the package launcher. Pi itself is updated only through APT;
+the launcher points `PI_SELF_UPDATE_COMMAND` at the packaged
+`/usr/lib/pi/apt-update` helper, which refuses to modify the installation and
+prints the APT command instead.
