@@ -6,7 +6,7 @@ Private per-device authenticated APT source for Debian 13. English | [中文](RE
 
 - Private authenticated source with per-device tokens over an authenticated gateway.
 - Debian 13 packages for amd64 and arm64: bottom, bun, cargo-tauri, chezmoi,
-  fd-find, forgejo-cli, fzf, git-delta, glab, kandev, neovim, opencode,
+  fd-find, forgejo-cli, fzf, git-delta, glab, kandev, neovim, opencode, pi,
   rustfs-cli, sccache, starship, tree-sitter-cli, uv, zellij, and zoxide, each
   from its reviewed upstream release.
 - `forgejo-cli` comes from the `cloudiful/forgejo-cli` personal-use fork, not
@@ -30,7 +30,7 @@ Private per-device authenticated APT source for Debian 13. English | [中文](RE
 
 ```sh
 sudo apt update
-sudo apt install bottom bun cargo-tauri chezmoi fd-find forgejo-cli fzf git-delta glab kandev neovim opencode rustfs-cli sccache starship tree-sitter-cli uv zellij zoxide
+sudo apt install bottom bun cargo-tauri chezmoi fd-find forgejo-cli fzf git-delta glab kandev neovim opencode pi rustfs-cli sccache starship tree-sitter-cli uv zellij zoxide
 ```
 
 `bottom` provides `btm`, `fd-find` provides `fdfind`, `forgejo-cli` provides
@@ -55,6 +55,18 @@ the packaged binary is about 240 MB uncompressed.
 
 `kandev` installs the upstream standard server bundle. Run `kandev` to start it;
 package installation does not start the server.
+
+`pi` installs the complete upstream standalone bundle under `/usr/lib/pi`:
+Pi's executable plus its themes, assets, export templates, documentation,
+examples, the Photon image-processing WASM module, and the native X11
+clipboard helper. `/usr/bin/pi` launches it from there and forces Pi's
+self-update command to the packaged `/usr/lib/pi/apt-update` helper: that
+helper only prints a `sudo apt upgrade pi` or
+`sudo apt install --only-upgrade pi` instruction to stderr and exits nonzero,
+so update Pi through APT. Pi's extension and model update commands remain
+available and pass through the launcher unfiltered. Root or a manual direct
+run of `/usr/lib/pi/pi` can still change files and bypass the launcher, and Pi
+has no built-in permission sandbox.
 
 `neovim` is the full upstream release tree (runtime, parsers, and man pages). It
 replaces the distribution `neovim-runtime` package, so APT removes that package

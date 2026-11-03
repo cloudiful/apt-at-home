@@ -107,6 +107,33 @@ class CheckPoolTest(unittest.TestCase):
         self.assertTrue(any("git-delta" in line for line in findings))
         self.assertTrue(any("aarch64" in line for line in findings))
 
+    def test_a_pi_bundle_pool_dispatches_to_its_own_bundle_checks(self) -> None:
+        from scripts.manifest import deb_filename
+        from scripts.pi_bundle import inventory_bundle, stage_pi_package
+        from tests.test_pi_bundle import write_bundle_archive as write_pi_bundle
+
+        manifest = _catalog(("pi",))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pool = root / "pool"
+            pool.mkdir()
+            package = manifest.packages[0]
+            for arch in ("amd64", "arm64"):
+                archive = write_pi_bundle(
+                    root / f"pi-{arch}.tar.gz", version=package.version, arch=arch
+                )
+                inventory = inventory_bundle(
+                    archive, expected_version=f"v{package.version}", expected_arch=arch
+                )
+                stage = stage_pi_package(
+                    pkg=package, arch=arch, manifest=manifest, archive=archive,
+                    inventory=inventory, stage_root=root / "stages",
+                )
+                build_deb(stage, pool / deb_filename(package, arch, manifest))
+            findings = check_pool(manifest, pool, ("amd64", "arm64"))
+        self.assertTrue(any("pi" in line for line in findings))
+        self.assertTrue(any("APT update helper" in line for line in findings))
+
     def test_a_missing_package_is_refused(self) -> None:
         manifest = _catalog()
         with tempfile.TemporaryDirectory() as tmp:

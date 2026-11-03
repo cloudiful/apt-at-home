@@ -140,7 +140,7 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   `X-Manifest-Size`) before it reads a single package byte, then compares that
   signed baseline against the latest stable upstream release of every package
   in the catalog: bottom, bun, cargo-tauri, chezmoi, fd-find, forgejo-cli,
-  fzf, git-delta, glab, kandev, neovim, opencode, rustfs-cli, sccache,
+  fzf, git-delta, glab, kandev, neovim, opencode, pi, rustfs-cli, sccache,
   starship, tree-sitter-cli, uv, zellij, and zoxide.
   `cargo-tauri` selects the highest stable `tauri-cli-vN.N.N` tag and that exact
   release's official Linux assets, so another product line's latest release
