@@ -7,10 +7,12 @@ state.
 """
 
 import contextlib
+import copy
 import io
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -963,8 +965,9 @@ class DiscoverExactTagTest(unittest.TestCase):
         with mock.patch.object(
             update_module, "RECIPES", {"cargo-tauri": object()}
         ):
-            result = update_module._discover(ExactTagClient())
-        candidate = result["cargo-tauri"]
+            candidates, blocked = update_module._discover(ExactTagClient())
+        self.assertEqual(blocked, {})
+        candidate = candidates["cargo-tauri"]
         self.assertEqual(candidate.version, "2.12.3")
         self.assertEqual(candidate.tag, tag)
         self.assertEqual(sorted(candidate.targets), ["amd64", "arm64"])
@@ -1025,8 +1028,9 @@ class DiscoverExactTagTest(unittest.TestCase):
         with mock.patch.object(
             update_module, "RECIPES", {"cargo-tauri": object()}
         ):
-            result = update_module._discover(client)
-        candidate = result["cargo-tauri"]
+            candidates, blocked = update_module._discover(client)
+        self.assertEqual(blocked, {})
+        candidate = candidates["cargo-tauri"]
         self.assertEqual(candidate.tag, tag)
         self.assertEqual(candidate.version, "2.12.3")
         self.assertEqual(sorted(candidate.targets), ["amd64", "arm64"])
@@ -1034,12 +1038,12 @@ class DiscoverExactTagTest(unittest.TestCase):
 
 
 class CliTest(unittest.TestCase):
-    def _run(self, argv: list[str], *, storage, candidates, fingerprint: str = "A" * 40) -> tuple[int, str]:
+    def _run(self, argv: list[str], *, storage, candidates, blocked=None, fingerprint: str = "A" * 40) -> tuple[int, str]:
         from scripts import update as update_module
 
         out = io.StringIO()
         with mock.patch.object(update_module, "s3_source", return_value=storage), mock.patch.object(
-            update_module, "_discover", return_value=candidates
+            update_module, "_discover", return_value=(candidates, blocked or {})
         ), mock.patch.object(
             update_module, "_fingerprint", return_value=fingerprint
         ), mock.patch.dict(
@@ -1171,6 +1175,333 @@ class OpenCodeNpmPlanTest(unittest.TestCase):
             self.assertEqual(target["archive_member"], "package/bin/opencode")
             self.assertEqual(target["binary"], "opencode")
             self.assertEqual(target["depends"], "libc6 (>= 2.17)")
+
+
+def _entry(document: dict[str, object], name: str) -> dict[str, object]:
+    return next(
+        entry for entry in document["packages"]  # type: ignore[index]
+        if entry["name"] == name
+    )
+
+
+class DeferredPlanTest(unittest.TestCase):
+    """Bounded per-package candidate failures retain a trusted baseline entry."""
+
+    def _plan(self, **kwargs):
+        baseline = kwargs.pop("baseline", None)
+        candidates = kwargs.pop("candidates", None)
+        release_id = kwargs.pop("baseline_release_id", "published")
+        return build_plan(
+            baseline_release_id=release_id,
+            baseline_data=copy.deepcopy(catalog_document()) if baseline is None else baseline,
+            catalog_data=copy.deepcopy(catalog_document()),
+            candidates=_catalog_candidates() if candidates is None else candidates,
+            **kwargs,
+        )
+
+    def test_a_blocked_published_package_needs_the_explicit_mode_and_a_reason(self) -> None:
+        candidates = _catalog_candidates()
+        del candidates["zellij"]
+        baseline = copy.deepcopy(catalog_document())
+        original = _entry(baseline, "zellij")
+
+        with self.assertRaisesRegex(
+            ValueError, "no stable upstream release discovered for zellij"
+        ):
+            self._plan(candidates=candidates, keep_blocked=True)
+        with self.assertRaisesRegex(ValueError, "zellij: license bytes changed"):
+            self._plan(
+                candidates=candidates,
+                blocked={"zellij": "license bytes changed"},
+            )
+        with self.assertRaisesRegex(
+            ValueError, "no stable upstream release discovered for zellij"
+        ):
+            self._plan(candidates=candidates)
+
+        plan = self._plan(
+            baseline=baseline,
+            candidates=candidates,
+            keep_blocked=True,
+            blocked={"zellij": "license bytes changed"},
+        )
+        self.assertEqual(
+            [(item.name, item.stage, item.retained_version) for item in plan.deferred],
+            [("zellij", "discovery", str(original["version"]))],
+        )
+        self.assertEqual(plan.changed, ())
+        self.assertTrue(plan.is_noop)
+        self.assertEqual(_entry(plan.manifest_data, "zellij"), original)
+
+    def test_a_blocked_new_package_is_always_fatal(self) -> None:
+        candidates = _catalog_candidates()
+        del candidates["kandev"]
+        with self.assertRaisesRegex(ValueError, "kandev: missing upstream release"):
+            self._plan(
+                baseline=baseline_document(),
+                candidates=candidates,
+                keep_blocked=True,
+                blocked={"kandev": "missing upstream release"},
+            )
+
+    def test_a_fresh_storage_catalog_fallback_never_defers_anything(self) -> None:
+        candidates = _catalog_candidates()
+        del candidates["zellij"]
+        candidates["starship"] = candidate("starship", "1.27.0")
+        with self.assertRaisesRegex(ValueError, "zellij"):
+            self._plan(
+                baseline_release_id=None,
+                candidates=candidates,
+                keep_blocked=True,
+                blocked={"zellij": "license bytes changed"},
+            )
+
+    def test_a_discovery_deferral_discards_the_catalog_date_backfill(self) -> None:
+        baseline = copy.deepcopy(catalog_document())
+        _entry(baseline, "zellij").pop("upstream_published_at")
+        original = _entry(baseline, "zellij")
+        candidates = _catalog_candidates()
+        del candidates["zellij"]
+        candidates["starship"] = candidate("starship", "1.27.0")
+
+        plan = self._plan(
+            baseline=baseline,
+            candidates=candidates,
+            keep_blocked=True,
+            blocked={"zellij": "license bytes changed"},
+        )
+        self.assertEqual(plan.changed, ("starship",))
+        self.assertEqual(_entry(plan.manifest_data, "zellij"), original)
+        self.assertNotIn("upstream_published_at", _entry(plan.manifest_data, "zellij"))
+        self.assertNotIn("zellij", plan.metadata_changed)
+
+    def test_an_invalid_candidate_version_is_deferred_only_after_validation(self) -> None:
+        candidates = _catalog_candidates()
+        candidates["zellij"] = replace(
+            candidate("zellij", "0.45.1"), version="not-a-version"
+        )
+        candidates["starship"] = candidate("starship", "1.27.0")
+        baseline = copy.deepcopy(catalog_document())
+        original = _entry(baseline, "zellij")
+
+        plan = self._plan(baseline=baseline, candidates=candidates, keep_blocked=True)
+        self.assertEqual(
+            [(item.name, item.stage) for item in plan.deferred],
+            [("zellij", "candidate")],
+        )
+        self.assertIn("starship", plan.changed)
+        self.assertEqual(_entry(plan.manifest_data, "zellij"), original)
+
+        with self.assertRaisesRegex(ValueError, "candidate version"):
+            self._plan(baseline=copy.deepcopy(catalog_document()), candidates=candidates)
+
+    def test_an_invalid_candidate_digest_is_deferred_after_schema_validation(self) -> None:
+        candidates = _catalog_candidates()
+        candidates["zellij"] = replace(
+            candidate("zellij", "0.46.0"),
+            targets={
+                arch: {**target, "sha256": "not-a-digest"}
+                for arch, target in candidates["zellij"].targets.items()
+            },
+        )
+        candidates["starship"] = candidate("starship", "1.27.0")
+        baseline = copy.deepcopy(catalog_document())
+        original = _entry(baseline, "zellij")
+
+        plan = self._plan(baseline=baseline, candidates=candidates, keep_blocked=True)
+        self.assertEqual(
+            [(item.name, item.stage) for item in plan.deferred],
+            [("zellij", "candidate")],
+        )
+        self.assertIn("starship", plan.changed)
+        self.assertEqual(_entry(plan.manifest_data, "zellij"), original)
+
+        with self.assertRaisesRegex(ValueError, "reconstructed entry is invalid"):
+            self._plan(baseline=copy.deepcopy(catalog_document()), candidates=candidates)
+
+    def test_a_malformed_same_version_candidate_date_is_deferred(self) -> None:
+        baseline = copy.deepcopy(catalog_document())
+        catalog = copy.deepcopy(catalog_document())
+        for document in (baseline, catalog):
+            _entry(document, "zellij").pop("upstream_published_at")
+        candidates = _catalog_candidates()
+        candidates["zellij"] = replace(
+            candidates["zellij"], upstream_published_at="not-a-date"
+        )
+        candidates["starship"] = candidate("starship", "1.27.0")
+
+        plan = build_plan(
+            baseline_release_id="published",
+            baseline_data=baseline,
+            catalog_data=catalog,
+            candidates=candidates,
+            keep_blocked=True,
+        )
+        self.assertEqual(
+            [(item.name, item.stage) for item in plan.deferred],
+            [("zellij", "candidate")],
+        )
+        self.assertEqual(plan.changed, ("starship",))
+        deferred_entry = _entry(plan.manifest_data, "zellij")
+        self.assertNotIn("upstream_published_at", deferred_entry)
+        self.assertEqual(deferred_entry, _entry(baseline, "zellij"))
+
+        with self.assertRaisesRegex(ValueError, "canonical UTC timestamp"):
+            build_plan(
+                baseline_release_id="published",
+                baseline_data=copy.deepcopy(baseline),
+                catalog_data=copy.deepcopy(catalog),
+                candidates=candidates,
+            )
+
+    def test_multiple_blocked_packages_are_all_retained_and_reported(self) -> None:
+        candidates = _catalog_candidates()
+        del candidates["starship"]
+        del candidates["zellij"]
+        plan = self._plan(
+            candidates=candidates,
+            keep_blocked=True,
+            blocked={
+                "starship": "asset digest missing",
+                "zellij": "license bytes changed",
+            },
+        )
+        self.assertEqual(
+            [(item.name, item.stage, item.retained_version) for item in plan.deferred],
+            [
+                ("starship", "discovery", "1.26.0"),
+                ("zellij", "discovery", "0.45.1"),
+            ],
+        )
+        self.assertEqual(plan.changed, ())
+        self.assertTrue(plan.is_noop)
+
+    def test_all_discovery_failing_stays_fatal(self) -> None:
+        with self.assertRaisesRegex(ValueError, "no upstream candidates"):
+            self._plan(candidates={}, keep_blocked=True)
+
+    def test_a_downgrade_is_deferred_while_other_packages_still_advance(self) -> None:
+        candidates = _catalog_candidates()
+        candidates["zellij"] = candidate("zellij", "0.44.0")
+        candidates["starship"] = candidate("starship", "1.27.0")
+        baseline = copy.deepcopy(catalog_document())
+        original = _entry(baseline, "zellij")
+
+        plan = self._plan(baseline=baseline, candidates=candidates, keep_blocked=True)
+        self.assertEqual(plan.changed, ("starship",))
+        self.assertEqual(
+            [(item.name, item.stage) for item in plan.deferred], [("zellij", "downgrade")]
+        )
+        self.assertEqual(plan.deferred[0].retained_version, str(original["version"]))
+        self.assertEqual(_entry(plan.manifest_data, "zellij"), original)
+
+        with self.assertRaisesRegex(ValueError, "refusing to downgrade"):
+            self._plan(baseline=copy.deepcopy(catalog_document()), candidates=candidates)
+
+    def test_a_republished_same_version_keeps_the_baseline_entry_exactly(self) -> None:
+        candidates = _catalog_candidates()
+        candidates["zellij"] = replace(candidates["zellij"], targets={
+            arch: {**target, "sha256": "ab" * 32}
+            for arch, target in candidates["zellij"].targets.items()
+        })
+        baseline = copy.deepcopy(catalog_document())
+        original = _entry(baseline, "zellij")
+
+        plan = self._plan(baseline=baseline, candidates=candidates, keep_blocked=True)
+        self.assertEqual(plan.changed, ())
+        self.assertEqual(
+            [(item.name, item.stage) for item in plan.deferred], [("zellij", "immutable")]
+        )
+        self.assertEqual(_entry(plan.manifest_data, "zellij"), original)
+
+        with self.assertRaisesRegex(ValueError, "published release is immutable"):
+            self._plan(baseline=copy.deepcopy(catalog_document()), candidates=candidates)
+
+    def test_a_failed_overlay_rolls_back_every_partial_mutation(self) -> None:
+        import scripts.update_plan as plan_module
+
+        baseline = copy.deepcopy(catalog_document())
+        original = _entry(baseline, "zellij")
+        candidates = _catalog_candidates()
+        candidates["zellij"] = candidate("zellij", "0.46.0")
+        real_overlay = plan_module.overlay_package
+
+        def failing_overlay(entry, item, **kwargs):
+            if item.name != "zellij":
+                return real_overlay(entry, item, **kwargs)
+            entry["upstream_published_at"] = "2026-01-01T00:00:00Z"
+            raise ValueError("zellij candidate overlay failed")
+
+        with mock.patch("scripts.update_plan.overlay_package", side_effect=failing_overlay):
+            plan = self._plan(baseline=baseline, candidates=candidates, keep_blocked=True)
+            self.assertEqual(
+                [(item.name, item.stage) for item in plan.deferred],
+                [("zellij", "candidate")],
+            )
+            self.assertEqual(_entry(plan.manifest_data, "zellij"), original)
+
+            with self.assertRaisesRegex(ValueError, "overlay failed"):
+                build_plan(
+                    baseline_release_id="published",
+                    baseline_data=copy.deepcopy(catalog_document()),
+                    catalog_data=copy.deepcopy(catalog_document()),
+                    candidates=candidates,
+                )
+
+    def test_a_deferred_candidate_does_not_join_the_global_date_merge(self) -> None:
+        candidates = _catalog_candidates()
+        candidates["zellij"] = replace(
+            candidates["zellij"],
+            upstream_published_at="2026-01-01T00:00:00Z",
+            targets={
+                arch: {**target, "sha256": "ab" * 32}
+                for arch, target in candidates["zellij"].targets.items()
+            },
+        )
+        plan = self._plan(
+            baseline=copy.deepcopy(catalog_document()),
+            candidates=candidates,
+            keep_blocked=True,
+        )
+        self.assertEqual([item.name for item in plan.deferred], ["zellij"])
+
+    def test_a_baseline_catalog_date_conflict_stays_fatal_for_a_deferred_package(self) -> None:
+        baseline = copy.deepcopy(catalog_document())
+        _entry(baseline, "zellij")["upstream_published_at"] = "2026-02-02T00:00:00Z"
+        candidates = _catalog_candidates()
+        del candidates["zellij"]
+        with self.assertRaisesRegex(ValueError, "conflicting upstream release dates"):
+            self._plan(
+                baseline=baseline,
+                candidates=candidates,
+                keep_blocked=True,
+                blocked={"zellij": "license bytes changed"},
+            )
+
+    def test_discovery_retains_only_value_errors_and_never_network_failures(self) -> None:
+        from scripts import update as update_module
+        from scripts.upstream import HttpError
+
+        def fake_discover(client, name):
+            if name == "zellij":
+                raise ValueError("license bytes changed")
+            return candidate(name, "1.0.0")
+
+        def failing_discover(client, name):
+            raise HttpError("network unavailable")
+
+        with mock.patch.object(update_module, "discover", side_effect=fake_discover), \
+             mock.patch.object(update_module, "RECIPES", {"starship": object(), "zellij": object()}):
+            with self.assertRaisesRegex(ValueError, "license bytes changed"):
+                update_module._discover(object(), keep_blocked=False)
+            candidates, blocked = update_module._discover(object(), keep_blocked=True)
+        self.assertEqual(sorted(candidates), ["starship"])
+        self.assertEqual(blocked, {"zellij": "license bytes changed"})
+
+        with mock.patch.object(update_module, "discover", side_effect=failing_discover), \
+             mock.patch.object(update_module, "RECIPES", {"starship": object()}):
+            with self.assertRaises(HttpError):
+                update_module._discover(object(), keep_blocked=True)
 
 
 if __name__ == "__main__":

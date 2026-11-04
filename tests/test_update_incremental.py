@@ -26,7 +26,7 @@ from tests.release_fixtures import (
     build_release_objects,
 )
 from tests.test_update import _catalog_candidates, catalog_document
-from tests.test_update_build import Store, _export_private_key, _stub_archive
+from tests.test_update_build import Store, _debs_for, _export_private_key, _stub_archive
 
 BUCKET = Store.bucket
 
@@ -146,6 +146,64 @@ class FivePublishedSubsetTest(unittest.TestCase):
         self.assertEqual(len(run.pool), _debs_for(CATALOG_NAMES))
         for name, payload in run.published.items():
             self.assertEqual(run.pool[name], payload, msg=name)
+
+
+class DeferredIncrementalTest(unittest.TestCase):
+    """A deferred package keeps the exact signed baseline entry and pool bytes."""
+
+    def test_a_deferred_published_package_keeps_its_signed_baseline_bytes(self) -> None:
+        tmpdir, home, key_id = make_gpg_home_with_key()
+        self.addCleanup(tmpdir.cleanup)
+        root = Path(tmpdir.name)
+        store = Store(FakeS3())
+        store.seed(build_release_objects(
+            root / "published", key_home=home, key_id=key_id, names=FIVE_PUBLISHED_NAMES
+        ))
+        restored = restore_metadata(store, fingerprint=key_id)
+        published = {
+            path.name: store.get(f"pool/{path.name}", max_bytes=MAX_DEB_BYTES)
+            for path in (root / "published" / "pool").glob("*.deb")
+        }
+        baseline_entry = next(
+            entry for entry in restored.manifest_data["packages"]
+            if entry["name"] == "zellij"
+        )
+        candidates = _fixture_candidates()
+        del candidates["zellij"]
+        plan = build_plan(
+            baseline_release_id=restored.release_id,
+            baseline_data=restored.manifest_data,
+            catalog_data=_fixture_catalog(),
+            candidates=candidates,
+            keep_blocked=True,
+            blocked={"zellij": "license bytes changed"},
+        )
+        self.assertEqual(
+            [(item.name, item.stage) for item in plan.deferred], [("zellij", "discovery")]
+        )
+        deferred_entry = next(
+            entry for entry in plan.manifest_data["packages"]
+            if entry["name"] == "zellij"
+        )
+        self.assertEqual(deferred_entry, baseline_entry)
+
+        key_file = _export_private_key(home, root / "test-private.asc")
+        output = root / "out"
+        with _stub_archive():
+            result = apply_update(
+                plan=plan, release=restored, source=store, output_root=output,
+                cache_dir=output.parent / "cache" / "upstream",
+                release_id="deferred-mixed", bucket=BUCKET, fingerprint=key_id,
+                signing_key_file=key_file, key_id=key_id, client=store.client,
+            )
+        pool = {path.name: path.read_bytes() for path in (output / "pool").glob("*.deb")}
+        self.assertEqual(len(pool), _debs_for(CATALOG_NAMES))
+        for name in published:
+            if name.startswith("zellij_"):
+                self.assertEqual(pool[name], published[name], msg=name)
+        self.assertNotIn("zellij_0.44.0-1_amd64.deb", pool)
+        self.assertTrue(result.debs)
+        self.assertEqual(store.client.puts[-1], "current.json")
 
 
 class PartialTargetSupersededTest(unittest.TestCase):

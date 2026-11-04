@@ -77,6 +77,7 @@ class PublishWorkflowRunTest(PublishWorkflowCase):
     # --- route argv matrix ----------------------------------------------
 
     def test_upstream_routes_plan_or_publish_with_optional_release_id(self) -> None:
+        diagnostics = str(self.runner_temp / "update-diagnostics.json")
         for publish, argv in (("false", "--dry-run"), ("true", "--publish")):
             with self.subTest(publish=publish):
                 self.log.write_bytes(b"")
@@ -84,8 +85,38 @@ class PublishWorkflowRunTest(PublishWorkflowCase):
                 self.assertEqual(proc.returncode, 0, msg=proc.stderr)
                 self.assertEqual(
                     self.uv_calls(),
-                    [("run", "python", "-m", "scripts.update", argv, "--release-id", "20260102-030405")],
+                    [(
+                        "run", "python", "-m", "scripts.update", argv,
+                        "--diagnostics", diagnostics,
+                        "--release-id", "20260102-030405",
+                    )],
                 )
+
+    def test_every_upstream_update_writes_diagnostics_and_only_schedule_keeps_blocked(self) -> None:
+        diagnostics = str(self.runner_temp / "update-diagnostics.json")
+        cases = (
+            ("schedule", "true", True),
+            ("workflow_dispatch", "false", False),
+            ("workflow_dispatch", "true", False),
+        )
+        for event, publish, keep_blocked in cases:
+            with self.subTest(event=event, publish=publish):
+                self.log.write_bytes(b"")
+                proc = self.run_block(
+                    UPSTREAM,
+                    {
+                        "EFFECTIVE_SOURCE": "upstream",
+                        "EFFECTIVE_PUBLISH": publish,
+                        "EFFECTIVE_ROTATION": "false",
+                        "RELEASE_ID_INPUT": "",
+                        "GITHUB_EVENT_NAME": event,
+                    },
+                )
+                self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+                call = self.uv_calls()[0]
+                self.assertIn("--diagnostics", call)
+                self.assertEqual(call[call.index("--diagnostics") + 1], diagnostics)
+                self.assertEqual("--keep-blocked" in call, keep_blocked)
 
     def test_manifest_preview_builds_unsigned_and_smokes_the_pool(self) -> None:
         proc = self.route(PREVIEW, "manifest", "false")
@@ -187,6 +218,36 @@ class PublishWorkflowRunTest(PublishWorkflowCase):
         proc = self.run_block(IMPORT, {"APT_RELEASE_SIGNING_KEY": "", "APT_SIGNING_FINGERPRINT": "A" * 40})
         self.assertEqual(proc.returncode, 1)
         self.assertNotIn("APT_SIGNING_KEY_FILE", self.resolved())
+
+    # --- update diagnostics and deferred verdict -------------------------
+
+    def test_update_report_steps_are_always_guarded_and_follow_the_update(self) -> None:
+        summary = self.block("Publish update diagnostics")
+        verdict = self.block("Fail on deferred packages")
+        for block in (summary, verdict):
+            self.assertIn("if: always() && env.EFFECTIVE_SOURCE == 'upstream'", block)
+            self.assertIn('"$RUNNER_TEMP/update-diagnostics.json"', run_body(block))
+        self.assertIn("--summary", run_body(summary))
+        self.assertIn("--check-deferred", run_body(verdict))
+
+        names = [step_name(block) for block in self.steps]
+        self.assertLess(names.index(UPSTREAM), names.index("Publish update diagnostics"))
+        self.assertLess(
+            names.index("Publish update diagnostics"),
+            names.index("Fail on deferred packages"),
+        )
+        scrub = self.block("Scrub isolated key material")
+        self.assertIn("if: always()", scrub)
+        self.assertLess(
+            names.index("Fail on deferred packages"), names.index("Scrub isolated key material")
+        )
+
+    def test_the_manifest_path_never_requires_an_upstream_report(self) -> None:
+        for name in (PREVIEW, MANIFEST):
+            with self.subTest(step=name):
+                body = run_body(self.block(name))
+                self.assertNotIn("update_report", body)
+                self.assertNotIn("update-diagnostics.json", body)
 
 
 if __name__ == "__main__":

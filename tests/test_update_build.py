@@ -207,6 +207,9 @@ class UpdateBuildTest(unittest.TestCase):
                 for name, payload in published_pool.items():
                     self.assertEqual(pool[name], payload, msg=name)
 
+                rustfs = next(
+                    pkg for pkg in plan.manifest.packages if pkg.name == "rustfs-cli"
+                )
                 for arch in ARCHES:
                     text = (
                         output / "releases" / "catalog-release" / "dists" / "stable"
@@ -217,7 +220,9 @@ class UpdateBuildTest(unittest.TestCase):
                     self.assertIn("Version: 0.20.1-1", text)
                     # The Debian name and the installed command differ for rc.
                     self.assertIn(f"Package: rustfs-cli\n", text)
-                    self.assertIn(f"Filename: pool/rustfs-cli_0.1.36-1_{arch}.deb", text)
+                    self.assertIn(
+                        f"Filename: pool/{deb_filename(rustfs, arch, plan.manifest)}", text
+                    )
                     # The glibc-linked delta arm64 build and every neovim build declare
                     # runtime dependencies; the static delta amd64 build declares none.
                     stanzas = text.strip().split("\n\n")
@@ -470,6 +475,47 @@ class TargetSelectionTest(unittest.TestCase):
             if name == "cargo-tauri_2.12.3-1_amd64.deb":
                 continue
             self.assertEqual((pool / name).read_bytes(), payload, msg=name)
+
+    def test_a_deferred_package_keeps_its_published_bytes_while_another_upgrades(self) -> None:
+        baseline = copy.deepcopy(catalog_document())
+        original = next(entry for entry in baseline["packages"] if entry["name"] == "zellij")
+        candidates = _catalog_candidates()
+        candidates["starship"] = candidate("starship", "1.27.0", sha="ab" * 32)
+        candidates["zellij"] = candidate("zellij", "0.44.0")
+        plan = build_plan(
+            baseline_release_id=RELEASE_ID,
+            baseline_data=baseline,
+            catalog_data=copy.deepcopy(catalog_document()),
+            candidates=candidates,
+            keep_blocked=True,
+        )
+        self.assertEqual(plan.changed, ("starship",))
+        self.assertEqual(
+            [(item.name, item.stage, item.retained_version) for item in plan.deferred],
+            [("zellij", "downgrade", str(original["version"]))],
+        )
+        deferred_entry = next(
+            entry for entry in plan.manifest_data["packages"] if entry["name"] == "zellij"
+        )
+        self.assertEqual(deferred_entry, original)
+
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        pool, published = self._seed_pool(root, plan)
+        result, recorded = self._apply(plan, root)
+
+        self.assertEqual(
+            [pkg.name for pkg in recorded["build_manifest"].packages], ["starship"]
+        )
+        self.assertEqual(
+            sorted(path.name for path in result.debs),
+            ["starship_1.27.0-1_amd64.deb", "starship_1.27.0-1_arm64.deb"],
+        )
+        # The deferred package's published .deb is reused byte-for-byte.
+        for name, payload in published.items():
+            if name.startswith("starship_"):
+                continue
+            self.assertEqual((pool / name).read_bytes(), payload, msg=name)
+        self.assertNotIn("zellij_0.44.0-1_amd64.deb", {path.name for path in pool.iterdir()})
 
     def test_a_metadata_only_plan_builds_nothing_and_publishes_the_manifest(self) -> None:
         """A date-only plan rebuilds no .deb and still publishes the new manifest."""

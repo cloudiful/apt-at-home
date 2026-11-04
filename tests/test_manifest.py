@@ -288,7 +288,7 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(deb_filename(by_name["starship"], "arm64", manifest),
                          "starship_1.26.0-1_arm64.deb")
         self.assertEqual(deb_filename(by_name["rustfs-cli"], "amd64", manifest),
-                         "rustfs-cli_0.1.36-1_amd64.deb")
+                         "rustfs-cli_0.1.37-1_amd64.deb")
 
     def test_a_reviewed_subset_is_still_valid(self) -> None:
         """The currently published two-package manifest stays a valid document."""
@@ -489,7 +489,7 @@ PINNED_PUBLISHED_AT = {
     "zellij": "2026-08-28T09:21:44Z",
     "starship": "2026-06-28T17:02:47Z",
     "git-delta": "2026-10-04T19:38:10Z",
-    "rustfs-cli": "2026-09-17T03:09:31Z",
+    "rustfs-cli": "2026-11-03T01:44:26Z",
     "sccache": "2026-09-14T11:22:38Z",
     "neovim": "2026-10-09T15:43:25Z",
     "bottom": "2026-08-27T08:24:00Z",
