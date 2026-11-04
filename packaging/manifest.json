@@ -82,23 +82,23 @@
     },
     {
       "name": "rustfs-cli",
-      "version": "0.1.36",
+      "version": "0.1.37",
       "homepage": "https://github.com/rustfs/cli",
       "description": "Command-line client for RustFS object storage",
       "license": "MIT",
-      "copyright": "Copyright (c) 2026 RustFS Contributors",
-      "license_url": "https://raw.githubusercontent.com/rustfs/cli/v0.1.36/LICENSE-MIT",
-      "upstream_published_at": "2026-09-17T03:09:31Z",
+      "copyright": "Copyright 2024-2026 RustFS, Inc.",
+      "license_url": "https://raw.githubusercontent.com/rustfs/cli/v0.1.37/LICENSE-MIT",
+      "upstream_published_at": "2026-11-03T01:44:26Z",
       "targets": {
         "amd64": {
-          "url": "https://github.com/rustfs/cli/releases/download/v0.1.36/rustfs-cli-linux-amd64-v0.1.36.tar.gz",
-          "sha256": "4a8128911ccad4e7b481f26635a4cfd1ec064412210526e57ad2c748d356f3b7",
+          "url": "https://github.com/rustfs/cli/releases/download/v0.1.37/rustfs-cli-linux-amd64-v0.1.37.tar.gz",
+          "sha256": "31e79fe7697c870e60f5b5c9008adbb3ad5af7f9f2ab45a3d68585c5f87238d1",
           "archive_member": "rc",
           "binary": "rc"
         },
         "arm64": {
-          "url": "https://github.com/rustfs/cli/releases/download/v0.1.36/rustfs-cli-linux-arm64-v0.1.36.tar.gz",
-          "sha256": "6e9dea7ac4f81562add9e1e31206ba6059d6f5929ad4ed924986223282b3aa9c",
+          "url": "https://github.com/rustfs/cli/releases/download/v0.1.37/rustfs-cli-linux-arm64-v0.1.37.tar.gz",
+          "sha256": "a02091205fe4d9fbf0d16a0dac3d46ad7fac7d5266024b5b17e76327a4e88aa8",
           "archive_member": "rc",
           "binary": "rc"
         }

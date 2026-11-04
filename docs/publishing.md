@@ -8,7 +8,10 @@ never move the release pointer at the same time. It has two sources:
 - The six-hourly schedule (`cron: "17 */6 * * *"`) always runs the **upstream**
   source: it restores the published release, compares it against the latest
   stable upstream releases, and publishes only when upstream moved. An unchanged
-  run builds, signs, and uploads nothing and still succeeds.
+  run builds, signs, and uploads nothing and still succeeds. Scheduled upstream
+  runs pass `--keep-blocked` and always write the update diagnostics report;
+  manual upstream runs stay strict. The report is summarized in the job summary
+  and a final gate fails the job for any deferred package.
 - `workflow_dispatch` chooses `source` (`upstream` default, or `manifest`) and
   `dry_run` (`true` default). The upstream source plans with `--dry-run` unless
   `dry_run` is `false`, then runs `update --publish`. The manifest source builds
@@ -198,9 +201,41 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   and the pool stays byte-identical.
 - A no-op is a success: nothing is built, signed, uploaded, or pointed at, and
   a second run against the new baseline finds nothing left to do.
+- The default is strict: one package whose candidate cannot be planned stops the
+  whole run. `--keep-blocked` is an explicit opt-in that retains an
+  **already-published** package at its trusted baseline entry when only that
+  package's candidate failed, and plans every other package normally. A blocked
+  package the baseline does not carry is always fatal, and HTTP, authentication,
+  network, storage, signature, manifest, and catalog failures are never
+  isolated. A retained package keeps its exact baseline entry and pool bytes: it
+  is never rebuilt, downgraded, or refreshed.
+- A run with deferred packages is visibly partial, not a clean success. Its
+  stdout and diagnostics name every deferred package, its stage (`discovery`,
+  `candidate`, `immutable`, or `downgrade`), and its retained version; a run
+  whose only outcome is deferred packages does not republish, and a run that
+  also has real changes publishes them through the unchanged
+  verify-then-pointer-last chain. The updater still exits `0` in this mode so
+  the reporting steps can run, and the workflow's final gate turns any deferred
+  package into a failed job after the normal update and verification steps,
+  before the always-run key scrub.
+- `--diagnostics PATH` writes one schema version 1 JSON report for that run,
+  including a dry run and every fatal outcome: baseline and planned/confirmed
+  release ids, changed and metadata-only packages, deferred records, a
+  `published` flag that is true only after an update is confirmed, the fatal
+  error, and whether the run was a dry run. The report is written only when the
+  path is passed explicitly; a dry run with `--diagnostics` writes that report
+  and nothing else, and failing to write a requested report fails the run.
+- `python -m scripts.update_report --diagnostics PATH` validates that report and
+  never treats a missing or malformed file as clean. `--summary PATH` appends a
+  bounded, escaped Markdown summary to an explicit file, and `--check-deferred`
+  is the final gate: `0` clean, `3` deferred packages, `1` fatal, missing, or
+  invalid.
 - Versions only move forward. A downgrade, a missing architecture asset, a
   missing GitHub API digest, an unreachable Codeberg archive, a non-canonical
-  GitLab release or checksum, or a non-exact stable tag stops the run.
+  GitLab release or checksum, or a non-exact stable tag stops the run. Under
+  `--keep-blocked`, only an already-published package's own candidate error in
+  those bounded discovery, version, immutability, or overlay checks is
+  retained; every other occurrence still stops the run.
 
 ### When an update stops
 

@@ -157,6 +157,12 @@ jobs:
           else
             args+=(--dry-run)
           fi
+          # Only the scheduled run opts into retaining an already-published
+          # package whose own candidate failed; a manual run stays strict.
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+            args+=(--keep-blocked)
+          fi
+          args+=(--diagnostics "$RUNNER_TEMP/update-diagnostics.json")
           if [ -n "$RELEASE_ID_INPUT" ]; then
             args+=(--release-id "$RELEASE_ID_INPUT")
           fi
@@ -195,6 +201,20 @@ jobs:
           fi
         env:
           RELEASE_ID_INPUT: ${{ inputs.release_id }}
+      - name: Publish update diagnostics
+        if: always() && env.EFFECTIVE_SOURCE == 'upstream'
+        run: |
+          set -euo pipefail
+          uv run python -m scripts.update_report \
+            --diagnostics "$RUNNER_TEMP/update-diagnostics.json" \
+            --summary "$GITHUB_STEP_SUMMARY"
+      - name: Fail on deferred packages
+        if: always() && env.EFFECTIVE_SOURCE == 'upstream'
+        run: |
+          set -euo pipefail
+          uv run python -m scripts.update_report \
+            --diagnostics "$RUNNER_TEMP/update-diagnostics.json" \
+            --check-deferred
       - name: Scrub isolated key material
         if: always()
         run: rm -rf "${GNUPGHOME:-/nonexistent}" "$RUNNER_TEMP/release-private.asc" || true

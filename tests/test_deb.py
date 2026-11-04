@@ -98,7 +98,7 @@ class StagePackageTest(unittest.TestCase):
         manifest = load_manifest()
         expected = {
             "git-delta": ("delta", "MIT", "Dan Davison"),
-            "rustfs-cli": ("rc", "MIT", "RustFS Contributors"),
+            "rustfs-cli": ("rc", "MIT", "RustFS, Inc."),
             "sccache": ("sccache", "Apache-2.0", "sccache contributors"),
         }
         with tempfile.TemporaryDirectory() as tmp:
@@ -162,7 +162,7 @@ class StagePackageTest(unittest.TestCase):
             stage = self._stage(Path(tmp), "rustfs-cli", "arm64")
             changelog = (stage / "usr" / "share" / "doc" / "rustfs-cli" / "changelog.Debian").read_text()
             self.assertNotIn("musl", changelog)
-            self.assertIn("Repackage upstream 0.1.36 arm64 binary.", changelog)
+            self.assertIn("Repackage upstream 0.1.37 arm64 binary.", changelog)
 
     def test_copyright_names_the_declared_license_and_holder(self) -> None:
         manifest = load_manifest()

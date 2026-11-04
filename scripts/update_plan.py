@@ -6,12 +6,16 @@ merged in as an addition rather than a replacement. Every candidate version must
 strictly advance the entry it applies to, every overlay is re-validated through
 the manifest parser, and an unchanged plan stays empty so a second run has
 nothing left to do. A publication instant known by more than one same-version
-input must agree across all of them, so precedence never hides a conflict.
+input must agree across all of them, so precedence never hides a conflict. The
+default is strict; an explicit keep-blocked plan may instead retain an
+already-published package at its exact baseline entry after a bounded candidate
+failure and report it as deferred.
 """
 
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from .catalog import (
@@ -26,9 +30,56 @@ from .catalog import (
     install_tree_for,
     replaces_for,
 )
-from .manifest import Manifest, parse_baseline_manifest, parse_manifest
+from .manifest import (
+    Manifest,
+    check_published_at,
+    parse_baseline_manifest,
+    parse_manifest,
+)
 from .upstream import Candidate
 from .upstream_assets import version_key
+
+
+@dataclass(frozen=True)
+class Deferred:
+    """One package retained at its trusted baseline version.
+
+    A deferred package was blocked by a bounded per-package candidate failure
+    while `keep_blocked` was explicit; its manifest entry is the original
+    baseline entry, not an overlay. `stage` names where planning refused it.
+    """
+
+    name: str
+    stage: str
+    detail: str
+    retained_version: str
+
+
+DEFERRED_STAGES = ("candidate", "discovery", "downgrade", "immutable")
+
+
+class _CandidateBlocked(ValueError):
+    """A bounded per-package planning failure that `keep_blocked` may retain."""
+
+    def __init__(self, stage: str, detail: str) -> None:
+        super().__init__(detail)
+        self.stage = stage
+
+
+def _validated_rebuilt(name: str, entry: dict[str, object], *, catalog: Manifest) -> None:
+    """Re-validate a candidate-derived package entry before accepting it."""
+    try:
+        parse_manifest(
+            {
+                "maintainer": catalog.maintainer,
+                "section": catalog.section,
+                "priority": catalog.priority,
+                "debian_revision": catalog.debian_revision,
+                "packages": [entry],
+            }
+        )
+    except ValueError as exc:
+        raise ValueError(f"{name} reconstructed entry is invalid: {exc}") from exc
 
 
 @dataclass(frozen=True)
@@ -37,7 +88,9 @@ class UpdatePlan:
 
     `changed` names the packages whose targets this run rebuilds, and
     `metadata_changed` names the packages whose publication instant this run
-    fills in. A run that changes neither is a no-op.
+    fills in. A run that changes neither is a no-op. `deferred` records the
+    packages an explicit `keep_blocked` run retained at their baseline version
+    after a bounded candidate failure; every other package still plans normally.
     """
 
     baseline_release_id: str | None
@@ -47,6 +100,7 @@ class UpdatePlan:
     changed: tuple[str, ...]
     versions: dict[str, str]
     metadata_changed: tuple[str, ...] = ()
+    deferred: tuple[Deferred, ...] = ()
 
     @property
     def is_noop(self) -> bool:
@@ -371,8 +425,20 @@ def build_plan(
     baseline_data: dict[str, object],
     catalog_data: dict[str, object],
     candidates: dict[str, Candidate],
+    keep_blocked: bool = False,
+    blocked: Mapping[str, str] | None = None,
 ) -> UpdatePlan:
-    """Compare discovered stable versions with the trusted baseline."""
+    """Compare discovered stable versions with the trusted baseline.
+
+    The default stays strict: any package that cannot be planned aborts the run.
+    With the explicit `keep_blocked` mode, a ValueError-limited per-package
+    failure leaves that already-published package exactly at its trusted
+    baseline entry and planning continues for the rest. `blocked` carries the
+    per-package error details from discovery itself, keyed by package name.
+    A package the baseline does not carry is never deferred, and a fresh-storage
+    catalog fallback (`baseline_release_id` is None) is never a trusted
+    baseline, so it cannot justify retaining anything.
+    """
     if not candidates:
         raise ValueError("no upstream candidates were discovered")
     data = copy.deepcopy(baseline_data)
@@ -381,64 +447,152 @@ def build_plan(
     baseline_by_name = {pkg.name: pkg for pkg in baseline.packages}
     baseline_names = set(baseline_by_name)
     validated = baseline_names | {pkg.name for pkg in catalog.packages}
-    # All three inputs are still distinct here, so every equality the contract
-    # requires is checked before any of them is merged away.
-    for (name, version), known in sorted(
-        known_dates_by_version(baseline, catalog, candidates, names=validated).items()
-    ):
-        check_known_same_version_dates(name, version, *known)
+    discovery_blocked = dict(blocked or {})
+    raw_entries = data.get("packages")
+    original_entries = (
+        {
+            str(entry.get("name")): copy.deepcopy(entry)
+            for entry in raw_entries
+            if isinstance(entry, dict)
+        }
+        if isinstance(raw_entries, list)
+        else {}
+    )
     packages = merge_catalog(data, catalog_data)
+    # Only a release that the trust chain restored identifies a published
+    # baseline. A fresh-storage catalog fallback is not one, so it can never
+    # justify retaining a package.
+    deferral_allowed = keep_blocked and baseline_release_id is not None
 
-    changed: list[str] = []
-    versions: dict[str, str] = {}
-    for entry in packages:
-        if not isinstance(entry, dict):
-            raise ValueError("manifest package entry must be an object")
-        name = str(entry.get("name"))
-        candidate = candidates.get(name)
-        if candidate is None:
-            raise ValueError(f"no stable upstream release discovered for {name}")
-        if name not in validated:
-            raise ValueError(f"manifest has no validated package entry for {name}")
-        current = str(entry.get("version"))
-        versions[name] = current
-        if version_key(candidate.version) < version_key(current):
-            raise ValueError(
-                f"{name} latest stable {candidate.version} is older than the published "
-                f"baseline {current}; refusing to downgrade an immutable release"
-            )
-        if version_key(candidate.version) == version_key(current):
-            check_same_version_immutable(entry, candidate)
-            if not _published_at(entry) and candidate.upstream_published_at:
-                # The published release carries no instant yet: the candidate's
-                # known date backfills it without touching a single target.
-                entry["upstream_published_at"] = candidate.upstream_published_at
-            published = entry.get("targets")
-            if not isinstance(published, dict):
-                raise ValueError(f"{name} manifest entry has no targets object")
-            if any(arch not in published for arch in arches_for(name)):
-                # The same upstream version gained a reviewed architecture: the
-                # published targets keep their bytes and only the new one is
-                # built, so the package is changed without rewriting history.
-                rebuilt = overlay_package(entry, candidate, preserve_targets=True)
+    def plan_entries(entries: list[dict[str, object]]) -> tuple[
+        list[str], dict[str, str], list[Deferred]
+    ]:
+        changed: list[str] = []
+        versions: dict[str, str] = {}
+        deferred: list[Deferred] = []
+
+        def restore(entry: dict[str, object], name: str) -> None:
+            original = original_entries.get(name)
+            if original is None:
+                raise ValueError(f"{name} has no trusted baseline entry to retain")
+            entry.clear()
+            entry.update(copy.deepcopy(original))
+
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise ValueError("manifest package entry must be an object")
+            name = str(entry.get("name"))
+            candidate = candidates.get(name)
+            current = str(entry.get("version"))
+            versions[name] = current
+            if candidate is None:
+                detail = discovery_blocked.get(name)
+                if deferral_allowed and name in baseline_names and detail is not None:
+                    # Discard any merge_catalog date backfill: a retained package
+                    # is the original baseline entry, not the merged one.
+                    restore(entry, name)
+                    deferred.append(Deferred(name, "discovery", detail, current))
+                    continue
+                if detail is not None:
+                    raise ValueError(f"{name}: {detail}")
+                raise ValueError(f"no stable upstream release discovered for {name}")
+            if name not in validated:
+                raise ValueError(f"manifest has no validated package entry for {name}")
+            try:
+                try:
+                    candidate_version = version_key(candidate.version)
+                except ValueError as exc:
+                    raise _CandidateBlocked(
+                        "candidate",
+                        f"{name} candidate version {candidate.version!r} is invalid: {exc}",
+                    ) from exc
+                if candidate.upstream_published_at:
+                    try:
+                        check_published_at(
+                            candidate.upstream_published_at, name=name
+                        )
+                    except ValueError as exc:
+                        raise _CandidateBlocked("candidate", str(exc)) from exc
+                current_version = version_key(current)
+                if candidate_version < current_version:
+                    raise _CandidateBlocked(
+                        "downgrade",
+                        f"{name} latest stable {candidate.version} is older than the "
+                        f"published baseline {current}; refusing to downgrade an "
+                        "immutable release",
+                    )
+                if candidate_version == current_version:
+                    try:
+                        check_same_version_immutable(entry, candidate)
+                    except ValueError as exc:
+                        raise _CandidateBlocked("immutable", str(exc)) from exc
+                    if not _published_at(entry) and candidate.upstream_published_at:
+                        # The published release carries no instant yet: the candidate's
+                        # known date backfills it without touching a single target.
+                        entry["upstream_published_at"] = candidate.upstream_published_at
+                    published = entry.get("targets")
+                    if not isinstance(published, dict):
+                        raise ValueError(f"{name} manifest entry has no targets object")
+                    if any(arch not in published for arch in arches_for(name)):
+                        # The same upstream version gained a reviewed architecture: the
+                        # published targets keep their bytes and only the new one is
+                        # built, so the package is changed without rewriting history.
+                        try:
+                            rebuilt = overlay_package(entry, candidate, preserve_targets=True)
+                            _validated_rebuilt(name, rebuilt, catalog=catalog)
+                        except ValueError as exc:
+                            raise _CandidateBlocked("candidate", str(exc)) from exc
+                        entry.clear()
+                        entry.update(rebuilt)
+                        changed.append(name)
+                    elif name not in baseline_names:
+                        # A new package already pinned at its latest stable release still
+                        # has to be built: nothing published carries it yet.
+                        changed.append(name)
+                    continue
+                try:
+                    rebuilt = overlay_package(entry, candidate)
+                    _validated_rebuilt(name, rebuilt, catalog=catalog)
+                except ValueError as exc:
+                    raise _CandidateBlocked("candidate", str(exc)) from exc
+                published = baseline_by_name.get(name)
+                if published is not None and origin_changed(name, published.version, candidate):
+                    # The package moved to another upstream: its homepage and
+                    # description come from the reviewed catalog, because the published
+                    # entry still describes the release it replaces.
+                    refresh_origin_metadata(rebuilt, name=name, catalog=catalog)
                 entry.clear()
                 entry.update(rebuilt)
                 changed.append(name)
-            elif name not in baseline_names:
-                # A new package already pinned at its latest stable release still
-                # has to be built: nothing published carries it yet.
-                changed.append(name)
-            continue
-        rebuilt = overlay_package(entry, candidate)
-        published = baseline_by_name.get(name)
-        if published is not None and origin_changed(name, published.version, candidate):
-            # The package moved to another upstream: its homepage and
-            # description come from the reviewed catalog, because the published
-            # entry still describes the release it replaces.
-            refresh_origin_metadata(rebuilt, name=name, catalog=catalog)
-        entry.clear()
-        entry.update(rebuilt)
-        changed.append(name)
+            except _CandidateBlocked as exc:
+                if not (deferral_allowed and name in baseline_names):
+                    raise ValueError(str(exc)) from exc
+                # Overlay or date mutation is discarded: the deferred package keeps
+                # the exact original baseline entry, never a partially updated one.
+                restore(entry, name)
+                deferred.append(Deferred(name, exc.stage, str(exc), current))
+        return changed, versions, deferred
+
+    deferred_names: set[str] = set()
+    if deferral_allowed:
+        # Probe on a copy first: the global date merge must exclude a retained
+        # candidate's own metadata before any committed entry is touched.
+        _, _, probe_deferred = plan_entries(copy.deepcopy(packages))
+        deferred_names = {item.name for item in probe_deferred}
+    # All three inputs are still distinct here, so every equality the contract
+    # requires is checked before any of them is merged away. A deferred
+    # candidate's own metadata never participates in the global date merge, but
+    # the baseline/catalog agreement for it stays global.
+    date_candidates = {
+        name: candidate
+        for name, candidate in candidates.items()
+        if name not in deferred_names
+    }
+    for (name, version), known in sorted(
+        known_dates_by_version(baseline, catalog, date_candidates, names=validated).items()
+    ):
+        check_known_same_version_dates(name, version, *known)
+    changed, versions, deferred = plan_entries(packages)
     data["packages"] = packages
     baseline_dates = {pkg.name: pkg.upstream_published_at for pkg in baseline.packages}
     rebuilt_names = set(changed)
@@ -459,4 +613,5 @@ def build_plan(
         changed=tuple(sorted(changed)),
         versions=versions,
         metadata_changed=metadata_changed,
+        deferred=tuple(sorted(deferred, key=lambda item: item.name)),
     )
