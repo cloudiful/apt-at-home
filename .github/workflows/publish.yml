@@ -201,6 +201,12 @@ jobs:
           fi
         env:
           RELEASE_ID_INPUT: ${{ inputs.release_id }}
+      - name: Publish public update status
+        if: always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.source == 'upstream' && inputs.dry_run == 'false'))
+        run: |
+          uv run --frozen python -m scripts.update_status \
+            --diagnostics "$RUNNER_TEMP/update-diagnostics.json" \
+            --run-id "$GITHUB_RUN_ID" --publish
       - name: Publish update diagnostics
         if: always() && env.EFFECTIVE_SOURCE == 'upstream'
         run: |

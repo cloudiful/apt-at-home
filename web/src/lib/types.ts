@@ -37,6 +37,13 @@ export interface PublicStats {
   readonly downloads: number
 }
 
+export interface UpdateStatus {
+  readonly checked_at: string
+  readonly run_url: string
+  readonly outcome: 'success' | 'partial' | 'failure'
+  readonly packages: Readonly<Record<string, { readonly outcome: 'checked' | 'updated' | 'deferred'; readonly stage?: 'candidate' | 'discovery' | 'downgrade' | 'immutable' }>>
+}
+
 /** Everything the page renders from. */
 export interface AppProps {
   /** Locale the page is served in. */
@@ -47,6 +54,7 @@ export interface AppProps {
   readonly packages: readonly PackageSummary[] | null
   /** Request-time UTC clock reference, serialized for deterministic SSR/hydration. */
   readonly now: string
+  readonly updateStatus?: UpdateStatus | null
   /**
    * Anonymous request counters, or absent when they could not be read.
    *

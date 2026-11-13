@@ -16,7 +16,7 @@ import type { AppProps } from '@/lib/types'
  * catalog the server read. The page keeps its shape without JavaScript: the
  * markup is the document, and the client only takes over the controls.
  */
-export function App({ locale, origin, packages, now, stats }: AppProps) {
+export function App({ locale, origin, packages, now, stats, updateStatus }: AppProps) {
   const copy = copyFor(locale)
 
   return (
@@ -30,7 +30,7 @@ export function App({ locale, origin, packages, now, stats }: AppProps) {
               <h2 id="catalog" className="mb-3 border-b pb-1.5 text-lg">
                 {copy.catalog.heading}
               </h2>
-              <PackageTable packages={packages} copy={copy} now={now} />
+              <PackageTable packages={packages} copy={copy} now={now} updateStatus={updateStatus} />
             </section>
 
             <section aria-labelledby="steps" className="steps-section mt-8">

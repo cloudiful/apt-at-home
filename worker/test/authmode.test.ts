@@ -153,6 +153,7 @@ describe('public artifact mode', () => {
     }
     expect(fixture.bucket.keysFor('get')).toEqual([
       'current.json',
+      'status/update.json',
       `releases/${RELEASE_ID}/manifest.json`,
     ]);
     expect(fixture.bucket.keysFor('head')).toEqual([]);

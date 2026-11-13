@@ -78,9 +78,10 @@ def report_document(
     published: bool,
     fatal: str | None,
     dry_run: bool,
+    assessed: tuple[str, ...] | list[str] | None = None,
 ) -> dict[str, object]:
     """Build one schema version 1 report document."""
-    return {
+    document = {
         "schema_version": SCHEMA_VERSION,
         "baseline_release_id": baseline_release_id,
         "planned_release_id": planned_release_id,
@@ -100,6 +101,9 @@ def report_document(
         "fatal": sanitize_detail(fatal) if fatal else None,
         "dry_run": dry_run,
     }
+    if assessed is not None:
+        document["assessed"] = sorted(assessed)
+    return document
 
 
 def validate_document(document: object) -> dict[str, object]:
@@ -126,6 +130,13 @@ def validate_document(document: object) -> dict[str, object]:
         value = document.get(key)
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             raise ReportInvalid(f"report {key} must be a list of package names")
+    assessed = document.get("assessed")
+    if assessed is not None and (
+        not isinstance(assessed, list)
+        or not all(isinstance(item, str) and item for item in assessed)
+        or len(set(assessed)) != len(assessed)
+    ):
+        raise ReportInvalid("report assessed must be a list of unique package names or null")
     for key in ("published", "dry_run"):
         if not isinstance(document.get(key), bool):
             raise ReportInvalid(f"report {key} must be a boolean")
@@ -164,7 +175,7 @@ def load_report(path: Path) -> dict[str, object]:
     """Read and validate one report; a missing or malformed report is never clean."""
     try:
         raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         raise ReportInvalid(f"cannot read diagnostics report {path}: {exc}") from exc
     try:
         document = json.loads(raw)

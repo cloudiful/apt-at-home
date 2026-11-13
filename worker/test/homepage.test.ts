@@ -24,7 +24,7 @@ import {
 const encoder = new TextEncoder();
 
 /** The metadata keys the root page is allowed to read. */
-const METADATA_KEYS = ['current.json', `releases/${RELEASE_ID}/manifest.json`];
+const METADATA_KEYS = ['current.json', 'status/update.json', `releases/${RELEASE_ID}/manifest.json`];
 
 /** The names the build gave the client entry and its stylesheet. */
 const ENTRY = (manifest as unknown as Record<string, { file: string; css?: string[] }>)[

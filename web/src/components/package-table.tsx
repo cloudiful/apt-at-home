@@ -9,7 +9,8 @@ import {
 } from '@/components/ui/table'
 import type { HomepageCopy } from '@/lib/locales'
 import { exactReleaseDate, relativeReleaseLabel } from '@/lib/release-date'
-import type { PackageSummary } from '@/lib/types'
+import type { PackageSummary, UpdateStatus } from '@/lib/types'
+import { CircleCheck, CircleHelp, CircleX } from 'lucide-react'
 
 /**
  * The published-package table, or the status shown when the catalog could not
@@ -26,10 +27,12 @@ export function PackageTable({
   packages,
   copy,
   now,
+  updateStatus,
 }: {
   packages: readonly PackageSummary[] | null
   copy: HomepageCopy
   now: string
+  updateStatus?: UpdateStatus | null
 }) {
   if (packages === null || packages.length === 0) {
     return (
@@ -48,6 +51,7 @@ export function PackageTable({
           <TableHead scope="col">{copy.catalog.versionColumn}</TableHead>
           <TableHead scope="col">{copy.catalog.architectureColumn}</TableHead>
           <TableHead scope="col">{copy.catalog.publishedAtColumn}</TableHead>
+          <TableHead scope="col" className="w-10"><span className="sr-only">{copy.catalog.updateColumn}</span></TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -59,10 +63,34 @@ export function PackageTable({
             <TableCell>{pkg.version}</TableCell>
             <TableCell>{pkg.architectures.join(', ')}</TableCell>
             <TableCell>{publishedAtCell(pkg, copy, now)}</TableCell>
+            <TableCell><UpdateIcon name={pkg.name} status={updateStatus} now={now} copy={copy} /></TableCell>
           </TableRow>
         ))}
       </TableBody>
     </Table>
+  )
+}
+
+function UpdateIcon({ name, status, now, copy }: { name: string; status?: UpdateStatus | null; now: string; copy: HomepageCopy }) {
+  const labels = copy.catalog
+  const entry = status?.packages[name]
+  const stale = status ? Date.parse(now) - Date.parse(status.checked_at) > 86_400_000 : false
+  const healthy = !!entry && entry.outcome !== 'deferred' && !stale && status?.outcome !== 'failure'
+  const deferred = entry?.outcome === 'deferred'
+  const description = !status ? labels.updateUnknown
+    : status.outcome === 'failure' ? labels.updateFailed
+    : !entry ? labels.updateUnknown
+    : deferred ? `${labels.updateDeferred}: ${entry.stage ? labels.updateStages[entry.stage] : ''}`
+    : stale ? labels.updateStale
+    : entry.outcome === 'updated' ? labels.updateUpdated : labels.updateChecked
+  const detail = status ? `${description} · ${labels.updateTime}: ${status.checked_at}` : description
+  const Icon = healthy ? CircleCheck : deferred ? CircleX : CircleHelp
+  const icon = <Icon aria-hidden="true" size={17} className={healthy ? 'text-green-600' : deferred ? 'text-red-600' : 'text-muted-foreground'} />
+  const className = 'update-status-control'
+  return status ? (
+    <span className="update-status-wrap"><a className={className} href={status.run_url} aria-label={detail}>{icon}<span role="tooltip" className="update-status-tooltip">{detail}</span></a></span>
+  ) : (
+    <span className="update-status-wrap"><span className={className} role="img" tabIndex={0} aria-label={detail}>{icon}<span role="tooltip" className="update-status-tooltip">{detail}</span></span></span>
   )
 }
 
