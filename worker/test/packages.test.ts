@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { loadCatalog } from '../src/packages.js';
+import { parseUpdateStatus } from '../src/update-status.js';
 import { FakeBucket, createEnv } from './fakes.js';
 import {
   NEXT_RELEASE_ID,
@@ -33,6 +34,19 @@ function bucketWithDocument(pointer: string, manifest: string): FakeBucket {
   });
   return bucket;
 }
+
+describe('public update status parser', () => {
+  it('rejects future timestamps, invalid dates, unsafe links and malformed entries', () => {
+    const snapshot = { schema_version: 1, checked_at: '2026-11-13T00:00:00Z', run_url: 'https://github.com/cloudiful/apt-at-home/actions/runs/123', outcome: 'success', packages: { alpha: { outcome: 'checked' } } };
+    const now = Date.parse('2026-11-14T00:00:00Z');
+    expect(parseUpdateStatus(snapshot, now)).not.toBeNull();
+    expect(parseUpdateStatus(snapshot, now - 86_400_001)).toBeNull();
+    expect(parseUpdateStatus({ ...snapshot, checked_at: '2026-02-31T00:00:00Z' }, now)).toBeNull();
+    expect(parseUpdateStatus({ ...snapshot, run_url: `${snapshot.run_url}?token=x` }, now)).toBeNull();
+    expect(parseUpdateStatus({ ...snapshot, packages: { alpha: { outcome: 'checked', detail: 'secret' } } }, now)).toBeNull();
+    expect(parseUpdateStatus({ ...snapshot, outcome: 'failure' }, now)).toBeNull();
+  });
+});
 
 describe('published package catalog', () => {
   afterEach(() => {

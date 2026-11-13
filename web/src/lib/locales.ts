@@ -21,6 +21,15 @@ export interface CatalogCopy {
   readonly publishedYesterday: string
   readonly publishedDaysAgo: string
   readonly unavailable: string
+  readonly updateColumn: string
+  readonly updateChecked: string
+  readonly updateUpdated: string
+  readonly updateDeferred: string
+  readonly updateUnknown: string
+  readonly updateFailed: string
+  readonly updateStale: string
+  readonly updateTime: string
+  readonly updateStages: Record<'candidate' | 'discovery' | 'downgrade' | 'immutable', string>
 }
 
 /** One in-page section shortcut. */
@@ -162,6 +171,15 @@ const en: HomepageCopy = {
     publishedYesterday: 'Yesterday',
     publishedDaysAgo: '{days} days ago',
     unavailable: 'The published package list is unavailable right now.',
+    updateColumn: 'Update health',
+    updateChecked: 'Checked',
+    updateUpdated: 'Updated and published',
+    updateDeferred: 'Update deferred',
+    updateUnknown: 'Update status unknown',
+    updateFailed: 'Update run failed; package status unknown',
+    updateStale: 'Update status is stale',
+    updateTime: 'Checked at',
+    updateStages: { candidate: 'Candidate', discovery: 'Discovery', downgrade: 'Downgrade', immutable: 'Immutable version' },
   },
   stepsHeading: 'Installation steps',
   steps: {
@@ -244,6 +262,15 @@ const zh: HomepageCopy = {
     publishedYesterday: '昨天',
     publishedDaysAgo: '{days} 天前',
     unavailable: '当前无法获取已发布的软件包列表。',
+    updateColumn: '更新状态',
+    updateChecked: '已检查',
+    updateUpdated: '已更新并发布',
+    updateDeferred: '更新已延期',
+    updateUnknown: '更新状态未知',
+    updateFailed: '更新任务失败；软件包状态未知',
+    updateStale: '更新状态已过期',
+    updateTime: '检查时间',
+    updateStages: { candidate: '候选版本', discovery: '发现', downgrade: '降级', immutable: '不可变版本' },
   },
   stepsHeading: '安装步骤',
   steps: {

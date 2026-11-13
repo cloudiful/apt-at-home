@@ -3,6 +3,18 @@
 
 @custom-variant dark (&:is(.dark *));
 
+.catalog-section [data-slot="table-container"] { padding-bottom: 4rem; }
+.update-status-wrap { position: relative; display: inline-flex; }
+.update-status-control { display: inline-flex; border-radius: 0.25rem; }
+.update-status-tooltip {
+  display: none; position: absolute; z-index: 10; right: 0; top: 100%;
+  width: max-content; max-width: 18rem; white-space: normal;
+  padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: 0.3rem;
+  background: var(--popover); color: var(--popover-foreground); font-size: 0.75rem;
+}
+.update-status-control:hover .update-status-tooltip,
+.update-status-control:focus-visible .update-status-tooltip { display: block; }
+
 /*
  * The two palettes, each declared once, and the tokens the page reads.
  *

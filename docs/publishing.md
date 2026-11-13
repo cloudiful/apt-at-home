@@ -21,6 +21,19 @@ never move the release pointer at the same time. It has two sources:
   `allow_key_rotation` is accepted only for a manual manifest publish with
   `dry_run: false`.
 
+The public package list reads `status/update.json` independently of the signed
+release pointer. Each production upstream run attempts to replace this mutable
+snapshot, including no-op and failed runs; previews and manifest runs do not.
+Schema version 1 contains `checked_at` (UTC RFC 3339 seconds), `run_url` (the
+repository's Actions run), `outcome` (`success`, `partial`, or `failure`), and
+`packages`, an object keyed by assessed package name. Each package has outcome
+`checked`, `updated` (confirmed publication), or `deferred`; deferred entries
+also have a coarse `stage` (`candidate`, `discovery`, `downgrade`, or `immutable`).
+A failed or incomplete run has no package outcomes. Missing or invalid status is
+unknown; healthy status older than 24 hours is stale. Status upload failure can
+leave the previous snapshot in place until it becomes stale. The snapshot does
+not include diagnostic details and is not release metadata.
+
 The job is `environment: prod`, so every run waits for the same approvals, and it
 publishes only from `main`. Inputs reach shell steps only through step `env`
 (never `${{ }}` interpolation); a scheduled run ignores any dispatch input, and

@@ -183,6 +183,7 @@ class _Outcome:
     changed: tuple[str, ...] = ()
     metadata_only: tuple[str, ...] = ()
     deferred: tuple[Deferred, ...] = ()
+    assessed: tuple[str, ...] | None = None
     published: bool = False
     fatal: str | None = None
 
@@ -196,6 +197,7 @@ def _write_diagnostics(path: Path, outcome: _Outcome, *, dry_run: bool) -> bool:
         changed=outcome.changed,
         metadata_only=outcome.metadata_only,
         deferred=outcome.deferred,
+        assessed=outcome.assessed,
         published=outcome.published,
         fatal=outcome.fatal,
         dry_run=dry_run,
@@ -283,6 +285,7 @@ def main(argv: list[str] | None = None) -> int:
     outcome.changed = plan.changed
     outcome.metadata_only = plan.metadata_changed
     outcome.deferred = plan.deferred
+    outcome.assessed = tuple(pkg.name for pkg in plan.manifest.packages)
     _report(plan)
 
     if plan.is_noop:
