@@ -157,7 +157,8 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   signed baseline against the latest stable upstream release of every package
   in the catalog: bottom, bun, cargo-tauri, chezmoi, fd-find, forgejo-cli,
   fzf, git-delta, glab, kandev, neovim, opencode, pi, rustfs-cli, sccache,
-  starship, tree-sitter-cli, uv, zellij, and zoxide.
+  starship, tree-sitter-cli, uv, woodpecker-agent, woodpecker-cli, zellij,
+  and zoxide.
   `cargo-tauri` selects the highest stable `tauri-cli-vN.N.N` tag and that exact
   release's official Linux assets, so another product line's latest release
   never selects it. `forgejo-cli` selects the highest `vX.Y.Z-cloudiful.N` fork

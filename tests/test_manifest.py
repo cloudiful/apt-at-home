@@ -506,6 +506,8 @@ PINNED_PUBLISHED_AT = {
     "opencode": "2026-10-23T10:13:53Z",
     "pi": "2026-11-02T11:05:31Z",
     "glab": "2026-10-20T12:17:01Z",
+    "woodpecker-agent": "2026-10-29T19:39:14Z",
+    "woodpecker-cli": "2026-10-29T19:39:14Z",
 }
 
 

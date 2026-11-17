@@ -528,6 +528,54 @@
           "binary": "glab"
         }
       }
+    },
+    {
+      "name": "woodpecker-agent",
+      "version": "3.20.1",
+      "homepage": "https://github.com/woodpecker-ci/woodpecker",
+      "description": "Woodpecker CI agent",
+      "license": "Apache-2.0",
+      "copyright": "Copyright 2018 Drone.IO Inc.; Copyright 2020 Woodpecker Authors",
+      "license_url": "https://raw.githubusercontent.com/woodpecker-ci/woodpecker/v3.20.1/LICENSE",
+      "upstream_published_at": "2026-10-29T19:39:14Z",
+      "targets": {
+        "amd64": {
+          "url": "https://github.com/woodpecker-ci/woodpecker/releases/download/v3.20.1/woodpecker-agent_linux_amd64.tar.gz",
+          "sha256": "cb8cf9028cde5a8eaf8612e9aec59a3e8636c1b2ab8d339cfafb770ebba5e3d8",
+          "archive_member": "woodpecker-agent",
+          "binary": "woodpecker-agent"
+        },
+        "arm64": {
+          "url": "https://github.com/woodpecker-ci/woodpecker/releases/download/v3.20.1/woodpecker-agent_linux_arm64.tar.gz",
+          "sha256": "ac62b815257cb6b90f487366607bc918eb99221082a695fc39135496d4c49b28",
+          "archive_member": "woodpecker-agent",
+          "binary": "woodpecker-agent"
+        }
+      }
+    },
+    {
+      "name": "woodpecker-cli",
+      "version": "3.20.1",
+      "homepage": "https://github.com/woodpecker-ci/woodpecker",
+      "description": "Woodpecker CI command-line client",
+      "license": "Apache-2.0",
+      "copyright": "Copyright 2018 Drone.IO Inc.; Copyright 2020 Woodpecker Authors",
+      "license_url": "https://raw.githubusercontent.com/woodpecker-ci/woodpecker/v3.20.1/LICENSE",
+      "upstream_published_at": "2026-10-29T19:39:14Z",
+      "targets": {
+        "amd64": {
+          "url": "https://github.com/woodpecker-ci/woodpecker/releases/download/v3.20.1/woodpecker-cli_linux_amd64.tar.gz",
+          "sha256": "5b74ff1808af35b57bd5c2b528b7fdff24f5f69ad327715c1797f764da79dc13",
+          "archive_member": "woodpecker-cli",
+          "binary": "woodpecker-cli"
+        },
+        "arm64": {
+          "url": "https://github.com/woodpecker-ci/woodpecker/releases/download/v3.20.1/woodpecker-cli_linux_arm64.tar.gz",
+          "sha256": "683ab0d1ef7bb21e2da6695bec40f56758b5b5958d111f8049afe1199cab0b0c",
+          "archive_member": "woodpecker-cli",
+          "binary": "woodpecker-cli"
+        }
+      }
     }
   ]
 }

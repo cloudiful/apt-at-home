@@ -233,11 +233,17 @@ the exact three steps, reproduced here for operators.
   AVX2 and both architectures need glibc 2.17), `pi` (standalone bundle with
   its own resources; glibc 2.17), `rustfs-cli` (`rc`), `sccache`,
   `starship`, `tree-sitter-cli` (`tree-sitter`, requires glibc 2.39), `uv`
-  (`uv` and `uvx`), `zellij`, and `zoxide` for both architectures. The arm64
+  (`uv` and `uvx`), `woodpecker-agent` (`woodpecker-agent`, static, no runtime
+  dependencies), `woodpecker-cli` (`woodpecker-cli`, static, no runtime
+  dependencies), `zellij`, and `zoxide` for both architectures. The arm64
   `cargo-tauri` build needs glibc 2.18 and the amd64 build keeps its glibc 2.34
   and liblzma requirements. Zoxide shell initialization is opt-in; users may
   add `eval "$(zoxide init bash)"` to their own Bash configuration. Package
   installation never edits shell configuration.
+- `woodpecker-agent` and `woodpecker-cli` come from the same upstream
+  Woodpecker release, whose Linux archives each hold one static Go ELF named
+  after its own command. The agent package installs only the agent binary: it
+  starts no agent and registers no service, so an agent is started explicitly.
 - `fd-find` installs upstream's `fd` binary as `fdfind`; `/usr/bin/fd` is left
   to the distribution's unrelated `fdclone` package.
 - `bun` ships upstream's official release ZIP, whose binary is the only member

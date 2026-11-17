@@ -279,4 +279,28 @@ def make_cli_recipes(recipe_type: type[Recipe]) -> dict[str, Recipe]:
             # The CLI reports its version through a subcommand, not a flag.
             smoke=("version",),
         ),
+        "woodpecker-agent": recipe_type(
+            name="woodpecker-agent",
+            upstream="woodpecker-agent",
+            repo="woodpecker-ci/woodpecker",
+            tag_prefix="v",
+            license_id="Apache-2.0",
+            license_path="LICENSE",
+            asset="{upstream}_linux_{arch}.tar.gz",
+            member="{binary}",
+            binary="woodpecker-agent",
+            triples=_NO_TRIPLES,
+        ),
+        "woodpecker-cli": recipe_type(
+            name="woodpecker-cli",
+            upstream="woodpecker-cli",
+            repo="woodpecker-ci/woodpecker",
+            tag_prefix="v",
+            license_id="Apache-2.0",
+            license_path="LICENSE",
+            asset="{upstream}_linux_{arch}.tar.gz",
+            member="{binary}",
+            binary="woodpecker-cli",
+            triples=_NO_TRIPLES,
+        ),
     }

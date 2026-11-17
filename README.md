@@ -7,8 +7,8 @@ Private per-device authenticated APT source for Debian 13. English | [中文](RE
 - Private authenticated source with per-device tokens over an authenticated gateway.
 - Debian 13 packages for amd64 and arm64: bottom, bun, cargo-tauri, chezmoi,
   fd-find, forgejo-cli, fzf, git-delta, glab, kandev, neovim, opencode, pi,
-  rustfs-cli, sccache, starship, tree-sitter-cli, uv, zellij, and zoxide, each
-  from its reviewed upstream release.
+  rustfs-cli, sccache, starship, tree-sitter-cli, uv, woodpecker-agent,
+  woodpecker-cli, zellij, and zoxide, each from its reviewed upstream release.
 - `forgejo-cli` comes from the `cloudiful/forgejo-cli` personal-use fork, not
   from the upstream official distribution; it adds `fj pr attach`. Its archives
   are pinned by the sha256 digest the fork's GitHub release reports for each of
@@ -30,7 +30,7 @@ Private per-device authenticated APT source for Debian 13. English | [中文](RE
 
 ```sh
 sudo apt update
-sudo apt install bottom bun cargo-tauri chezmoi fd-find forgejo-cli fzf git-delta glab kandev neovim opencode pi rustfs-cli sccache starship tree-sitter-cli uv zellij zoxide
+sudo apt install bottom bun cargo-tauri chezmoi fd-find forgejo-cli fzf git-delta glab kandev neovim opencode pi rustfs-cli sccache starship tree-sitter-cli uv woodpecker-agent woodpecker-cli zellij zoxide
 ```
 
 `bottom` provides `btm`, `fd-find` provides `fdfind`, `forgejo-cli` provides
@@ -55,6 +55,12 @@ the packaged binary is about 240 MB uncompressed.
 
 `kandev` installs the upstream standard server bundle. Run `kandev` to start it;
 package installation does not start the server.
+
+`woodpecker-agent` and `woodpecker-cli` come from the same upstream Woodpecker
+release; both install one static binary and declare no runtime dependencies.
+The agent package installs only the `woodpecker-agent` command: it does not
+start the agent and registers no service. Configure its connection to your
+Woodpecker server and start it explicitly.
 
 `pi` installs the complete upstream standalone bundle under `/usr/lib/pi`:
 Pi's executable plus its themes, assets, export templates, documentation,
