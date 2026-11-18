@@ -25,7 +25,7 @@ _NO_TRIPLES: Mapping[str, str] = MappingProxyType({})
 _NEOVIM = MappingProxyType({"amd64": "x86_64", "arm64": "arm64"})
 _NO_DEPENDS: Mapping[str, str] = MappingProxyType({})
 _NO_PACKAGES: Mapping[str, str] = MappingProxyType({})
-
+_NO_ASSETS: Mapping[str, str] = MappingProxyType({})
 # The upstream hosts a reviewed recipe may be fetched from. The set is closed:
 # a source nobody reviewed fails closed instead of building a URL for a host
 # this repository never vetted.
@@ -100,6 +100,23 @@ class Recipe:
     # extracted from it. Zero keeps the legacy behavior of every other recipe.
     max_archive_bytes: int = 0
     max_binary_bytes: int = 0
+    # The official release archive for an architecture that upstream publishes
+    # in another format than the recipe's default `asset`. Woodpecker publishes
+    # an official Debian package for amd64 and a tarball for arm64.
+    assets: Mapping[str, str] = _NO_ASSETS
+    # The architectures whose official release asset is a Debian package that
+    # is repacked rather than extracted. Empty for every ordinary recipe.
+    official_deb_arches: tuple[str, ...] = ()
+    # The per-package Debian revision. Empty keeps the manifest's global
+    # revision; Woodpecker needs its own revision to upgrade its published -1.
+    debian_revision: str = ""
+    # The directory the command is installed in. Woodpecker's official layout
+    # uses /usr/local/bin; every other recipe installs under /usr/bin.
+    binary_dir: str = "usr/bin"
+    # A recorded pre-official payload form that a signed baseline may still
+    # carry through `legacy_through`. It is never a current build form.
+    legacy_assets: Mapping[str, str] = _NO_ASSETS
+    legacy_through: str = ""
 
     def __post_init__(self) -> None:
         if self.source not in SOURCES:
@@ -109,6 +126,7 @@ class Recipe:
         self._check_npm_fields()
         self._check_license_source()
         self._check_limits()
+        self._check_packaging_fields()
 
     def _check_npm_fields(self) -> None:
         """Require the npm fields to match the source that declares them."""
@@ -151,6 +169,53 @@ class Recipe:
                 raise ValueError(
                     f"{self.name!r} declares an unusable {field}: {value!r}"
                 )
+
+    def _check_packaging_fields(self) -> None:
+        """Require the optional packaging overrides to stay inside this recipe."""
+        unknown = sorted(set(self.assets) - set(self.arches))
+        if unknown:
+            raise ValueError(
+                f"{self.name!r} declares assets for unknown architecture(s): "
+                f"{', '.join(unknown)}"
+            )
+        unknown = sorted(set(self.official_deb_arches) - set(self.assets))
+        if unknown:
+            raise ValueError(
+                f"{self.name!r} declares an official deb without an asset for: "
+                f"{', '.join(unknown)}"
+            )
+        for arch in self.official_deb_arches:
+            if not self.assets[arch].endswith(".deb"):
+                raise ValueError(
+                    f"{self.name!r} declares a non-deb official asset for {arch}"
+                )
+        if self.debian_revision and not re.fullmatch(r"-[0-9]+", self.debian_revision):
+            raise ValueError(
+                f"{self.name!r} declares an unusable debian_revision: "
+                f"{self.debian_revision!r}"
+            )
+        if self.binary_dir not in ("usr/bin", "usr/local/bin"):
+            raise ValueError(
+                f"{self.name!r} declares an unreviewed binary directory: "
+                f"{self.binary_dir!r}"
+            )
+        unknown = sorted(set(self.legacy_assets) - set(self.arches))
+        if unknown:
+            raise ValueError(
+                f"{self.name!r} declares legacy assets for unknown architecture(s): "
+                f"{', '.join(unknown)}"
+            )
+        if bool(self.legacy_assets) != bool(self.legacy_through):
+            raise ValueError(
+                f"{self.name!r} must declare legacy_assets and legacy_through together"
+            )
+        if self.legacy_through and not re.fullmatch(
+            r"[0-9]+\.[0-9]+\.[0-9]+", self.legacy_through
+        ):
+            raise ValueError(
+                f"{self.name!r} declares an unusable legacy_through: "
+                f"{self.legacy_through!r}"
+            )
 
 
 # zellij and starship publish one asset name per toolchain and never embed the

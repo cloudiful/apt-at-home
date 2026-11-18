@@ -57,10 +57,17 @@ the packaged binary is about 240 MB uncompressed.
 package installation does not start the server.
 
 `woodpecker-agent` and `woodpecker-cli` come from the same upstream Woodpecker
-release; both install one static binary and declare no runtime dependencies.
-The agent package installs only the `woodpecker-agent` command: it does not
-start the agent and registers no service. Configure its connection to your
-Woodpecker server and start it explicitly.
+release and use the official installation layout: both install their static
+binary as `/usr/local/bin/woodpecker-*` and declare no runtime dependencies.
+On amd64 each package is upstream's official Debian package repacked under the
+repository's `-2` package revision with its payload and maintainer scripts
+preserved; on arm64 the same layout is assembled from the official tarball and
+the reviewed tagged packaging files. `woodpecker-agent` additionally installs
+the official systemd unit under `/usr/local/lib/systemd/system`,
+`/etc/woodpecker/woodpecker-agent.env.example`, and the
+`/var/lib/woodpecker` state directory (mode `0750`); its pre-install script
+creates the `woodpecker` system group and user. Neither package enables or
+starts the service: configure the agent and start it explicitly.
 
 `pi` installs the complete upstream standalone bundle under `/usr/lib/pi`:
 Pi's executable plus its themes, assets, export templates, documentation,

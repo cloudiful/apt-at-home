@@ -30,10 +30,12 @@ from tests.helpers import (
     archive_stem,
     make_gpg_home_with_key,
     move_package_version,
+    write_fake_official_deb,
     write_target_archive,
 )
 from tests.test_kandev_bundle import write_bundle_archive
 from tests.test_pi_bundle import write_bundle_archive as write_pi_bundle_archive
+from tests.test_smoke import fake_elf
 from tests.release_fixtures import build_release_objects
 
 BUCKET = "test-bucket"
@@ -69,8 +71,12 @@ def _fake_fetch(
     candidate release carries byte-identical pool files and the
     immutable-overwrite guard stays satisfied.
     """
-    stem = archive_stem(dest.name)
     manifest = load_manifest()
+    for pkg in manifest.packages:
+        for arch in pkg.targets:
+            if dest.name == f"{pkg.name}-{pkg.version}-{arch}.deb":
+                return write_fake_official_deb(dest, pkg, arch, fake_elf(arch))
+    stem = archive_stem(dest.name)
     name = next(
         pkg.name
         for pkg in sorted(manifest.packages, key=lambda p: len(p.name), reverse=True)

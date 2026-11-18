@@ -241,9 +241,17 @@ the exact three steps, reproduced here for operators.
   add `eval "$(zoxide init bash)"` to their own Bash configuration. Package
   installation never edits shell configuration.
 - `woodpecker-agent` and `woodpecker-cli` come from the same upstream
-  Woodpecker release, whose Linux archives each hold one static Go ELF named
-  after its own command. The agent package installs only the agent binary: it
-  starts no agent and registers no service, so an agent is started explicitly.
+  Woodpecker release and use its official installation layout. amd64 packages
+  repack the official Debian package under the repository's `-2` revision,
+  preserving its payload and maintainer scripts; arm64 packages assemble the
+  same layout from the official tarball and the reviewed tagged packaging
+  files. Both install their static binary under `/usr/local/bin` and need no
+  runtime dependencies. The agent package also installs the official systemd
+  unit under `/usr/local/lib/systemd/system`, the example environment file
+  under `/etc/woodpecker`, and the `/var/lib/woodpecker` state directory; its
+  pre-install script creates the `woodpecker` system group and user. The
+  package neither enables nor starts the service, so an agent is started
+  explicitly after configuration.
 - `fd-find` installs upstream's `fd` binary as `fdfind`; `/usr/bin/fd` is left
   to the distribution's unrelated `fdclone` package.
 - `bun` ships upstream's official release ZIP, whose binary is the only member

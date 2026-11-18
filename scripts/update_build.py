@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .build import build_all
-from .manifest import Package, deb_filename
+from .manifest import Package, deb_filename, debian_version
 from .publish import publish_tree
 from .release_build import build_release
 from .release_verify import TrustedRelease
@@ -48,6 +48,12 @@ def changed_targets(plan: UpdatePlan) -> set[tuple[str, str]]:
     for name in plan.changed:
         base = baseline_by.get(name)
         final = final_by[name]
+        if base is not None and debian_version(base, plan.baseline_manifest) != debian_version(
+            final, plan.manifest
+        ):
+            # A revision-only upgrade changes the .deb filename of every
+            # target, so each one is rebuilt and the old pool objects dropped.
+            changed.update((name, arch) for arch in final.targets)
         for arch, target in final.targets.items():
             if base is None or arch not in base.targets or base.targets[arch] != target:
                 changed.add((name, arch))

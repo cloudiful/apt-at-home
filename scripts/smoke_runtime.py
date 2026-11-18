@@ -16,7 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .catalog import smoke_args
-from .manifest import Manifest, Package
+from .manifest import Manifest, Package, installed_binary_dir
 from .smoke_commands import (
     CommandProbe,
     binaries_for_target,
@@ -121,12 +121,13 @@ def _check_bundle_version(pkg: Package, arch: str, output: str) -> None:
 
 
 def _run_probe(
-    pkg: Package, arch: str, probe: CommandProbe, *, prefix: Path, scratch: Path
+    pkg: Package, arch: str, probe: CommandProbe, *, prefix: Path, scratch: Path,
+    manifest: Manifest,
 ) -> str:
     target = pkg.targets[arch]
     if probe.binary not in binaries_for_target(target):
         raise SmokeError(f"{pkg.name} smoke probe names uninstalled command {probe.binary}")
-    binary = prefix / "usr" / "bin" / probe.binary
+    binary = prefix / installed_binary_dir(pkg, manifest) / probe.binary
     if target.bundle_type:
         _check_bundle_payload(pkg, arch, prefix)
     else:
@@ -147,14 +148,18 @@ def _run_probe(
     return f"{binary} [{arch}] {' '.join(probe.args[:2])} exited 0: {first_line[:120]}"
 
 
-def run_package(pkg: Package, arch: str, *, prefix: Path, scratch: Path) -> list[str]:
+def run_package(
+    pkg: Package, arch: str, *, prefix: Path, scratch: Path, manifest: Manifest
+) -> list[str]:
     """Run every reviewed command check for one installed package."""
     probes = (
         CommandProbe(expected_binary(pkg), arguments_for(pkg.name)),
         *extra_command_probes(pkg.name),
     )
     findings = [
-        _run_probe(pkg, arch, probe, prefix=prefix, scratch=scratch)
+        _run_probe(
+            pkg, arch, probe, prefix=prefix, scratch=scratch, manifest=manifest
+        )
         for probe in probes
     ]
     if pkg.name == "cargo-tauri":
@@ -230,5 +235,7 @@ def run_installed(manifest: Manifest, arch: str, prefix: Path = Path("/")) -> li
     for pkg in sorted(manifest.packages, key=lambda p: p.name):
         if arch not in pkg.targets:
             continue
-        findings.extend(run_package(pkg, arch, prefix=prefix, scratch=scratch))
+        findings.extend(
+            run_package(pkg, arch, prefix=prefix, scratch=scratch, manifest=manifest)
+        )
     return findings

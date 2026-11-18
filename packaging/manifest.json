@@ -538,11 +538,13 @@
       "copyright": "Copyright 2018 Drone.IO Inc.; Copyright 2020 Woodpecker Authors",
       "license_url": "https://raw.githubusercontent.com/woodpecker-ci/woodpecker/v3.20.1/LICENSE",
       "upstream_published_at": "2026-10-29T19:39:14Z",
+      "debian_revision": "-2",
       "targets": {
         "amd64": {
-          "url": "https://github.com/woodpecker-ci/woodpecker/releases/download/v3.20.1/woodpecker-agent_linux_amd64.tar.gz",
-          "sha256": "cb8cf9028cde5a8eaf8612e9aec59a3e8636c1b2ab8d339cfafb770ebba5e3d8",
+          "url": "https://github.com/woodpecker-ci/woodpecker/releases/download/v3.20.1/woodpecker-agent_3.20.1_amd64.deb",
+          "sha256": "24e70c5225afcc61f3aa4fe798665406c556db642822f23366b08ad1722000d4",
           "archive_member": "woodpecker-agent",
+          "official_deb": true,
           "binary": "woodpecker-agent"
         },
         "arm64": {
@@ -562,11 +564,13 @@
       "copyright": "Copyright 2018 Drone.IO Inc.; Copyright 2020 Woodpecker Authors",
       "license_url": "https://raw.githubusercontent.com/woodpecker-ci/woodpecker/v3.20.1/LICENSE",
       "upstream_published_at": "2026-10-29T19:39:14Z",
+      "debian_revision": "-2",
       "targets": {
         "amd64": {
-          "url": "https://github.com/woodpecker-ci/woodpecker/releases/download/v3.20.1/woodpecker-cli_linux_amd64.tar.gz",
-          "sha256": "5b74ff1808af35b57bd5c2b528b7fdff24f5f69ad327715c1797f764da79dc13",
+          "url": "https://github.com/woodpecker-ci/woodpecker/releases/download/v3.20.1/woodpecker-cli_3.20.1_amd64.deb",
+          "sha256": "e60ce30c33263529a4124f02110072117153f8e3c78e46ea6682fb0f0b21d865",
           "archive_member": "woodpecker-cli",
+          "official_deb": true,
           "binary": "woodpecker-cli"
         },
         "arm64": {

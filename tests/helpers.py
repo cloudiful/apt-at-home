@@ -12,13 +12,16 @@ from pathlib import Path
 from scripts.archive_tree import inventory_tree
 from scripts.catalog import (
     archive_suffix_for,
+    binary_dir_for,
+    official_deb_for,
     parsers_for,
+    release_asset_name,
     repo_of,
     required_paths_for,
     source_for,
     tag_for,
 )
-from scripts.deb import stage_package
+from scripts.deb import SOURCE_DATE_EPOCH, stage_package
 from scripts.manifest import Manifest, Package
 from scripts.upstream_assets import asset_name, license_urls_for, release_download_url
 
@@ -42,7 +45,7 @@ def move_package_version(entry: dict, version: str) -> None:
         if not isinstance(target, dict):
             raise ValueError(f"{name} {arch} target must be an object")
         target["url"] = release_download_url(
-            repo_of(name), tag, asset_name(name, version, arch), source=source
+            repo_of(name), tag, release_asset_name(name, version, arch), source=source
         )
 
 
@@ -116,6 +119,8 @@ def write_target_archive(dest: Path, pkg: Package, arch: str, payload: bytes) ->
     if arch not in pkg.targets:
         raise ValueError(f"{pkg.name} publishes no {arch} release asset")
     target = pkg.targets[arch]
+    if target.official_deb:
+        return write_fake_official_deb(dest, pkg, arch, payload)
     if target.install_tree:
         parser_paths = tuple(f"lib/nvim/parser/{parser}.so" for parser in parsers_for(pkg.name))
         required = tuple(dict.fromkeys(required_paths_for(pkg.name) + parser_paths))
@@ -134,6 +139,90 @@ def write_target_archive(dest: Path, pkg: Package, arch: str, payload: bytes) ->
         dest, member=target.archive_member, payload=payload,
         additional_members=tuple(target.additional_binaries),
     )
+
+
+def write_fake_official_deb(dest: Path, pkg: Package, arch: str, payload: bytes) -> Path:
+    """Write a minimal official-style Debian package for a repacked target.
+
+    The structure mirrors the reviewed upstream package: the control metadata,
+    the official data paths, owner names, and the agent's preinstall script are
+    the ones the build verifies, so the repack path is exercised without
+    shipping upstream bytes into the repository.
+    """
+    import hashlib
+
+    from scripts.woodpecker_package import (
+        AGENT_ENV_EXAMPLE,
+        AGENT_SERVICE,
+        AGENT_STATE_DIR,
+        OFFICIAL_METADATA,
+        PayloadEntry,
+        assemble_deb,
+        vendored,
+    )
+
+    metadata = OFFICIAL_METADATA[pkg.name]
+    installed = f"/{binary_dir_for(pkg.name)}/{pkg.name}"
+    control = (
+        f"Package: {pkg.name}\n"
+        f"Version: {pkg.version}\n"
+        f"Section: {metadata['Section']}\n"
+        f"Priority: {metadata['Priority']}\n"
+        f"Architecture: {arch}\n"
+        f"License: {metadata['License']}\n"
+        f"Maintainer: {metadata['Maintainer']}\n"
+        f"Installed-Size: 1\n"
+        f"Homepage: {metadata['Homepage']}\n"
+        f"Description: {metadata['Description']}\n"
+    )
+    data: list[PayloadEntry] = [
+        PayloadEntry("./usr", None, 0o755),
+        PayloadEntry("./usr/local", None, 0o755),
+        PayloadEntry("./usr/local/bin", None, 0o755),
+        PayloadEntry("." + installed, payload, 0o755),
+    ]
+    if pkg.name == "woodpecker-agent":
+        data.extend(
+            [
+                PayloadEntry("./etc", None, 0o755),
+                PayloadEntry("./etc/woodpecker", None, 0o755),
+                PayloadEntry(
+                    AGENT_ENV_EXAMPLE,
+                    vendored("nfpm/woodpecker-agent.env.example"),
+                    0o664,
+                ),
+                PayloadEntry("./usr/local/lib", None, 0o755),
+                PayloadEntry("./usr/local/lib/systemd", None, 0o755),
+                PayloadEntry("./usr/local/lib/systemd/system", None, 0o755),
+                PayloadEntry(
+                    AGENT_SERVICE, vendored("nfpm/woodpecker-agent.service"), 0o664
+                ),
+                PayloadEntry("./var", None, 0o755),
+                PayloadEntry("./var/lib", None, 0o755),
+                PayloadEntry(
+                    AGENT_STATE_DIR, None, 0o750, "woodpecker", "woodpecker"
+                ),
+            ]
+        )
+    md5sums = "".join(
+        f"{hashlib.md5(entry.payload or b'').hexdigest()}  {entry.name}\n"
+        for entry in data
+        if entry.payload is not None
+    ).encode("utf-8")
+    control_files = [
+        PayloadEntry("./control", control.encode("utf-8"), 0o644),
+        PayloadEntry("./md5sums", md5sums, 0o644),
+    ]
+    if pkg.name == "woodpecker-agent":
+        control_files.append(
+            PayloadEntry(
+                "./preinst",
+                vendored("nfpm/woodpecker-system-user.preinstall.sh"),
+                0o755,
+            )
+        )
+    assemble_deb(dest, control_files=control_files, data_entries=data)
+    return dest
 
 
 def stage_fixture_target(

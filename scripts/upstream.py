@@ -31,6 +31,7 @@ from .catalog import (
     max_archive_bytes_for,
     npm_package_for,
     npm_platform_package_for,
+    release_asset_name,
     repo_of,
     source_for,
 )
@@ -434,7 +435,7 @@ def latest_release(client: HttpClient, package_name: str) -> DiscoveredRelease:
     by_name = {a.get("name"): a for a in raw_assets if isinstance(a, dict)}
     assets: dict[str, ReleaseAsset] = {}
     for arch in arches_for(package_name):
-        name = asset_name(package_name, version, arch)
+        name = release_asset_name(package_name, version, arch)
         asset = by_name.get(name)
         if asset is None:
             raise ValueError(f"{package_name} {arch} is missing asset {name} from {tag}")
@@ -491,6 +492,10 @@ def discover(
     release = latest_release(client, package_name)
     repo, tag, assets = release.repo, release.tag, release.assets
     version = parse_stable_tag(package_name, tag)
+    if package_name in ("woodpecker-agent", "woodpecker-cli"):
+        from .woodpecker_package import check_packaging_sources
+
+        check_packaging_sources(client, tag)
     sources = vendor_license_sources(package_name)
     if vendored_license is not None:
         sources[license_path_for(package_name)] = vendored_license

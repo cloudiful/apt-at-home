@@ -8,6 +8,7 @@ from scripts.catalog import (
     arches_for,
     canonical_source_for,
     check_known_names,
+    release_asset_name,
     tag_for,
 )
 from scripts.manifest import (
@@ -49,7 +50,7 @@ def expected_target_url(name: str, version: str, arch: str) -> str:
     return release_download_url(
         repo,
         tag_for(name, version),
-        asset_name(name, version, arch),
+        release_asset_name(name, version, arch),
         source=source,
     )
 
@@ -289,6 +290,122 @@ class ManifestTest(unittest.TestCase):
                          "starship_1.26.0-1_arm64.deb")
         self.assertEqual(deb_filename(by_name["rustfs-cli"], "amd64", manifest),
                          "rustfs-cli_0.1.37-1_amd64.deb")
+
+    def test_a_per_package_revision_overrides_the_manifest_revision(self) -> None:
+        manifest = load_manifest()
+        woodpecker = next(p for p in manifest.packages if p.name == "woodpecker-agent")
+        self.assertEqual(woodpecker.debian_revision, "-2")
+        self.assertEqual(debian_version(woodpecker, manifest), "3.20.1-2")
+        self.assertEqual(
+            deb_filename(woodpecker, "amd64", manifest),
+            "woodpecker-agent_3.20.1-2_amd64.deb",
+        )
+        self.assertEqual(manifest.debian_revision, "-1")
+
+    def test_the_reviewed_official_deb_target_is_required_and_closed(self) -> None:
+        data = _document()
+        entry = next(e for e in data["packages"] if e["name"] == "woodpecker-agent")
+        self.assertTrue(entry["targets"]["amd64"]["official_deb"])
+        self.assertNotIn("official_deb", entry["targets"]["arm64"])
+
+        missing = copy.deepcopy(data)
+        entry = next(e for e in missing["packages"] if e["name"] == "woodpecker-agent")
+        del entry["targets"]["amd64"]["official_deb"]
+        with self.assertRaisesRegex(ValueError, "reviewed official"):
+            parse_manifest(missing)
+
+        wrong_arch = copy.deepcopy(data)
+        entry = next(e for e in wrong_arch["packages"] if e["name"] == "woodpecker-agent")
+        entry["targets"]["arm64"]["official_deb"] = True
+        with self.assertRaisesRegex(ValueError, "official_deb"):
+            parse_manifest(wrong_arch)
+
+        bad_revision = copy.deepcopy(data)
+        entry = next(e for e in bad_revision["packages"] if e["name"] == "woodpecker-agent")
+        entry["debian_revision"] = "2"
+        with self.assertRaisesRegex(ValueError, "debian_revision"):
+            parse_manifest(bad_revision)
+
+        missing_revision = copy.deepcopy(data)
+        entry = next(
+            e for e in missing_revision["packages"] if e["name"] == "woodpecker-agent"
+        )
+        del entry["debian_revision"]
+        with self.assertRaisesRegex(ValueError, "revision"):
+            parse_manifest(missing_revision)
+
+    def test_a_legacy_tar_only_baseline_stays_readable(self) -> None:
+        data = _document()
+        entry = next(e for e in data["packages"] if e["name"] == "woodpecker-agent")
+        del entry["debian_revision"]
+        amd64 = entry["targets"]["amd64"]
+        del amd64["official_deb"]
+        amd64["url"] = (
+            "https://github.com/woodpecker-ci/woodpecker/releases/download/"
+            "v3.20.1/woodpecker-agent_linux_amd64.tar.gz"
+        )
+        amd64["sha256"] = (
+            "cb8cf9028cde5a8eaf8612e9aec59a3e8636c1b2ab8d339cfafb770ebba5e3d8"
+        )
+        manifest = parse_baseline_manifest(data)
+        pkg = next(p for p in manifest.packages if p.name == "woodpecker-agent")
+        self.assertEqual(pkg.debian_revision, "")
+        self.assertEqual(debian_version(pkg, manifest), "3.20.1-1")
+        self.assertFalse(pkg.targets["amd64"].official_deb)
+        # The exact recorded legacy form is the only pre-official entry a
+        # strict current/release parse accepts.
+        strict = parse_manifest(data)
+        self.assertEqual(
+            debian_version(
+                next(p for p in strict.packages if p.name == "woodpecker-agent"),
+                strict,
+            ),
+            "3.20.1-1",
+        )
+
+    def test_an_unrecorded_legacy_like_payload_is_refused(self) -> None:
+        data = _document()
+        entry = next(e for e in data["packages"] if e["name"] == "woodpecker-agent")
+        del entry["debian_revision"]
+        amd64 = entry["targets"]["amd64"]
+        del amd64["official_deb"]
+        amd64["url"] = (
+            "https://github.com/woodpecker-ci/woodpecker/releases/download/"
+            "v3.20.1/woodpecker-agent_linux_amd64.tar.gz"
+        )
+        malformed = []
+        wrong_version = copy.deepcopy(data)
+        wrong = next(
+            e for e in wrong_version["packages"] if e["name"] == "woodpecker-agent"
+        )
+        wrong["version"] = "3.21.0"
+        wrong["targets"]["amd64"]["url"] = wrong["targets"]["amd64"]["url"].replace(
+            "v3.20.1", "v3.21.0"
+        )
+        malformed.append(wrong_version)
+        wrong_host = copy.deepcopy(data)
+        wrong = next(
+            e for e in wrong_host["packages"] if e["name"] == "woodpecker-agent"
+        )
+        wrong["targets"]["amd64"]["url"] = (
+            "https://example.com/woodpecker-agent_linux_amd64.tar.gz"
+        )
+        malformed.append(wrong_host)
+        wrong_member = copy.deepcopy(data)
+        wrong = next(
+            e for e in wrong_member["packages"] if e["name"] == "woodpecker-agent"
+        )
+        wrong["targets"]["amd64"]["archive_member"] = "other"
+        malformed.append(wrong_member)
+        wrong_revision = copy.deepcopy(data)
+        wrong = next(
+            e for e in wrong_revision["packages"] if e["name"] == "woodpecker-agent"
+        )
+        wrong["debian_revision"] = "-2"
+        malformed.append(wrong_revision)
+        for document in malformed:
+            with self.assertRaises(ValueError):
+                parse_manifest(document)
 
     def test_a_reviewed_subset_is_still_valid(self) -> None:
         """The currently published two-package manifest stays a valid document."""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
@@ -17,7 +18,7 @@ from .catalog import (
 from .common import sha256_file
 from .deb import build_deb, stage_package
 from .download import fetch_verified
-from .manifest import Manifest, Package, deb_filename
+from .manifest import Manifest, Package, deb_filename, is_legacy_target
 from .package_binaries import extract_binaries
 from .kandev_bundle import (
     BUNDLE_TYPE as KANDEV_BUNDLE_TYPE,
@@ -28,6 +29,11 @@ from .pi_bundle import (
     BUNDLE_TYPE as PI_BUNDLE_TYPE,
     inventory_bundle as inventory_pi_bundle,
     stage_pi_package,
+)
+from .woodpecker_package import (
+    PACKAGES as WOODPECKER_PACKAGES,
+    build_arm64_package as build_woodpecker_arm64,
+    repack_official_deb,
 )
 
 _BUNDLE_STAGERS = {
@@ -102,6 +108,35 @@ def archive_cache_name(pkg: Package, arch: str) -> str:
     return f"{pkg.name}-{pkg.version}-{arch}{suffix}"
 
 
+def _build_woodpecker(
+    pkg: Package, arch: str, manifest: Manifest, archive: Path,
+    candidate: Path, tmpdir: Path,
+) -> None:
+    """Build one reviewed Woodpecker package without generic staging."""
+    target = pkg.targets[arch]
+    if is_legacy_target(pkg, arch, manifest):
+        raise ValueError(
+            f"{pkg.name} {arch} is a retained legacy target; only its signed "
+            "baseline bytes are restored, never rebuilt"
+        )
+    if target.official_deb:
+        repack_official_deb(
+            package=pkg, arch=arch, manifest=manifest, source=archive,
+            output=candidate, expected_sha256="",
+        )
+        return
+    sources = extract_binaries(
+        archive,
+        target,
+        tmpdir / f"{pkg.name}-{arch}-bin",
+        max_bytes=max_binary_bytes_for(pkg.name) or None,
+    )
+    build_woodpecker_arm64(
+        package=pkg, arch=arch, manifest=manifest,
+        binary_source=sources[target.binary], output=candidate,
+    )
+
+
 def build_all(
     manifest: Manifest,
     *,
@@ -137,19 +172,23 @@ def build_all(
                     max_bytes=max_archive_bytes_for(pkg.name) or None,
                 )
                 # Nothing in the archive is executed during the host build.
-                stage = _stage_target(pkg, arch, manifest, archive, tmpdir)
                 output_deb = pool_dir / deb_filename(pkg, arch, manifest)
+                candidate = tmpdir / f"{pkg.name}-{arch}-candidate.deb"
+                if pkg.name in WOODPECKER_PACKAGES:
+                    _build_woodpecker(pkg, arch, manifest, archive, candidate, tmpdir)
+                else:
+                    stage = _stage_target(pkg, arch, manifest, archive, tmpdir)
+                    build_deb(stage, candidate)
                 if output_deb.exists():
                     # Same name/version must never change bytes silently.
                     existing_digest = sha256_file(output_deb)
-                    build_deb(stage, tmpdir / "candidate.deb")
-                    candidate_digest = sha256_file(tmpdir / "candidate.deb")
+                    candidate_digest = sha256_file(candidate)
                     if existing_digest != candidate_digest:
                         raise ValueError(
                             f"refusing to overwrite {output_deb.name} with different bytes"
                         )
                     outputs.append(output_deb)
                 else:
-                    build_deb(stage, output_deb)
+                    shutil.copyfile(candidate, output_deb)
                     outputs.append(output_deb)
     return sorted(outputs)

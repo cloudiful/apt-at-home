@@ -4,7 +4,7 @@ on:
   schedule:
     # Every six hours, off the hour so scheduled runs do not pile onto the
     # top of the hour. The run is a no-op unless upstream moved.
-    - cron: "17 */6 * * *"
+    - cron: "17 */4 * * *"
   workflow_dispatch:
     inputs:
       source:
@@ -16,7 +16,7 @@ on:
       dry_run:
         description: "Plan only. Set false to build, sign, and publish."
         required: false
-        default: "true"
+        default: "false"
         type: choice
         options: ["true", "false"]
       release_id:
@@ -37,17 +37,14 @@ permissions:
 # the same time.
 concurrency:
   group: apt-production-release
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   publish:
     name: Build, verify, and publish (serialized)
-    # Production publication runs from the default branch only. A manual run on
-    # any other ref stops here rather than publishing from unreviewed code.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
     container: debian:13
-    # A container job defaults to `sh`, but the routing steps use Bash arrays.
     defaults:
       run:
         shell: bash
@@ -68,10 +65,10 @@ jobs:
       # not a repository.
       - name: Install system tools
         run: apt-get update && apt-get install -y --no-install-recommends apt file git reprepro xz-utils gnupg python3 curl ca-certificates && rm -rf /var/lib/apt/lists/*
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      - uses: astral-sh/setup-uv@v10
       - name: Verify portable public dependency lock
         run: uv lock --check
       - run: uv sync --frozen

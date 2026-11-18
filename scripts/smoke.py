@@ -44,6 +44,12 @@ from .pi_bundle import BUNDLE_TYPE as PI_BUNDLE_TYPE
 from .pi_smoke import check_bundle_payload as check_pi_bundle_payload
 from .smoke_tree import check_relations, check_tree_payload
 from .smoke_upgrade import check_upgraded_state
+from .woodpecker_package import (
+    check_legacy_pool_package as check_legacy_woodpecker_package,
+    check_pool_package as check_woodpecker_package,
+    is_woodpecker,
+)
+from .manifest import is_legacy_package
 
 __all__ = [
     "ELF_MACHINE",
@@ -88,11 +94,24 @@ def check_pool(manifest: Manifest, pool: Path, arches: tuple[str, ...]) -> list[
             for pkg in sorted(manifest.packages, key=lambda p: p.name):
                 if arch not in pkg.targets:
                     continue
+                deb = pool / deb_filename(pkg, arch, manifest)
+                if not deb.is_file():
+                    raise SmokeError(f"pool is missing {deb.name}")
+                extracted = _extract(deb, Path(scratch) / f"{pkg.name}-{arch}")
+                if is_woodpecker(pkg.name):
+                    checker = (
+                        check_legacy_woodpecker_package
+                        if is_legacy_package(pkg, manifest)
+                        else check_woodpecker_package
+                    )
+                    findings.extend(
+                        checker(
+                            package=pkg, arch=arch, manifest=manifest,
+                            deb=deb, root=extracted,
+                        )
+                    )
+                    continue
                 findings.extend(check_package(pkg, arch, manifest=manifest, pool=pool))
-                extracted = _extract(
-                    pool / deb_filename(pkg, arch, manifest),
-                    Path(scratch) / f"{pkg.name}-{arch}",
-                )
                 check_copyright(pkg, extracted)
                 if pkg.targets[arch].bundle_type:
                     findings.extend(check_bundle_payload(pkg, arch, extracted))

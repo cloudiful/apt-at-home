@@ -25,14 +25,17 @@ from .catalog import (
     binary_name,
     canonical_source_for,
     conflicts_for,
+    debian_revision_for,
     depends_for,
     expected_license_for,
     install_tree_for,
+    official_deb_for,
     replaces_for,
 )
 from .manifest import (
     Manifest,
     check_published_at,
+    effective_debian_revision,
     parse_baseline_manifest,
     parse_manifest,
 )
@@ -190,13 +193,16 @@ def _target_for(
     name: str, version: str, arch: str, override: dict[str, str]
 ) -> dict[str, object]:
     """Return one architecture's reviewed target from its discovered asset."""
-    return {
+    target: dict[str, object] = {
         "url": override["url"],
         "sha256": override["sha256"],
         **_payload_source(name, version, arch),
         "binary": binary_name(name),
         "depends": depends_for(name, arch),
     }
+    if official_deb_for(name, arch):
+        target["official_deb"] = True
+    return target
 
 
 def overlay_package(
@@ -244,6 +250,7 @@ def overlay_package(
     published_at = (
         _published_at(entry) if preserve_targets else candidate.upstream_published_at
     )
+    revision = debian_revision_for(name)
     result = {
         **{key: value for key, value in entry.items() if key not in relations},
         **{key: value for key, value in relations.items() if value},
@@ -252,6 +259,10 @@ def overlay_package(
         "license_url": candidate.license_url,
         "targets": updated_targets,
     }
+    if revision:
+        result["debian_revision"] = revision
+    else:
+        result.pop("debian_revision", None)
     if published_at:
         result["upstream_published_at"] = published_at
     else:
@@ -419,6 +430,18 @@ def known_dates_by_version(
     return groups
 
 
+def _revision_number(revision: str) -> int:
+    """Return the numeric Debian revision, or fail closed."""
+    if not revision.startswith("-") or not revision[1:].isdigit():
+        raise ValueError(f"unusable Debian revision: {revision!r}")
+    return int(revision[1:])
+
+
+def _baseline_revision(entry: dict[str, object], baseline: Manifest) -> str:
+    """The effective revision of one baseline manifest entry."""
+    return str(entry.get("debian_revision") or baseline.debian_revision)
+
+
 def build_plan(
     *,
     baseline_release_id: str | None,
@@ -522,6 +545,36 @@ def build_plan(
                         "immutable release",
                     )
                 if candidate_version == current_version:
+                    catalog_revision = (
+                        debian_revision_for(name) or catalog.debian_revision
+                    )
+                    published_revision = _baseline_revision(entry, baseline)
+                    try:
+                        revision_change = _revision_number(
+                            catalog_revision
+                        ) - _revision_number(published_revision)
+                    except ValueError as exc:
+                        raise _CandidateBlocked("candidate", str(exc)) from exc
+                    if revision_change < 0:
+                        raise _CandidateBlocked(
+                            "downgrade",
+                            f"{name} {candidate.version}{catalog_revision} is older "
+                            f"than the published {current}{published_revision}; "
+                            "refusing to downgrade an immutable release",
+                        )
+                    if revision_change > 0:
+                        # The upstream version is unchanged but the reviewed
+                        # package revision advanced: rebuild both architectures
+                        # under the new .deb filename.
+                        try:
+                            rebuilt = overlay_package(entry, candidate)
+                            _validated_rebuilt(name, rebuilt, catalog=catalog)
+                        except ValueError as exc:
+                            raise _CandidateBlocked("candidate", str(exc)) from exc
+                        entry.clear()
+                        entry.update(rebuilt)
+                        changed.append(name)
+                        continue
                     try:
                         check_same_version_immutable(entry, candidate)
                     except ValueError as exc:

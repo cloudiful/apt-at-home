@@ -169,6 +169,15 @@ APT_SIGNING_FINGERPRINT=<40-hex> \
   commands, dependencies, and SPDX license sources. Version bumps recompute
   member paths from the new version, preserving uvx and uv's supplemental
   Apache provenance without trusting release metadata to choose files.
+- Packages use the manifest's global Debian revision `-1` unless their recipe
+  carries its own revision. `woodpecker-agent` and `woodpecker-cli` use `-2`:
+  amd64 repacks upstream's official Debian package, preserving its data member
+  and maintainer scripts and changing only the control `Version`; arm64 is
+  assembled from the official tarball and the reviewed tagged systemd unit,
+  environment example, and system-user pre-install script under
+  `packaging/woodpecker/`. A revision-only update rebuilds both architectures
+  under new filenames, while the same version and revision stay immutable.
+  Discovery stops if the tagged official packaging files change.
 - Most packages come from GitHub, whose API publishes a sha256 digest for
   every asset. `forgejo-cli` comes from the `cloudiful/forgejo-cli`
   personal-use fork on GitHub, so its archives are pinned by the digest that
