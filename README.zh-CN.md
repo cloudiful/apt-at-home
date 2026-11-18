@@ -30,10 +30,7 @@ sudo apt install bottom bun cargo-tauri chezmoi fd-find forgejo-cli fzf git-delt
 `kandev` 安装上游标准服务器套件；运行 `kandev` 才会显式启动服务器，
 安装软件包不会启动服务器。
 
-`woodpecker-agent` 与 `woodpecker-cli` 来自同一个上游 Woodpecker 发布版本，
-各自只安装一个静态二进制文件，且都不声明运行时依赖。agent 包只安装
-`woodpecker-agent` 命令，不会启动 agent，也不注册任何服务；请自行配置
-与 Woodpecker 服务器的连接并显式启动。
+`woodpecker-agent` 与 `woodpecker-cli` 来自同一个上游 Woodpecker 发布版本，并采用官方安装布局：两者都把静态二进制安装为 `/usr/local/bin/woodpecker-*`，且不声明运行时依赖。amd64 使用上游官方 Debian 包，在保留数据负载与维护者脚本的前提下按仓库的 `-2` 包修订版重新打包；arm64 则由官方 tarball 与经审阅的对应标签打包文件组装出相同布局。`woodpecker-agent` 还会安装 `/usr/local/lib/systemd/system` 下的官方 systemd 单元、`/etc/woodpecker/woodpecker-agent.env.example` 与 `/var/lib/woodpecker` 状态目录（权限 `0750`）；其 preinst 脚本会创建 `woodpecker` 系统组和用户。两个包都不会启用或启动服务：请自行配置 agent 并显式启动。
 
 `pi` 将完整的上游独立套件安装到 `/usr/lib/pi`：Pi 可执行文件，以及主题、资产、导出模板、文档、示例、Photon 图像处理 WASM 模块与原生 X11 剪贴板助手。`/usr/bin/pi` 从该目录启动，并强制把 Pi 的自更新命令指向包内的 `/usr/lib/pi/apt-update`：该助手只向 stderr 输出 `sudo apt upgrade pi` 或 `sudo apt install --only-upgrade pi` 提示并以非零状态退出，请通过 APT 更新 Pi。Pi 的扩展与模型更新命令保持可用，并经启动器原样传递。root 或手动直接运行 `/usr/lib/pi/pi` 仍可改写文件并绕过启动器，Pi 本身也没有内置权限沙箱。
 

@@ -68,6 +68,17 @@ _PI_LIBC = MappingProxyType({
     "amd64": "libc6 (>= 2.17)",
     "arm64": "libc6 (>= 2.17)",
 })
+# Woodpecker publishes an official Debian package for amd64 and a tarball for
+# arm64. The official layout installs under /usr/local and carries its own
+# reviewed systemd unit and system-user preinstall script.
+_WOODPECKER_DEB = MappingProxyType({
+    "amd64": "{upstream}_{version}_{arch}.deb",
+})
+# The signed -1 baseline installed flat /usr/bin commands from these archives.
+_WOODPECKER_LEGACY = MappingProxyType({
+    "amd64": "{upstream}_linux_{arch}.tar.gz",
+    "arm64": "{upstream}_linux_{arch}.tar.gz",
+})
 
 
 def make_cli_recipes(recipe_type: type[Recipe]) -> dict[str, Recipe]:
@@ -287,8 +298,14 @@ def make_cli_recipes(recipe_type: type[Recipe]) -> dict[str, Recipe]:
             license_id="Apache-2.0",
             license_path="LICENSE",
             asset="{upstream}_linux_{arch}.tar.gz",
+            assets=_WOODPECKER_DEB,
+            official_deb_arches=("amd64",),
+            debian_revision="-2",
             member="{binary}",
             binary="woodpecker-agent",
+            binary_dir="usr/local/bin",
+            legacy_assets=_WOODPECKER_LEGACY,
+            legacy_through="3.20.1",
             triples=_NO_TRIPLES,
         ),
         "woodpecker-cli": recipe_type(
@@ -299,8 +316,14 @@ def make_cli_recipes(recipe_type: type[Recipe]) -> dict[str, Recipe]:
             license_id="Apache-2.0",
             license_path="LICENSE",
             asset="{upstream}_linux_{arch}.tar.gz",
+            assets=_WOODPECKER_DEB,
+            official_deb_arches=("amd64",),
+            debian_revision="-2",
             member="{binary}",
             binary="woodpecker-cli",
+            binary_dir="usr/local/bin",
+            legacy_assets=_WOODPECKER_LEGACY,
+            legacy_through="3.20.1",
             triples=_NO_TRIPLES,
         ),
     }

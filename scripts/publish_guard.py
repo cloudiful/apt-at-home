@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 from .fingerprint import primary_fingerprint_of_keyfile
-from .manifest import Manifest
+from .manifest import Manifest, effective_debian_revision
 from .package_index import parse_stanzas
 from .release_verify import (
     BaselineUnavailable,
@@ -28,16 +28,61 @@ from .upstream_assets import version_key
 
 
 def upstream_version(debian_version: str) -> str:
-    """Strip the fixed Debian revision so upstream versions can be ordered.
+    """Strip the Debian revision so upstream versions can be ordered.
 
-    Packages carry the Debian version (`<upstream>-1`); the manifest pins the
-    upstream version alone. Comparing the two directly would compare a revision
-    against a version, so the trailing revision is removed first.
+    Packages carry the Debian version (`<upstream>-<revision>`); the manifest
+    pins the upstream version alone. Comparing the two directly would compare a
+    revision against a version, so the trailing revision is removed first.
     """
     base, separator, _revision = debian_version.rpartition("-")
     if not separator or not base:
         raise ValueError(f"published version has no Debian revision: {debian_version!r}")
     return base
+
+
+def debian_revision_number(debian_version: str) -> int:
+    """Return the numeric Debian revision of one published version."""
+    base, separator, revision = debian_version.rpartition("-")
+    if not separator or not base or not revision.isdigit():
+        raise ValueError(
+            f"published version has no numeric Debian revision: {debian_version!r}"
+        )
+    return int(revision)
+
+
+def check_not_older(candidate: Manifest, baseline: dict[str, str]) -> None:
+    """Refuse any candidate package older than its published version.
+
+    An upstream version bump always upgrades. At the same upstream version the
+    reviewed package revision decides, so a manifest that moves from -2 back to
+    -1 is a downgrade even though both name the same upstream release.
+    """
+    for pkg in sorted(candidate.packages, key=lambda p: p.name):
+        published = baseline.get(pkg.name)
+        if published is None:
+            # The package is new to the index; there is nothing to downgrade.
+            continue
+        published_upstream = version_key(upstream_version(published))
+        candidate_upstream = version_key(pkg.version)
+        if published_upstream > candidate_upstream:
+            raise ValueError(
+                f"{pkg.name} {pkg.version} is older than the published "
+                f"{published}; a manual release must not downgrade what clients "
+                "already have. Publish a build whose manifest is at least as new "
+                "as the current release"
+            )
+        if published_upstream == candidate_upstream:
+            published_revision = debian_revision_number(published)
+            candidate_revision = int(
+                effective_debian_revision(pkg, candidate).lstrip("-")
+            )
+            if candidate_revision < published_revision:
+                raise ValueError(
+                    f"{pkg.name} {pkg.version}{effective_debian_revision(pkg, candidate)} "
+                    f"is older than the published {published}; a manual release "
+                    "must not downgrade what clients already have. Publish a "
+                    "build whose manifest is at least as new as the current release"
+                )
 
 
 def published_versions(release: TrustedRelease) -> dict[str, str]:
@@ -64,22 +109,6 @@ def published_versions(release: TrustedRelease) -> dict[str, str]:
                 )
             versions[name] = version
     return versions
-
-
-def check_not_older(candidate: Manifest, baseline: dict[str, str]) -> None:
-    """Refuse any candidate package older than its published version."""
-    for pkg in sorted(candidate.packages, key=lambda p: p.name):
-        published = baseline.get(pkg.name)
-        if published is None:
-            # The package is new to the index; there is nothing to downgrade.
-            continue
-        if version_key(upstream_version(published)) > version_key(pkg.version):
-            raise ValueError(
-                f"{pkg.name} {pkg.version} is older than the published "
-                f"{published}; a manual release must not downgrade what clients "
-                "already have. Publish a build whose manifest is at least as new "
-                "as the current release"
-            )
 
 
 def rotation_baseline_pin(source: Source) -> str:

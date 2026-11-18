@@ -27,12 +27,18 @@ from .catalog import (
     arches_for,
     archive_member,
     asset_name,
+    binary_dir_for,
+    binary_name,
     canonical_source_for,
     check_known_names,
     check_relations,
+    debian_revision_for,
     extra_license_urls_for,
+    legacy_asset_name,
     license_path_for,
     npm_platform_package_for,
+    official_deb_for,
+    release_asset_name,
     source_for,
     tag_for,
 )
@@ -97,6 +103,7 @@ class ArchTarget:
     install_tree: str = ""
     bundle_type: str = ""
     additional_binaries: Mapping[str, str] = MappingProxyType({})
+    official_deb: bool = False
 
 
 @dataclass(frozen=True)
@@ -113,6 +120,7 @@ class Package:
     extra_license_urls: tuple[str, ...] = ()
     conflicts: str = ""
     replaces: str = ""
+    debian_revision: str = ""
 
 
 @dataclass(frozen=True)
@@ -184,8 +192,16 @@ def load_manifest(path: Path | None = None) -> Manifest:
 
 
 def parse_manifest(raw: object) -> Manifest:
-    """Validate a current manifest; every reviewed target must be declared."""
-    return _parse_manifest(raw, allow_historical_gap=False)
+    """Validate a current manifest; every reviewed target must be declared.
+
+    Only a package entry that exactly matches its recorded pre-official payload
+    form is tolerated alongside the current reviewed form. `woodpecker` -1
+    entries are such a signed-baseline form; any current entry still has to use
+    the reviewed official package and revision.
+    """
+    return _parse_manifest(
+        raw, allow_historical_gap=False, allow_legacy_payload=True
+    )
 
 
 def parse_baseline_manifest(raw: object) -> Manifest:
@@ -194,10 +210,14 @@ def parse_baseline_manifest(raw: object) -> Manifest:
     Only the recorded historical gap is tolerated: a package listed in
     `_HISTORICAL_ARCH_GAPS` may omit one reviewed target when its version is at
     or below the recorded ceiling and its declared targets are exactly the set
-    that baseline shipped. Every other missing, extra, or malformed target is
-    refused, so a generic missing-architecture escape does not exist here.
+    that baseline shipped. A recorded pre-official payload form at or below its
+    reviewed `legacy_through` is also accepted unchanged. Every other missing,
+    extra, or malformed target is refused, so a generic missing-architecture
+    escape does not exist here.
     """
-    return _parse_manifest(raw, allow_historical_gap=True)
+    return _parse_manifest(
+        raw, allow_historical_gap=True, allow_legacy_payload=True
+    )
 
 
 def _historical_arch_gap(
@@ -218,7 +238,125 @@ def _historical_arch_gap(
         return False
 
 
-def _parse_manifest(raw: object, *, allow_historical_gap: bool) -> Manifest:
+def _is_higher_revision(declared: str, reviewed: str) -> bool:
+    """Whether a baseline entry declares a revision ahead of the reviewed one.
+
+    A signed baseline can only ever carry a revision at or ahead of the
+    reviewed one. An ahead revision stays readable here so the planner can
+    refuse the downgrade explicitly instead of reporting a malformed manifest.
+    """
+    if not declared.startswith("-") or not declared[1:].isdigit():
+        return False
+    if not reviewed.startswith("-") or not reviewed[1:].isdigit():
+        return False
+    return int(declared[1:]) > int(reviewed[1:])
+
+
+def _is_reviewed_legacy_target(
+    name: str,
+    version: str,
+    arch: str,
+    *,
+    url: str,
+    member: str,
+    binary: str,
+    depends: str,
+    install_tree: str,
+    bundle_type: str,
+    additional: Mapping[str, str],
+) -> bool:
+    """Whether one target is exactly a recorded pre-official payload form."""
+    if name not in KNOWN_PACKAGES or install_tree or bundle_type or additional:
+        return False
+    expected_member = archive_member(name, version, arch)
+    if member != expected_member or binary != binary_name(name):
+        return False
+    if depends:
+        return False
+    expected_asset = legacy_asset_name(name, version, arch)
+    if not expected_asset:
+        return False
+    source, repo = canonical_source_for(name, version)
+    expected_url = release_download_url(
+        repo, tag_for(name, version), expected_asset, source=source
+    )
+    return url == expected_url
+
+
+def is_legacy_target(pkg: Package, arch: str, manifest: Manifest) -> bool:
+    """Whether one target is exactly the recorded pre-official payload form."""
+    target = pkg.targets[arch]
+    if effective_debian_revision(pkg, manifest) != "-1":
+        return False
+    return not target.official_deb and _is_reviewed_legacy_target(
+        pkg.name, pkg.version, arch,
+        url=target.url,
+        member=target.archive_member,
+        binary=target.binary,
+        depends=target.depends,
+        install_tree=target.install_tree,
+        bundle_type=target.bundle_type,
+        additional=target.additional_binaries,
+    )
+
+
+def is_legacy_package(pkg: Package, manifest: Manifest) -> bool:
+    """Whether every target of a package is its recorded legacy payload form."""
+    return bool(pkg.targets) and all(
+        is_legacy_target(pkg, arch, manifest) for arch in pkg.targets
+    )
+
+
+def installed_binary_dir(pkg: Package, manifest: Manifest) -> str:
+    """Return the package-relative command directory for this revision.
+
+    A retained trusted baseline package installed flat `/usr/bin` commands; only
+    the reviewed current payload installs the recipe's directory.
+    """
+    if is_legacy_package(pkg, manifest):
+        return "usr/bin"
+    return binary_dir_for(pkg.name)
+
+
+def _has_legacy_payload(pkg: Package) -> bool:
+    """Whether every target of a package exactly matches a legacy form."""
+    if pkg.name not in KNOWN_PACKAGES or not pkg.targets:
+        return False
+    if set(pkg.targets) != set(arches_for(pkg.name)):
+        return False
+    for arch, target in pkg.targets.items():
+        if target.official_deb:
+            return False
+        if not _is_reviewed_legacy_target(
+            pkg.name, pkg.version, arch,
+            url=target.url,
+            member=target.archive_member,
+            binary=target.binary,
+            depends=target.depends,
+            install_tree=target.install_tree,
+            bundle_type=target.bundle_type,
+            additional=target.additional_binaries,
+        ):
+            return False
+    return True
+
+
+def _is_reviewed_legacy_package(
+    pkg: Package, manifest_revision: str
+) -> bool:
+    """Whether a package is a complete recorded legacy -1 entry."""
+    if pkg.name not in KNOWN_PACKAGES:
+        return False
+    if pkg.debian_revision not in ("", "-1"):
+        return False
+    if (pkg.debian_revision or manifest_revision) != "-1":
+        return False
+    return _has_legacy_payload(pkg)
+
+
+def _parse_manifest(
+    raw: object, *, allow_historical_gap: bool, allow_legacy_payload: bool
+) -> Manifest:
     if not isinstance(raw, dict):
         raise ValueError("manifest root must be an object")
     for key in ("maintainer", "section", "priority", "debian_revision", "packages"):
@@ -237,7 +375,31 @@ def _parse_manifest(raw: object, *, allow_historical_gap: bool) -> Manifest:
     packages: list[Package] = []
     seen: set[tuple[str, str]] = set()
     for entry in packages_raw:
-        pkg = parse_package(entry)
+        pkg = parse_package(entry, allow_legacy_payload=allow_legacy_payload)
+        if pkg.name in KNOWN_PACKAGES:
+            expected_revision = debian_revision_for(pkg.name)
+            legacy_payload = _has_legacy_payload(pkg)
+            legacy_package = (
+                allow_legacy_payload
+                and _is_reviewed_legacy_package(pkg, debian_revision)
+            )
+            if pkg.debian_revision != expected_revision and not legacy_package:
+                if not (
+                    allow_historical_gap
+                    and not legacy_payload
+                    and _is_higher_revision(pkg.debian_revision, expected_revision)
+                ):
+                    raise ValueError(
+                        f"package {pkg.name} declares revision "
+                        f"{pkg.debian_revision or 'the manifest revision'!r}, "
+                        f"the reviewed recipe requires {expected_revision or 'none'!r}"
+                    )
+            if pkg.debian_revision == expected_revision and legacy_payload:
+                raise ValueError(
+                    f"package {pkg.name} declares the reviewed revision "
+                    f"{expected_revision!r} but keeps a pre-official payload; "
+                    "the current revision must use its reviewed official package"
+                )
         required = arches_for(pkg.name) if pkg.name in KNOWN_PACKAGES else tuple(sorted(pkg.targets))
         missing = sorted(set(required) - set(pkg.targets))
         if missing and not (
@@ -291,13 +453,17 @@ def _check_npm_target_url(name: str, version: str, arch: str, url: str) -> str:
     return url
 
 
-def _check_target_url(name: str, version: str, arch: str, url: str) -> str:
+def _check_target_url(
+    name: str, version: str, arch: str, url: str, *, official_deb: bool = False
+) -> str:
     """Require the pinned URL to be the reviewed package's official asset.
 
     The shape check refuses every other host form, a credential, a port, a
     query, and a fragment. The canonical check then binds the URL to the
     source, repository, release tag, and asset that published this exact
-    version, so a swapped host, repository, path, or tag can never pass.
+    version, so a swapped host, repository, path, or tag can never pass. A
+    repacked architecture names upstream's official Debian package; every
+    other target keeps the recipe's archive asset.
     """
     if name not in KNOWN_PACKAGES:
         if not _URL.match(url):
@@ -314,7 +480,11 @@ def _check_target_url(name: str, version: str, arch: str, url: str) -> str:
     expected = release_download_url(
         repo,
         tag_for(name, version),
-        asset_name(name, version, arch),
+        (
+            release_asset_name(name, version, arch)
+            if official_deb
+            else asset_name(name, version, arch)
+        ),
         source=source,
     )
     if url != expected:
@@ -431,7 +601,7 @@ def _check_license_url(name: str, version: str, url: str) -> str:
     return url
 
 
-def parse_package(raw: object) -> Package:
+def parse_package(raw: object, *, allow_legacy_payload: bool = False) -> Package:
     if not isinstance(raw, dict):
         raise ValueError("package entry must be an object")
     for key in ("name", "version", "homepage", "description", "license", "copyright", "license_url", "targets"):
@@ -442,6 +612,9 @@ def parse_package(raw: object) -> Package:
     version = str(raw["version"])
     if not _VERSION.match(version):
         raise ValueError(f"invalid version for {name}: {version}")
+    debian_revision = str(raw.get("debian_revision", "") or "")
+    if debian_revision and not re.fullmatch(r"-[0-9]+", debian_revision):
+        raise ValueError(f"invalid debian_revision for {name}: {debian_revision!r}")
     license_source_url = _check_license_url(name, version, str(raw["license_url"]))
     extra_raw = raw.get("extra_license_urls", [])
     if not isinstance(extra_raw, list) or any(not isinstance(url, str) for url in extra_raw):
@@ -456,7 +629,7 @@ def parse_package(raw: object) -> Package:
     targets: dict[str, ArchTarget] = {}
     allowed_target_fields = frozenset({
         "url", "sha256", "archive_member", "install_tree", "binary",
-        "depends", "additional_binaries",
+        "depends", "additional_binaries", "official_deb",
     })
     for arch, target_raw in targets_raw.items():
         if arch not in _ARCHES:
@@ -468,11 +641,25 @@ def parse_package(raw: object) -> Package:
             raise ValueError(
                 f"unknown field(s) for {name} {arch}: {', '.join(unknown)}"
             )
+        raw_official = target_raw.get("official_deb", False)
+        if not isinstance(raw_official, bool):
+            raise ValueError(f"official_deb must be a boolean for {name} {arch}")
+        expected_official = official_deb_for(name, arch) if name in KNOWN_PACKAGES else False
+        legacy_target = (
+            allow_legacy_payload and expected_official and not raw_official
+        )
+        if raw_official != expected_official and not legacy_target:
+            raise ValueError(
+                f"official_deb for {name} {arch} is {raw_official}, "
+                f"the reviewed recipe requires {expected_official}"
+            )
         url = str(target_raw.get("url", ""))
         sha256 = str(target_raw.get("sha256", "")).lower()
         binary = str(target_raw.get("binary", ""))
         member, install_tree, bundle_type = _parse_source(name, version, arch, target_raw)
-        _check_target_url(name, version, arch, url)
+        _check_target_url(
+            name, version, arch, url, official_deb=bool(raw_official)
+        )
         if not _SHA256.match(sha256):
             raise ValueError(f"invalid sha256 for {name} {arch}")
         additional = _parse_additional_binaries(
@@ -483,10 +670,25 @@ def parse_package(raw: object) -> Package:
         depends = check_relations(
             f"depends for {name} {arch}", str(target_raw.get("depends", "") or "")
         )
+        if legacy_target and not _is_reviewed_legacy_target(
+            name, version, arch,
+            url=url,
+            member=member,
+            binary=binary,
+            depends=depends,
+            install_tree=install_tree,
+            bundle_type=bundle_type,
+            additional=additional,
+        ):
+            raise ValueError(
+                f"{name} {arch} is not the recorded pre-official release form; "
+                "a signed baseline may retain it but a current manifest must "
+                "use the reviewed official package"
+            )
         targets[arch] = ArchTarget(
             url=url, sha256=sha256, archive_member=member, binary=binary,
             depends=depends, install_tree=install_tree, bundle_type=bundle_type,
-            additional_binaries=additional,
+            additional_binaries=additional, official_deb=bool(raw_official),
         )
     conflicts = check_relations(f"conflicts for {name}", str(raw.get("conflicts", "") or ""))
     replaces = check_relations(f"replaces for {name}", str(raw.get("replaces", "") or ""))
@@ -506,11 +708,17 @@ def parse_package(raw: object) -> Package:
         extra_license_urls=extra_urls,
         conflicts=conflicts,
         replaces=replaces,
+        debian_revision=debian_revision,
     )
 
 
+def effective_debian_revision(pkg: Package, manifest: Manifest) -> str:
+    """Return the revision that decides this package's published version."""
+    return pkg.debian_revision or manifest.debian_revision
+
+
 def debian_version(pkg: Package, manifest: Manifest) -> str:
-    return f"{pkg.version}{manifest.debian_revision}"
+    return f"{pkg.version}{effective_debian_revision(pkg, manifest)}"
 
 
 def deb_filename(pkg: Package, arch: str, manifest: Manifest) -> str:

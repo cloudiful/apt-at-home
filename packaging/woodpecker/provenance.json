@@ -1,0 +1,40 @@
+{
+  "repository": "woodpecker-ci/woodpecker",
+  "tag": "v3.20.1",
+  "files": {
+    "nfpm/agent.yaml": {
+      "path": "v3.20.1/agent.yaml",
+      "sha256": "0b19bebe448bedee1f240ec98dfe12fa5086e16e22d73df2d0b715d4f4d885fb"
+    },
+    "nfpm/cli.yaml": {
+      "path": "v3.20.1/cli.yaml",
+      "sha256": "ca8ab1a1dc8976f7991d646c070b74b94eba1535c1ec391b782db4d1d74ed063"
+    },
+    "nfpm/woodpecker-system-user.preinstall.sh": {
+      "path": "v3.20.1/woodpecker-system-user.preinstall.sh",
+      "sha256": "ca2717f12a9f079f3cee031b2822498806a2c1f93f293be4b4f2a66aed401f74"
+    },
+    "nfpm/woodpecker-agent.service": {
+      "path": "v3.20.1/woodpecker-agent.service",
+      "sha256": "44efabc6fe9adedd8b2314494252f62f6316cf41b715fe50c64877dc7838b5bd"
+    },
+    "nfpm/woodpecker-agent.env.example": {
+      "path": "v3.20.1/woodpecker-agent.env.example",
+      "sha256": "f4c3ca7c6ad734836eec21c3cbbe8b491533a8cc97a6e33d65a5a3d7949e02ac"
+    }
+  },
+  "official_debs": {
+    "woodpecker-agent": {
+      "amd64": {
+        "name": "woodpecker-agent_3.20.1_amd64.deb",
+        "sha256": "24e70c5225afcc61f3aa4fe798665406c556db642822f23366b08ad1722000d4"
+      }
+    },
+    "woodpecker-cli": {
+      "amd64": {
+        "name": "woodpecker-cli_3.20.1_amd64.deb",
+        "sha256": "e60ce30c33263529a4124f02110072117153f8e3c78e46ea6682fb0f0b21d865"
+      }
+    }
+  }
+}

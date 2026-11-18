@@ -69,7 +69,8 @@ class PiLauncherTest(unittest.TestCase):
 
 class PiRuntimeDispatchTest(unittest.TestCase):
     def test_run_package_dispatches_pi_bundle_and_version_contract(self) -> None:
-        package = next(pkg for pkg in load_manifest().packages if pkg.name == "pi")
+        manifest = load_manifest()
+        package = next(pkg for pkg in manifest.packages if pkg.name == "pi")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             installed_bundle(root, "amd64")
@@ -78,12 +79,14 @@ class PiRuntimeDispatchTest(unittest.TestCase):
             )
             with mock.patch("scripts.smoke_runtime._run", return_value=completed):
                 findings = run_package(
-                    package, "amd64", prefix=root, scratch=root / "scratch"
+                    package, "amd64", prefix=root, scratch=root / "scratch",
+                    manifest=manifest,
                 )
         self.assertTrue(any("1.5.0" in line for line in findings))
 
     def test_run_package_rejects_a_different_pi_version(self) -> None:
-        package = next(pkg for pkg in load_manifest().packages if pkg.name == "pi")
+        manifest = load_manifest()
+        package = next(pkg for pkg in manifest.packages if pkg.name == "pi")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             installed_bundle(root, "amd64")
@@ -92,7 +95,10 @@ class PiRuntimeDispatchTest(unittest.TestCase):
             )
             with mock.patch("scripts.smoke_runtime._run", return_value=completed):
                 with self.assertRaisesRegex(SmokeError, "expected '1.5.0'"):
-                    run_package(package, "amd64", prefix=root, scratch=root / "scratch")
+                    run_package(
+                        package, "amd64", prefix=root, scratch=root / "scratch",
+                        manifest=manifest,
+                    )
 
 
 if __name__ == "__main__":

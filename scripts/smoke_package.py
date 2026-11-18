@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 
 from .catalog import binary_name, depends_for
-from .manifest import Manifest, Package, deb_filename
+from .manifest import Manifest, Package, deb_filename, debian_version
 from .package_licenses import copyright_text, read_vendor_licenses
 from .smoke_commands import binaries_for_target
 
@@ -77,7 +77,7 @@ def check_package(pkg: Package, arch: str, *, manifest: Manifest, pool: Path) ->
     fields = control_fields(deb)
     expected_fields = {
         "Package": pkg.name,
-        "Version": f"{pkg.version}{manifest.debian_revision}",
+        "Version": debian_version(pkg, manifest),
         "Architecture": arch,
     }
     for key, value in expected_fields.items():

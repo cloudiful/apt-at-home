@@ -25,8 +25,10 @@ __all__ = [
     "Recipe",
     "archive_suffix_for",
     "arches_for",
+    "binary_dir_for",
     "canonical_license_source_for",
     "canonical_source_for",
+    "debian_revision_for",
     "exact_tag_release_for",
     "fork_label_for",
     "fork_tag_from_version",
@@ -38,16 +40,21 @@ __all__ = [
     "npm_package_for",
     "npm_packages_for",
     "npm_platform_package_for",
+    "official_deb_asset_name",
+    "official_deb_for",
+    "legacy_asset_name",
+    "release_asset_name",
     "source_for",
     "tag_prefix_for",
 ]
 
 ARCHES = ("amd64", "arm64")
 
-# The archive formats the reviewed recipes publish: a gzipped tarball or a ZIP.
-# The suffix is part of the official asset name, so it decides both the archive
-# member prefix and the format the build extracts.
-_ARCHIVE_SUFFIXES = (".tar.gz", ".tgz", ".zip")
+# The archive formats the reviewed recipes publish: a gzipped tarball, a ZIP, or
+# an official Debian package that is repacked rather than extracted. The suffix
+# is part of the official asset name, so it decides both the archive member
+# prefix and the format the build handles.
+_ARCHIVE_SUFFIXES = (".tar.gz", ".tgz", ".zip", ".deb")
 
 # Every package name this repository may publish, derived from the recipes so a
 # recipe and the accepted name set can never drift apart.
@@ -311,7 +318,12 @@ def tag_for(package_name: str, version: str) -> str:
 
 
 def asset_name(package_name: str, version: str, arch: str) -> str:
-    """Return the only release asset name accepted for this package and arch."""
+    """Return the only release asset name accepted for this package and arch.
+
+    This is the recipe's default archive form, which is also the arm64 form of
+    a package that publishes an official Debian package for another
+    architecture. `release_asset_name` selects the form a target actually uses.
+    """
     recipe = recipe_for(package_name)
     checked = _arch(arch)
     if checked not in recipe.arches:
@@ -329,9 +341,69 @@ def asset_name(package_name: str, version: str, arch: str) -> str:
     return recipe.asset.format(**fields)
 
 
+def official_deb_for(package_name: str, arch: str) -> bool:
+    """Whether this reviewed architecture is an official Debian package."""
+    return _arch(arch) in recipe_for(package_name).official_deb_arches
+
+
+def official_deb_asset_name(package_name: str, version: str, arch: str) -> str:
+    """Return the official Debian package name for a repacked architecture."""
+    recipe = recipe_for(package_name)
+    checked = _arch(arch)
+    try:
+        template = recipe.assets[checked]
+    except KeyError:
+        raise ValueError(
+            f"{package_name} publishes no {arch} official Debian package"
+        ) from None
+    return template.format(
+        name=recipe.name, upstream=recipe.upstream, version=version, arch=checked
+    )
+
+
+def release_asset_name(package_name: str, version: str, arch: str) -> str:
+    """Return the official release asset this target is actually fetched from."""
+    if official_deb_for(package_name, arch):
+        return official_deb_asset_name(package_name, version, arch)
+    return asset_name(package_name, version, arch)
+
+
+def _version_parts(version: str) -> tuple[int, int, int] | None:
+    match = re.fullmatch(r"([0-9]+)\.([0-9]+)\.([0-9]+)", version.removeprefix("v"))
+    if match is None:
+        return None
+    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+
+
+def legacy_asset_name(package_name: str, version: str, arch: str) -> str:
+    """Return a recorded pre-official asset name, or '' when none applies."""
+    recipe = recipe_for(package_name)
+    checked = _arch(arch)
+    template = recipe.legacy_assets.get(checked)
+    if not template or not recipe.legacy_through:
+        return ""
+    version_parts = _version_parts(version)
+    through_parts = _version_parts(recipe.legacy_through)
+    if version_parts is None or through_parts is None or version_parts > through_parts:
+        return ""
+    return template.format(
+        name=recipe.name, upstream=recipe.upstream, version=version, arch=checked
+    )
+
+
+def debian_revision_for(package_name: str) -> str:
+    """Return this package's own Debian revision, or '' for the global one."""
+    return recipe_for(package_name).debian_revision
+
+
+def binary_dir_for(package_name: str) -> str:
+    """Return the package-relative directory this package installs commands in."""
+    return recipe_for(package_name).binary_dir
+
+
 def archive_suffix_for(package_name: str, version: str, arch: str) -> str:
     """Return the archive suffix this package's official release asset uses."""
-    asset = asset_name(package_name, version, arch)
+    asset = release_asset_name(package_name, version, arch)
     for suffix in _ARCHIVE_SUFFIXES:
         if asset.endswith(suffix):
             return suffix

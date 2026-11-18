@@ -10,6 +10,7 @@ from scripts.manifest import deb_filename, expected_debs, load_manifest
 from tests.helpers import write_target_archive
 from tests.test_kandev_bundle import write_bundle_archive
 from tests.test_pi_bundle import write_bundle_archive as write_pi_bundle_archive
+from tests.test_smoke import fake_elf
 
 
 def _write_build_archive(archive: Path, pkg, arch: str, payload: bytes) -> Path:
@@ -17,6 +18,9 @@ def _write_build_archive(archive: Path, pkg, arch: str, payload: bytes) -> Path:
         return write_bundle_archive(archive, version=f"v{pkg.version}", arch=arch)
     if pkg.name == "pi":
         return write_pi_bundle_archive(archive, version=pkg.version, arch=arch)
+    if pkg.targets[arch].official_deb:
+        # The reviewed official payload must carry a real ELF binary.
+        payload = fake_elf(arch)
     return write_target_archive(archive, pkg, arch, payload)
 
 

@@ -20,6 +20,7 @@ from scripts.catalog import (
     KNOWN_PACKAGES,
     canonical_source_for,
     npm_platform_package_for,
+    release_asset_name,
     repo_of,
     source_for,
     tag_for,
@@ -78,7 +79,7 @@ def candidate(
                     npm_tarball_url(npm_platform_package_for(name, arch), version)
                     if source == "npm"
                     else release_download_url(
-                        repo, tag, asset_name(name, version, arch), source=source
+                        repo, tag, release_asset_name(name, version, arch), source=source
                     )
                 ),
                 "sha256": sha or committed_sha(name, arch),
@@ -1502,6 +1503,131 @@ class DeferredPlanTest(unittest.TestCase):
              mock.patch.object(update_module, "RECIPES", {"starship": object()}):
             with self.assertRaises(HttpError):
                 update_module._discover(object(), keep_blocked=True)
+
+
+class WoodpeckerRevisionPlanTest(unittest.TestCase):
+    """A reviewed per-package revision upgrades published tar-only packages."""
+
+    LEGACY_DIGESTS = {
+        "woodpecker-agent": "cb8cf9028cde5a8eaf8612e9aec59a3e8636c1b2ab8d339cfafb770ebba5e3d8",
+        "woodpecker-cli": "5b74ff1808af35b57bd5c2b528b7fdff24f5f69ad327715c1797f764da79dc13",
+    }
+
+    def _catalog(self) -> dict[str, object]:
+        data = copy.deepcopy(catalog_document())
+        data["packages"] = [
+            entry for entry in data["packages"]
+            if str(entry["name"]).startswith("woodpecker")
+        ]
+        return data
+
+    def _legacy_baseline(self, revision: str | None = None) -> dict[str, object]:
+        data = self._catalog()
+        packages = data["packages"]
+        assert isinstance(packages, list)
+        for entry in packages:
+            name = str(entry["name"])
+            if revision is None:
+                entry.pop("debian_revision", None)
+            else:
+                entry["debian_revision"] = revision
+            targets = entry["targets"]
+            assert isinstance(targets, dict)
+            amd64 = targets["amd64"]
+            amd64.pop("official_deb", None)
+            amd64["url"] = (
+                "https://github.com/woodpecker-ci/woodpecker/releases/download/"
+                f"v3.20.1/{name}_linux_amd64.tar.gz"
+            )
+            amd64["sha256"] = self.LEGACY_DIGESTS[name]
+        return data
+
+    def _plan(self, baseline: dict[str, object] | None = None):
+        catalog = self._catalog()
+        candidates = {
+            name: candidate(name, "3.20.1")
+            for name in ("woodpecker-agent", "woodpecker-cli")
+        }
+        return build_plan(
+            baseline_release_id="20260102-030405",
+            baseline_data=baseline if baseline is not None else self._legacy_baseline(),
+            catalog_data=catalog,
+            candidates=candidates,
+        )
+
+    def test_a_revision_increase_rebuilds_both_reviewed_arches(self) -> None:
+        from scripts.update_build import changed_targets
+
+        plan = self._plan()
+        self.assertEqual(plan.changed, ("woodpecker-agent", "woodpecker-cli"))
+        for name in plan.changed:
+            entry = next(
+                pkg for pkg in plan.manifest.packages if pkg.name == name
+            )
+            self.assertEqual(entry.version, "3.20.1")
+            self.assertEqual(entry.debian_revision, "-2")
+            self.assertTrue(entry.targets["amd64"].official_deb)
+            self.assertFalse(entry.targets["arm64"].official_deb)
+        self.assertEqual(
+            changed_targets(plan),
+            {
+                ("woodpecker-agent", "amd64"),
+                ("woodpecker-agent", "arm64"),
+                ("woodpecker-cli", "amd64"),
+                ("woodpecker-cli", "arm64"),
+            },
+        )
+
+    def test_a_revision_decrease_is_refused(self) -> None:
+        baseline = self._catalog()
+        for entry in baseline["packages"]:
+            entry["debian_revision"] = "-3"
+        with self.assertRaisesRegex(ValueError, "refusing to downgrade"):
+            self._plan(baseline)
+
+    def test_the_same_revision_at_the_same_version_stays_a_noop(self) -> None:
+        plan = self._plan(copy.deepcopy(self._catalog()))
+        self.assertEqual(plan.changed, ())
+        self.assertTrue(plan.is_noop)
+
+    def test_keep_blocked_retains_the_legacy_agent_and_updates_the_cli(self) -> None:
+        from scripts.update_build import changed_targets
+
+        baseline = self._legacy_baseline()
+        catalog = self._catalog()
+        current_cli = next(
+            entry for entry in catalog["packages"]
+            if entry["name"] == "woodpecker-cli"
+        )
+        baseline["packages"] = [
+            current_cli if entry["name"] == "woodpecker-cli" else entry
+            for entry in baseline["packages"]
+        ]
+        plan = build_plan(
+            baseline_release_id="20260102-030405",
+            baseline_data=baseline,
+            catalog_data=catalog,
+            candidates={
+                "woodpecker-cli": candidate("woodpecker-cli", "3.20.1")
+            },
+            keep_blocked=True,
+            blocked={"woodpecker-agent": "discovery unavailable"},
+        )
+        self.assertEqual(plan.changed, ())
+        self.assertEqual(
+            [(item.name, item.stage, item.retained_version) for item in plan.deferred],
+            [("woodpecker-agent", "discovery", "3.20.1")],
+        )
+        by_name = {pkg.name: pkg for pkg in plan.manifest.packages}
+        self.assertEqual(by_name["woodpecker-agent"].debian_revision, "")
+        self.assertEqual(by_name["woodpecker-cli"].debian_revision, "-2")
+        self.assertTrue(
+            all(
+                not target.official_deb
+                for target in by_name["woodpecker-agent"].targets.values()
+            )
+        )
+        self.assertEqual(changed_targets(plan), set())
 
 
 if __name__ == "__main__":

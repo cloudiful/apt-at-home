@@ -124,6 +124,26 @@ class CandidateComparisonTest(unittest.TestCase):
     def test_a_package_absent_from_the_index_is_not_a_downgrade(self) -> None:
         check_not_older(self._manifest("1.27.0", "0.46.0"), {"zellij": "0.46.0-1"})
 
+    def test_a_lower_package_revision_at_the_same_upstream_is_refused(self) -> None:
+        from dataclasses import replace
+
+        manifest = load_manifest()
+        woodpecker = next(
+            pkg for pkg in manifest.packages if pkg.name == "woodpecker-agent"
+        )
+        older = replace(
+            manifest,
+            packages=tuple(
+                replace(pkg, debian_revision="-1")
+                if pkg.name == "woodpecker-agent" else pkg
+                for pkg in manifest.packages
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "must not downgrade"):
+            check_not_older(older, {"woodpecker-agent": "3.20.1-2"})
+        check_not_older(manifest, {"woodpecker-agent": "3.20.1-2"})
+        self.assertEqual(woodpecker.debian_revision, "-2")
+
 
 def _forgejo_entry(version: str) -> dict:
     """One reviewed Forgejo CLI entry at a version, with its canonical URLs."""
